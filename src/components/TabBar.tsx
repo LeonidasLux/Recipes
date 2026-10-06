@@ -14,7 +14,7 @@ interface TabDef {
 const LIBRARY_TAB: TabDef = { key: 'library', to: '/library', label: '菜谱库', icon: 'book' };
 const ORDER_TAB: TabDef = { key: 'order', to: '/order', label: '点单', icon: 'order' };
 const COOK_TAB: TabDef = { key: 'cook', to: '/cook', label: '掌勺', icon: 'pot' };
-const SYNC_TAB: TabDef = { key: 'sync', to: '/sync', label: '同步', icon: 'sync' };
+const SYNC_TAB: TabDef = { key: 'sync', to: '/sync', label: '设置', icon: 'sync' };
 
 /** 五态预览：?state=empty|error，仅用于走查，不影响真实数据 */
 export function usePreviewState(): 'populated' | 'empty' | 'error' {
@@ -28,7 +28,7 @@ export function usePreviewState(): 'populated' | 'empty' | 'error' {
  *
  * 第二格跟着「本机当前角色」（config.view）走：
  * 角色是点单 → 第二格「点单」（/order）；角色是掌勺 → 第二格「掌勺」（/cook）。
- * 角色本身在「同步」页里切换（本地设置，不触发推送）。
+ * 角色本身在「设置」页（/sync）里切换（本地设置，不触发推送）。
  */
 export function TabBar({ active }: { active: TabKey }) {
   const { view } = useStore();

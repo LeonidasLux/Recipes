@@ -83,7 +83,7 @@ GitHub Contents API：
   - `/` 固定回菜谱库（两人都能点单也能掌勺，不再按身份分叉）。
   - `/library` 菜谱库、`/recipe/:id` 详情、`/add` 添加、`/order` 点单、`/cook` 今日菜单、`/sync` 同步。
   - `*` → `/`。
-- **底部导航 4 格**：`[菜谱库] [点单 / 掌勺] [＋添加] [同步]`。第二格跟着**本机当前角色**（`config.view`）走：角色是点单 → 第二格「点单」（`/order`）；角色是掌勺 → 第二格「掌勺」（`/cook`）。角色**不绑在人身上**，只决定这格指向哪块屏；切角色的入口在「同步」页里（见 §7 Sync），是本地设置、不触发推送。
+- **底部导航 4 格**：`[菜谱库] [点单 / 掌勺] [＋添加] [设置]`（第四格路由仍是 `/sync`，只是入口叫「设置」）。第二格跟着**本机当前角色**（`config.view`）走：角色是点单 → 第二格「点单」（`/order`）；角色是掌勺 → 第二格「掌勺」（`/cook`）。角色**不绑在人身上**，只决定这格指向哪块屏；切角色的入口在「设置」（`/sync`）页里（见 §7 Sync），是本地设置、不触发推送。
 - 角色与「我是谁」各管一摊：`config.view` 决定底部第二格；`config.me` 决定每块屏上「我 / 对方」是谁。两台设备可以一个选点单、一个选掌勺，数据仍共用同一份（`placedBy` 方向才是真相）。
 - 屏的「谁在说话」由**本机这个人**（`config.me`）决定：点单屏是「我」下单、对方掌勺；今日菜单是「对方」点的单、我来做（见 `src/data/useNames.ts`）。
 - 昵称显示规则：`nicknameOf(profiles, person)`，没设过退回中性称呼「我 / 对方」，不显示空白。
@@ -142,12 +142,12 @@ GitHub Contents API：
 - 底部提示按 `autoPull` / `intervalSec` 显示「每 N 分钟自动拉取」或「仅手动同步」。
 - 空态：今天还没人点单。
 
-**Sync 同步与仓库**
+**Sync 同步与仓库**（底部入口名「设置」）
 - 五态状态面板：未连接 / busy（同步中）/ err（失败，含重试 + 重新填写 token）/ ok（已同步 + 文件条数）。面板状态下有「立即同步」。
+- 「当前角色」切换（点单 / 掌勺）排在**「当前仓库」区域上方**：只改本机 `config.view`，底部第二格随之在「点单 / 掌勺」之间换；本地设置、不触发推送。两台设备各选各的。
 - 仓库信息：当前仓库、分支、Token（掩码 + 修改，含形状校验）。
 - 后台自动拉取开关（读 `autoPull` / `intervalSec`）。
 - 昵称编辑：我 / 另一半两个名字都能改，保存后随仓库同步；清空表示未设置。输入框同样走 `preserveTypedValue`（见「通用输入行为」）。
-- 「当前角色」切换（点单 / 掌勺）：只改本机 `config.view`，底部第二格随之在「点单 / 掌勺」之间换；本地设置、不触发推送。两台设备各选各的。
 - 「我是谁」切换（本机是 `a` / `b` 中的哪一位），只改本机身份、随即对调页面上的称呼（不再决定底部菜单）。
 - 最近同步日志（最多 8 条，err 高亮）。
 - 已连接时提供「断开并清除本地缓存」（需二次点击确认）；未连接时提供「去首次设置」。
@@ -158,7 +158,7 @@ GitHub Contents API：
 - `Bits.tsx`：`SkeletonRows`、`SourceBadge`、`SourceDot`、`StatusChip`、`Thumb`、`StateCard`、`SyncPill`。
 - `Toast.tsx`：Toast 容器（约 1.7s 显示，最多同时 3 条）；`ErrorBoundary.tsx`：渲染期异常的兜底页（见 §6）。
 - `LiveSyncPill.tsx`：顶栏同步状态 pill，直接反映真实状态机（未连接显示「本地模式」）。
-- `TabBar.tsx`：底部导航（`[菜谱库][点单 / 掌勺][＋添加][同步]`，第二格读 `config.view`）+ `usePreviewState`。原 `DaySwitch.tsx` 的页内切换已移除 —— 角色切换挪进了「同步」页。
+- `TabBar.tsx`：底部导航（`[菜谱库][点单 / 掌勺][＋添加][设置]`，第二格读 `config.view`）+ `usePreviewState`。原 `DaySwitch.tsx` 的页内切换已移除 —— 角色切换挪进了「设置」（`/sync`）页。
 - 样式：`src/styles/app.css`（设计系统 token + 卡通组件，移植自原型 `shared/app.css`）+ `src/styles/screens.css`（按 `.s-xxx` 作用域）。`npm run classes` 对账 TSX 用到的 class 在样式表里都有定义。
 - 刻意保留：`.h3` **故意未定义**（原型如此，用于维持观感）。
 
@@ -177,7 +177,7 @@ GitHub Contents API：
 | `npm run preview` | 预览构建产物（`http://localhost:4173`） |
 | `npm run typecheck` | 只跑 TypeScript 检查 |
 | `npm run classes` | TSX 用到的 class 与样式表对账 |
-| `npm run smoke` | jsdom 冒烟测试：渲染层 + 交互层 + 纯函数 + 同步引擎（真实挂载、真实点击、stub 网络） |
+| `npm run smoke` | jsdom 冒烟测试：渲染层 + 交互层 + 纯函数 + 同步引擎（真实挂载、真实点击、stub 网络；定时器走虚拟时钟，不空等挂钟） |
 | `npm run check` | `typecheck → classes → smoke → build`，提交前跑 |
 | `npm run test:live` | 对真实 GitHub 仓库跑同步自检（**会真的写仓库**；需要环境变量 `JISHIBEN_REPO` / `JISHIBEN_TOKEN`） |
 | `npm run test:connect` | 端到端跑一遍首次连接（真填表真点击真网络，不写入仓库） |
@@ -191,9 +191,9 @@ GitHub Contents API：
 - 交互层：点单组合器（多选 / 手动 / 去重 / 随机 / 长度上限）、掌勺状态回传、备注保存、添加菜谱（小红书 / B站 / 只贴链接）、搜索筛选、昵称联动、token 形状校验、输入框以 DOM 为准（中文输入法 `compositionend` 之后不补 `input`）—— 每个文本输入框都断言「输入不丢字」且「值真的被用上」。
 - 纯函数：`share.ts`（解析 / 链接提取 / 来源识别 / 插画猜测）、`github.ts`（`maskToken` / `normalizeToken` / `tokenShapeError` / `withTimeout` / `getJson` / `putJson` / `verifyRepo` 及全部错误分类 / UTF-8 base64）、`helpers.ts`（称呼 / 摘要 / 状态 / 在单检测）、`seed` / `migrate` 数据契约。
 - 同步引擎（stub `fetch`）：首次连接（空仓库 / 已有数据 / 失败分支 / **仓库里是老结构**）、立即同步拉取、本地改动自动推送且只推变化的那一份、空仓库先拉后推、409 自动重试一次、断开二次确认、「我是谁」静默切换、日志上限 8 条。
-- 组件与界面边界：详情占位卡、Toast 最多同时 3 条、顶栏同步 pill（已同步 / 本地模式）、「同步」页切角色（落库 `config.view`、底部第二格立刻变、不触发推送）、点单页「历史点单」与掌勺页「已做完」默认折叠只露数量、导入配置 JSON、本地模式进入、错误边界兜底页（渲染期抛错不白屏）。
+- 组件与界面边界：详情占位卡、Toast 最多同时 3 条、顶栏同步 pill（已同步 / 本地模式）、「设置」页切角色（落库 `config.view`、底部第二格立刻变、不触发推送、且角色区排在「当前仓库」上方）、点单页「历史点单」与掌勺页「已做完」默认折叠只露数量、导入配置 JSON、本地模式进入、错误边界兜底页（渲染期抛错不白屏）。
 
-`scripts/register-dom.mjs` 用 `node --import` 预加载 jsdom，**不能**改成普通 `import`。
+`scripts/register-dom.mjs` 用 `node --import` 预加载 jsdom，**不能**改成普通 `import`。它还注入一个**虚拟时钟**（`globalThis.__domClock`）：默认不武装、定时器照常透传真实实现，所以 `dump` / `test:connect` 这类脚本完全不受影响；只有冒烟测试在启动时 `arm()`，之后用 `settle(ms)` 显式推进时间。各屏「进场骨架」（460～520ms）与同步防抖（700ms）因此不再真的空等挂钟 —— 整套冒烟从约 85s 降到约 2s，断言覆盖面不变（未注入时 `settle` 自动回退到真实等待）。
 
 ## 11. PWA 与 Android
 

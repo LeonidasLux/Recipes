@@ -55,6 +55,29 @@ function check(cond: boolean, label: string, detail = '') {
   else fail(label, detail);
 }
 
+/* ─── 虚拟时钟 ─────────────────────────────────
+   由 register-dom.mjs 预加载注入。它未武装时透传真实定时器，这里主动 arm 之后，
+   所有 setTimeout / setInterval 都要靠 advance() 推进 —— 于是「等 700ms 进场骨架 /
+   等防抖」不再真的空等挂钟，整套冒烟从一分多钟掉到个位数秒。
+   若注入缺失（比如有人不走 npm run smoke 而是手搓命令），回退到真实等待，行为不变。 */
+interface DomClock {
+  readonly armed: boolean;
+  arm(): void;
+  advance(ms: number): Promise<void>;
+}
+
+const domClock = (globalThis as unknown as { __domClock?: DomClock }).__domClock;
+domClock?.arm();
+console.log(domClock?.armed ? '[时钟] 虚拟 —— 定时器由 settle() 推进，不空等挂钟' : '[时钟] 真实等待（未注入虚拟时钟）');
+
+/** 推进虚拟时间 ms 毫秒，并让 React 把期间产生的状态更新冲刷干净 */
+async function settle(ms: number) {
+  await act(async () => {
+    if (domClock?.armed) await domClock.advance(ms);
+    else await new Promise((res) => setTimeout(res, ms));
+  });
+}
+
 /* ─── 挂载 / 交互工具 ────────────────────────── */
 
 interface Mounted {
@@ -103,10 +126,8 @@ async function mount(path: string): Promise<Mounted> {
       </MemoryRouter>,
     );
   });
-  /* 等进场骨架（460～520ms） */
-  await act(async () => {
-    await new Promise((res) => setTimeout(res, 700));
-  });
+  /* 等进场骨架（460～520ms）：虚拟时钟下是瞬时的 */
+  await settle(700);
 
   const mounted: Mounted = {
     html: () => root.innerHTML,
@@ -117,9 +138,7 @@ async function mount(path: string): Promise<Mounted> {
       return el ? (el.textContent ?? '').trim() : '';
     },
     async wait(ms) {
-      await act(async () => {
-        await new Promise((res) => setTimeout(res, ms));
-      });
+      await settle(ms);
     },
     async click(sel) {
       const el = root.querySelector<HTMLElement>(sel);
@@ -512,7 +531,7 @@ async function renderChecks() {
   {
     const m = await mount('/library');
     const got = m.$$('.tabbar .tab').map((t) => (t.textContent ?? '').trim());
-    const want = ['菜谱库', '点单', '添加', '同步'];
+    const want = ['菜谱库', '点单', '添加', '设置'];
     check(got.join(' / ') === want.join(' / '), `底部导航顺序：${want.join(' / ')}`, `实际：${got.join(' / ')}`);
     await m.close();
   }
@@ -522,7 +541,7 @@ async function renderChecks() {
     });
     const m = await mount('/library');
     const got = m.$$('.tabbar .tab').map((t) => (t.textContent ?? '').trim());
-    const want = ['菜谱库', '掌勺', '添加', '同步'];
+    const want = ['菜谱库', '掌勺', '添加', '设置'];
     check(
       got.join(' / ') === want.join(' / '),
       `掌勺角色 → 底部第二格为掌勺：${want.join(' / ')}`,
@@ -1122,12 +1141,12 @@ async function githubChecks() {
   {
     const t = withTimeout(20);
     const early = t.signal.aborted;
-    await new Promise((r) => setTimeout(r, 40));
+    await settle(40); /* withTimeout 走的是裸 setTimeout，同样受虚拟时钟管辖 */
     check(!early && t.signal.aborted, '超时后 signal 被 abort');
     t.done();
     const t2 = withTimeout(1000);
     t2.done();
-    await new Promise((r) => setTimeout(r, 5));
+    await settle(5);
     check(!t2.signal.aborted, 'done() 之后不再 abort');
   }
 
@@ -1936,11 +1955,22 @@ async function edgeChecks() {
     await m.close();
   }
 
-  console.log('\n[边界 · 角色切换在同步页，底部第二格随之变化]');
+  console.log('\n[边界 · 角色切换在设置页，底部第二格随之变化]');
   useDb();
   {
     const m = await mount('/sync');
-    check(m.html().includes('当前角色'), '★ 「同步」页里有角色切换区');
+    check(m.html().includes('当前角色'), '★ 「设置」页里有角色切换区');
+    /* 位置：角色区必须在「当前仓库」那一行上方（用户明确要求的位置） */
+    const roleHead = m.$$('.s-sync h2').find((h) => (h.textContent ?? '').trim() === '当前角色');
+    const repoKey = m.$$('.s-sync .kvrow .k').find((k) => (k.textContent ?? '').includes('当前仓库'));
+    if (!roleHead || !repoKey) {
+      fail('角色区位置', `找不到角色标题或「当前仓库」行（role=${!!roleHead} repo=${!!repoKey}）`);
+    } else {
+      check(
+        (roleHead.compareDocumentPosition(repoKey) & window.Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+        '★ 「当前角色」排在「当前仓库」上方',
+      );
+    }
     check((m.$$('.tabbar .tab')[1]?.textContent ?? '').includes('点单'), '点单角色 → 底部第二格是「点单」');
 
     await m.clickByText('.idpick', '掌勺');
