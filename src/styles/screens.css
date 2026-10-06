@@ -246,6 +246,24 @@
 .s-sync .dang { color: var(--danger); font-size: 13px; font-weight: 600; background: none; border: 0; padding: 0; cursor: pointer; }
 .s-sync .dang:hover { text-decoration: underline; }
 .s-sync .cardlist.cut { padding: 2px 16px; }
+
+/* 同步日志：折叠条 + 固定高度滚动懒加载（每次 20 条） */
+.s-sync .morebar {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px;
+  padding: 11px 14px; border: 2px solid var(--ink); border-radius: 16px;
+  background: var(--surface); color: var(--fg); font: inherit; cursor: pointer;
+  box-shadow: var(--shadow-sticker);
+}
+.s-sync .morebar:active { transform: translateY(2px); box-shadow: 0 1px 0 0 var(--ink); }
+.s-sync .morebar .mb-t { font-size: 15px; font-weight: 700; }
+.s-sync .morebar .mb-c { margin-left: auto; font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+.s-sync .morebar .chev { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
+  background: color-mix(in oklch, var(--border) 55%, transparent); }
+.s-sync .morebar .chev svg { width: 16px; height: 16px; stroke: var(--muted); fill: none; stroke-width: 2.2; transition: transform .18s ease; }
+.s-sync .morebar.open .chev svg { transform: rotate(180deg); }
+.s-sync .logscroll { margin-top: 10px; max-height: 340px; overflow-y: auto; overscroll-behavior: contain; }
+.s-sync .logfoot { text-align: center; padding: 8px 0 2px; }
+
 .s-sync .idgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .s-sync .idpick { display: flex; flex-direction: column; gap: 7px; align-items: flex-start; padding: 12px;
   border-radius: 16px; border: 2px solid var(--border); background: var(--surface); cursor: pointer;

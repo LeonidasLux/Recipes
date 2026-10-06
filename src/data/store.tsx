@@ -177,8 +177,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'mutate', bumpRev: false, updater: (db) => mutate(structuredClone(db)) });
   }, []);
 
+  /** 同步日志全量保留（只存本机，不进仓库）；设置页默认折叠、滚动懒加载 */
   const pushLog = useCallback((db: DB, kind: LogEntry['kind'], text: string) => {
-    db.logs = [{ t: nowHM(), kind, text }, ...(db.logs ?? [])].slice(0, 8);
+    db.logs = [{ t: nowHM(), kind, text }, ...(db.logs ?? [])];
     db.updatedAt = nowHM();
   }, []);
 

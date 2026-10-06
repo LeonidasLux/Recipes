@@ -96,6 +96,11 @@ interface Mounted {
   ime(sel: string, value: string): Promise<void>;
   /** React 把 onBlur 挂在 focusout 上，要派发 focusout 才触发 */
   blur(sel: string): Promise<void>;
+  /**
+   * 在可滚动容器上派发 scroll。jsdom 不做布局，scrollHeight / clientHeight 恒为 0，
+   * 等价于「已经滚到底」——正好用来驱动滚动懒加载。
+   */
+  scroll(sel: string): Promise<void>;
   value(sel: string): string;
   /** 在某个容器里按文字定位卡片，再点它里面的目标元素 */
   clickInCard(cardSel: string, matchText: string, targetSel: string): Promise<void>;
@@ -192,6 +197,13 @@ async function mount(path: string): Promise<Mounted> {
       if (!el) throw new Error(`找不到 ${sel}`);
       await act(async () => {
         el.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }));
+      });
+    },
+    async scroll(sel) {
+      const el = root.querySelector<HTMLElement>(sel);
+      if (!el) throw new Error(`找不到可滚动容器 ${sel}`);
+      await act(async () => {
+        el.dispatchEvent(new window.Event('scroll', { bubbles: true }));
       });
     },
     value(sel) {
@@ -1348,7 +1360,7 @@ function helperChecks() {
   check(SCHEMA === 3 && DB_KEY === 'jishiben-db-v1', 'schema 版本与 localStorage key 稳定');
   const s = seed();
   check(s.schema === SCHEMA && s.recipes.length === 6 && s.orders.length === 3, '种子数据规模');
-  check(s.logs.length <= 8, '种子日志不超过 8 条');
+  check(s.logs.length === 4, '种子日志全量保留（不再按 8 条截断）');
   const ep = emptyProfiles();
   check(ep.a.nickname === '' && ep.b.nickname === '', '空档案两栏都为空串');
 
@@ -1763,10 +1775,11 @@ async function syncChecks() {
     gh.restore();
   }
 
-  console.log('\n[状态容器 · 日志最多 8 条]');
+  console.log('\n[状态容器 · 日志全量保留]');
   localStorage.clear();
   {
     useDb();
+    const seedLogs = readDb().logs.length;
     const m = await mount('/recipe/r5');
     for (let i = 1; i <= 9; i++) {
       await m.click('.inlinebtn');
@@ -1775,8 +1788,17 @@ async function syncChecks() {
     }
     await m.wait(50);
     const db = readDb();
-    check(db.logs.length === 8, '★ 日志只保留最近 8 条', `实际 ${db.logs.length}`);
+    check(
+      db.logs.length === seedLogs + 9,
+      '★ 日志全量保留，不再截断到 8 条',
+      `实际 ${db.logs.length}（种子 ${seedLogs} + 9）`,
+    );
     check(db.logs[0].text.includes('备注已更新'), '最新一条排在最前');
+    check(
+      db.logs.filter((l) => l.text.startsWith('r5 ·')).length === 9,
+      '九次改动一条都没丢',
+      `实际 ${db.logs.filter((l) => l.text.startsWith('r5 ·')).length}`,
+    );
     check(db.recipes.find((r) => r.id === 'r5')?.note === '第 9 次备注', '最后一次改动生效');
     await m.close();
   }
@@ -1898,6 +1920,37 @@ async function edgeChecks() {
     check(!m.html().includes('昨天 10:15'), '已完成单默认折叠，不铺开卡片');
     await m.clickByText('.morebar', '已做完');
     check(m.html().includes('昨天 10:15'), '点「已做完」→ 展开完成单');
+    await m.close();
+  }
+
+  console.log('\n[边界 · 同步日志默认折叠 + 滚动懒加载]');
+  localStorage.clear();
+  {
+    useDb((db) => {
+      db.logs = Array.from({ length: 45 }, (_, i) => ({
+        t: `10:${String(i).padStart(2, '0')}`,
+        kind: 'ok' as const,
+        text: `第 ${i + 1} 条记录`,
+      }));
+    });
+    const m = await mount('/sync');
+    check(m.$$('.logrow').length === 0, '★ 日志默认折叠，一条都不铺开');
+    check(m.html().includes('最近同步') && m.html().includes('45 条'), '折叠条上显示总条数', m.$('.mb-c')?.textContent ?? '');
+
+    await m.clickByText('.morebar', '最近同步');
+    check(m.$$('.logrow').length === 20, '展开 → 先渲染 20 条', `实际 ${m.$$('.logrow').length}`);
+    check(m.html().includes('已显示 20 / 45 条'), '给出「已显示 / 总数」进度');
+
+    await m.scroll('.logscroll');
+    check(m.$$('.logrow').length === 40, '滚到底 → 再放 20 条', `实际 ${m.$$('.logrow').length}`);
+    await m.scroll('.logscroll');
+    check(m.$$('.logrow').length === 45, '最后一批只补到 45 条，不越界', `实际 ${m.$$('.logrow').length}`);
+    await m.scroll('.logscroll');
+    check(m.$$('.logrow').length === 45, '到底后再滚不会重复加载', `实际 ${m.$$('.logrow').length}`);
+    check(m.html().includes('已全部加载（共 45 条）'), '到底后提示「已全部加载」');
+
+    await m.clickByText('.morebar', '最近同步');
+    check(m.$$('.logrow').length === 0, '再点折叠条 → 收回');
     await m.close();
   }
 

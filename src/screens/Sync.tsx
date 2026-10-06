@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type UIEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { useStore } from '../data/store';
 import { useSync } from '../lib/useSync';
@@ -27,6 +27,21 @@ export default function SyncScreen() {
   const cfg = db.config;
   const me: PersonKey = cfg?.me === 'b' ? 'b' : 'a';
   const other = partnerOf(me);
+
+  /* ─── 同步日志：全量保留，默认折叠 + 滚动懒加载（每次 20 条）─── */
+  const LOG_PAGE = 20;
+  const logs = db.logs ?? [];
+  const [showLogs, setShowLogs] = useState(false);
+  const [logLimit, setLogLimit] = useState(LOG_PAGE);
+  const shownLogs = logs.slice(0, logLimit);
+  const logsAllShown = shownLogs.length >= logs.length;
+
+  /** 滚到离底部 80px 以内就再放一页，避免日志攒多了整屏都铺出来 */
+  function onLogsScroll(e: UIEvent<HTMLDivElement>) {
+    const el = e.currentTarget;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight > 80) return;
+    setLogLimit((n) => (n >= logs.length ? n : n + LOG_PAGE));
+  }
 
   function pickMe(next: PersonKey) {
     if (next === me) return;
@@ -356,29 +371,46 @@ export default function SyncScreen() {
 
           {/* ─── 同步日志 ─── */}
           <section>
-            <div className="row-between" style={{ margin: '2px 2px 4px' }}>
-              <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>最近同步</h2>
-              <span className="meta">日志只留最近 8 条</span>
-            </div>
-            <div className="cardlist cut">
-              {db.logs.length ? (
-                db.logs.map((l, i) => (
-                  <div className={`logrow${l.kind === 'err' ? ' err' : ''}`} key={`${l.t}-${i}`}>
-                    <div className="ticon">
-                      <Icon name={l.kind === 'err' ? 'alert' : 'check'} />
-                    </div>
-                    <div>
-                      <div className="lt">{l.t}</div>
-                      <p className="lx">{l.text}</p>
-                    </div>
+            <button
+              type="button"
+              className={`morebar${showLogs ? ' open' : ''}`}
+              aria-expanded={showLogs}
+              onClick={() => setShowLogs((v) => !v)}
+            >
+              <span className="mb-t">最近同步</span>
+              <span className="mb-c">{logs.length ? `${logs.length} 条` : '暂无记录'}</span>
+              <span className="chev">
+                <Icon name="chevronDown" />
+              </span>
+            </button>
+
+            {showLogs &&
+              (logs.length ? (
+                <>
+                  <div className="cardlist cut logscroll" onScroll={onLogsScroll}>
+                    {shownLogs.map((l, i) => (
+                      <div className={`logrow${l.kind === 'err' ? ' err' : ''}`} key={`${l.t}-${i}`}>
+                        <div className="ticon">
+                          <Icon name={l.kind === 'err' ? 'alert' : 'check'} />
+                        </div>
+                        <div>
+                          <div className="lt">{l.t}</div>
+                          <p className="lx">{l.text}</p>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))
+                  <p className="meta logfoot">
+                    {logsAllShown
+                      ? `已全部加载（共 ${logs.length} 条）`
+                      : `已显示 ${shownLogs.length} / ${logs.length} 条 · 下滑加载更多`}
+                  </p>
+                </>
               ) : (
                 <p className="meta" style={{ textAlign: 'center', padding: '12px 0' }}>
                   还没有同步记录
                 </p>
-              )}
-            </div>
+              ))}
           </section>
 
           {connected ? (

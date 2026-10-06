@@ -25,7 +25,7 @@
 - `Order`：`id, meal, status, items[], note, createdAt, updatedAt, placedBy`（一单多菜；`placedBy` 是下单那个人，做饭的是另一个人）。
 - `Profile`：`nickname, updatedAt`；`Profiles`：`{ a, b }`（昵称绑人、不绑角色，所以换角色不会串位）。**两格一定都在**：任何来源的 profiles 都先过 `normalizeProfiles`（缺格补空、角色形状对号入座），因为调用方（`joinAs` / `setProfiles` / 同步页）都直接取 `profiles[人].nickname`。
 - `SyncConfig`：`repo, branch, token, tokenMask, me, view, autoPull, intervalSec(0 | 60 | 600), lastPulledAt, lastPushedAt, lastSyncError?`。其中 `token`、`me`（本机这个人是谁）与 `view`（本机当前角色）**仅存本机，永不入库**。
-- `DB`：`schema(=3), configured, updatedAt, config, profiles, recipes[], orders[], logs[]`。`logs` 只保留最近 8 条。
+- `DB`：`schema(=3), configured, updatedAt, config, profiles, recipes[], orders[], logs[]`。`logs` **全量保留**（只存本机，不进仓库）；设置页默认折叠，展开后滚动懒加载，每次 20 条。
 - 仓库文件形状：`RemoteRecipes { schema, updatedAt, recipes[] }`、`RemoteOrders { schema, updatedAt, orders[] }`、`RemoteProfiles { schema, updatedAt, profiles }`。
 
 ## 3. 本地状态容器（`src/data/store.tsx`）
@@ -149,7 +149,7 @@ GitHub Contents API：
 - 后台自动拉取开关（读 `autoPull` / `intervalSec`）。
 - 昵称编辑：我 / 另一半两个名字都能改，保存后随仓库同步；清空表示未设置。输入框同样走 `preserveTypedValue`（见「通用输入行为」）。
 - 「我是谁」切换（本机是 `a` / `b` 中的哪一位），只改本机身份、随即对调页面上的称呼（不再决定底部菜单）。
-- 最近同步日志（最多 8 条，err 高亮）。
+- 最近同步日志：**全量保留**（不再截断），默认折叠成一个「最近同步」折叠条（右侧显示总条数）；展开后列表固定高度可滚动，滚到底自动再加载 20 条，给出「已显示 N / 总数」与「已全部加载」提示；err 高亮。
 - 已连接时提供「断开并清除本地缓存」（需二次点击确认）；未连接时提供「去首次设置」。
 
 ## 8. 组件与样式（`src/components/`、`src/styles/`）
@@ -190,8 +190,8 @@ GitHub Contents API：
 - 渲染层：路由重定向、各屏内容断言、底部导航 4 格（第二格随 `config.view` 在点单 / 掌勺之间变）、详情 CTA 常驻 / 禁用态、空态 / 错态（`?state=error`）/ 本地模式、老缓存 v1→v2 与 v2→v3 迁移、schema 已最新但 profiles 缺格的脏缓存。
 - 交互层：点单组合器（多选 / 手动 / 去重 / 随机 / 长度上限）、掌勺状态回传、备注保存、添加菜谱（小红书 / B站 / 只贴链接）、搜索筛选、昵称联动、token 形状校验、输入框以 DOM 为准（中文输入法 `compositionend` 之后不补 `input`）—— 每个文本输入框都断言「输入不丢字」且「值真的被用上」。
 - 纯函数：`share.ts`（解析 / 链接提取 / 来源识别 / 插画猜测）、`github.ts`（`maskToken` / `normalizeToken` / `tokenShapeError` / `withTimeout` / `getJson` / `putJson` / `verifyRepo` 及全部错误分类 / UTF-8 base64）、`helpers.ts`（称呼 / 摘要 / 状态 / 在单检测）、`seed` / `migrate` 数据契约。
-- 同步引擎（stub `fetch`）：首次连接（空仓库 / 已有数据 / 失败分支 / **仓库里是老结构**）、立即同步拉取、本地改动自动推送且只推变化的那一份、空仓库先拉后推、409 自动重试一次、断开二次确认、「我是谁」静默切换、日志上限 8 条。
-- 组件与界面边界：详情占位卡、Toast 最多同时 3 条、顶栏同步 pill（已同步 / 本地模式）、「设置」页切角色（落库 `config.view`、底部第二格立刻变、不触发推送、且角色区排在「当前仓库」上方）、点单页「历史点单」与掌勺页「已做完」默认折叠只露数量、导入配置 JSON、本地模式进入、错误边界兜底页（渲染期抛错不白屏）。
+- 同步引擎（stub `fetch`）：首次连接（空仓库 / 已有数据 / 失败分支 / **仓库里是老结构**）、立即同步拉取、本地改动自动推送且只推变化的那一份、空仓库先拉后推、409 自动重试一次、断开二次确认、「我是谁」静默切换、日志全量保留。
+- 组件与界面边界：详情占位卡、Toast 最多同时 3 条、顶栏同步 pill（已同步 / 本地模式）、「设置」页切角色（落库 `config.view`、底部第二格立刻变、不触发推送、且角色区排在「当前仓库」上方）、设置页同步日志（默认折叠、展开先 20 条、滚到底每次再 20 条、到底提示已全部加载）、点单页「历史点单」与掌勺页「已做完」默认折叠只露数量、导入配置 JSON、本地模式进入、错误边界兜底页（渲染期抛错不白屏）。
 
 `scripts/register-dom.mjs` 用 `node --import` 预加载 jsdom，**不能**改成普通 `import`。它还注入一个**虚拟时钟**（`globalThis.__domClock`）：默认不武装、定时器照常透传真实实现，所以 `dump` / `test:connect` 这类脚本完全不受影响；只有冒烟测试在启动时 `arm()`，之后用 `settle(ms)` 显式推进时间。各屏「进场骨架」（460～520ms）与同步防抖（700ms）因此不再真的空等挂钟 —— 整套冒烟从约 85s 降到约 2s，断言覆盖面不变（未注入时 `settle` 自动回退到真实等待）。
 
