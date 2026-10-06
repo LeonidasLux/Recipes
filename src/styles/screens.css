@@ -88,9 +88,27 @@
 @keyframes odfade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .s-add .saveline { text-align: center; color: var(--muted); font-size: 12.5px; margin: 0; }
 
-/* ═══════════ 点单 / 掌勺 · 页内切换 ═══════════ */
-.s-order .dayseg,
-.s-cook .dayseg { margin: 0 18px 10px; }
+/* ═══════════ 点单 / 掌勺 · 折叠区（历史点单 / 已做完）═══════════ */
+.s-order .morebar,
+.s-cook .morebar {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px;
+  padding: 11px 14px; border: 2px solid var(--ink); border-radius: 16px;
+  background: var(--surface); color: var(--fg); font: inherit; cursor: pointer;
+  box-shadow: var(--shadow-sticker);
+}
+.s-order .morebar:active,
+.s-cook .morebar:active { transform: translateY(2px); box-shadow: 0 1px 0 0 var(--ink); }
+.s-order .morebar .mb-t,
+.s-cook .morebar .mb-t { font-size: 15px; font-weight: 700; }
+.s-order .morebar .mb-c,
+.s-cook .morebar .mb-c { margin-left: auto; font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+.s-order .morebar .chev,
+.s-cook .morebar .chev { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
+  background: color-mix(in oklch, var(--border) 55%, transparent); }
+.s-order .morebar .chev svg,
+.s-cook .morebar .chev svg { width: 16px; height: 16px; stroke: var(--muted); fill: none; stroke-width: 2.2; transition: transform .18s ease; }
+.s-order .morebar.open .chev svg,
+.s-cook .morebar.open .chev svg { transform: rotate(180deg); }
 
 /* ═══════════ 点单 · 组合器 ═══════════ */
 .s-order .composer { flex: 0 0 auto; padding: 12px 16px 14px; margin: 0; border-radius: 22px;

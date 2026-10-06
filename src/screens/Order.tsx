@@ -3,11 +3,10 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useStore } from '../data/store';
 import { useToast } from '../components/Toast';
 import { TabBar, usePreviewState } from '../components/TabBar';
-import { DaySwitch } from '../components/DaySwitch';
 import { LiveSyncPill } from '../components/LiveSyncPill';
 import { SkeletonRows, SourceBadge, SourceDot, StateCard, StatusChip, Thumb } from '../components/Bits';
 import { Icon } from '../components/Icons';
-import { artUrl, initial, itemArt, mealLabel, orderArt, orderItems, orderMain, orderSummary, todayLine } from '../data/helpers';
+import { artUrl, initial, isTodayOrder, itemArt, mealLabel, orderArt, orderItems, orderMain, orderSummary, todayLine } from '../data/helpers';
 import { useNames } from '../data/useNames';
 import { preserveTypedValue } from '../lib/inputs';
 import type { DB, Meal, Order, OrderItem } from '../data/types';
@@ -26,6 +25,8 @@ export default function OrderScreen() {
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  /* 历史点单默认折叠：只露数量，点一下才铺开 */
+  const [showHistory, setShowHistory] = useState(false);
 
   const preselected = useRef(false);
 
@@ -109,11 +110,13 @@ export default function OrderScreen() {
     setOpen(next);
   }
 
-  /* 「已下的单」只看我点的单；对方点的那些在「我掌勺」里等我做 */
-  const orders = useMemo(
+  /* 点单页只看我点的单；对方点的那些在「掌勺」里等我做 */
+  const myOrders = useMemo(
     () => (preview === 'empty' ? [] : db.orders.filter((o) => o.placedBy === me)),
     [db.orders, preview, me],
   );
+  const todayOrders = useMemo(() => myOrders.filter(isTodayOrder), [myOrders]);
+  const historyOrders = useMemo(() => myOrders.filter((o) => !isTodayOrder(o)), [myOrders]);
 
   const canSend = selected.length > 0 && !sending;
 
@@ -128,8 +131,6 @@ export default function OrderScreen() {
           <LiveSyncPill />
         </div>
       </header>
-
-      <DaySwitch active="order" />
 
       <section className="composer">
         <div className="crow">
@@ -257,10 +258,10 @@ export default function OrderScreen() {
           <section>
             <div className="sechead">
               <div>
-                <h2 className="h3">已下的单</h2>
+                <h2 className="h3">今日点单</h2>
                 <p className="hint">点一张单可展开看里面每道菜</p>
               </div>
-              <span className="meta">{orders.length} 份</span>
+              <span className="meta">{todayOrders.length} 份</span>
             </div>
 
             <div className="stack" style={{ gap: 12 }}>
@@ -268,14 +269,14 @@ export default function OrderScreen() {
                 <div className="card sticker" style={{ padding: '8px 16px' }}>
                   <SkeletonRows n={3} />
                 </div>
-              ) : !orders.length ? (
+              ) : !todayOrders.length ? (
                 <StateCard
                   icon="pot"
                   title="今天还没下过单"
-                  desc={`在上面挑几道菜，发给${names.partnerName}，对方打开「我掌勺」就能接单。`}
+                  desc={`在上面挑几道菜，发给${names.partnerName}，对方打开「掌勺」就能接单。`}
                 />
               ) : (
-                orders.map((o) => (
+                todayOrders.map((o) => (
                   <OrderCard
                     key={o.id}
                     order={o}
@@ -288,10 +289,41 @@ export default function OrderScreen() {
               )}
             </div>
           </section>
+
+          {!loading && historyOrders.length > 0 && (
+            <section>
+              <button
+                type="button"
+                className={`morebar${showHistory ? ' open' : ''}`}
+                aria-expanded={showHistory}
+                onClick={() => setShowHistory((v) => !v)}
+              >
+                <span className="mb-t">历史点单</span>
+                <span className="mb-c">{historyOrders.length} 份</span>
+                <span className="chev">
+                  <Icon name="chevronDown" />
+                </span>
+              </button>
+              {showHistory && (
+                <div className="stack" style={{ gap: 12, marginTop: 12 }}>
+                  {historyOrders.map((o) => (
+                    <OrderCard
+                      key={o.id}
+                      order={o}
+                      db={db}
+                      partner={names.partnerName}
+                      open={open.has(o.id)}
+                      onToggle={() => toggleOpen(o.id)}
+                    />
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
         </div>
       </main>
 
-      <TabBar active="today" />
+      <TabBar active="order" />
     </div>
   );
 }

@@ -23,6 +23,7 @@ export function seed(): DB {
       token: '',
       tokenMask: '',
       me: 'a',
+      view: 'order',
       autoPull: true,
       intervalSec: 60,
       lastPulledAt: '12:05',
@@ -186,6 +187,7 @@ export function normalizeOrders(raw: unknown): Order[] {
  * 老数据迁移：
  *   v1 每单一道菜 → v2 多道菜 items[]
  *   v2 角色（orderer / cook）→ v3 两个人（a / b）：昵称与订单方向按旧身份对号入座
+ *   v3 起「角色」变成底部第二格的本地视图（config.view），沿旧身份给个合理缺省
  *
  * v3 把「角色」从人身上拿掉（两人都能点单也能掌勺），因此旧角色只用来认领人槽。
  * 本项目上线前未投入使用，迁移只求旧缓存不炸，不追求方向语义精确。
@@ -207,6 +209,8 @@ export function migrate(db: DB): DB {
 
     if (legacyCfg) {
       legacyCfg.me = me;
+      /* 旧身份顺手当成本机默认角色：掌勺方打开就看到「掌勺」 */
+      legacyCfg.view = legacyCfg.role === 'cook' ? 'cook' : 'order';
       delete legacyCfg.role;
       /* 更早的昵称曾是「只存本机」的 config.nickname，搬进自己那个人槽 */
       const legacyNick = typeof legacyCfg.nickname === 'string' ? legacyCfg.nickname.trim() : '';
@@ -220,6 +224,9 @@ export function migrate(db: DB): DB {
 
     db.schema = SCHEMA;
   }
+
+  /* 本机角色缺省（老缓存 / 被手改过的配置）：一律补「点单」 */
+  if (db.config && db.config.view !== 'cook') db.config.view = 'order';
 
   if (!Array.isArray(db.logs)) db.logs = [];
   return db;

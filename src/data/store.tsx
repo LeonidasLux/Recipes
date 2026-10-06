@@ -20,9 +20,10 @@ import type {
   Recipe,
   SyncConfig,
   SyncStatus,
+  ViewRole,
 } from './types';
 import { DB_KEY, migrate, normalizeOrders, normalizeProfiles, seed } from './seed';
-import { meOf, newId, nicknameOf, nowHM, nowStamp, orderSummary, partnerOf, PERSON_KEYS } from './helpers';
+import { meOf, newId, nicknameOf, nowHM, nowStamp, orderSummary, partnerOf, PERSON_KEYS, viewOf } from './helpers';
 
 /* ============================================================
    状态 = 数据 + 本地改动计数（rev）+ 同步状态
@@ -118,6 +119,8 @@ export interface StoreValue {
   connected: boolean;
   /** 本机这个人是谁 */
   me: PersonKey;
+  /** 本机当前角色：决定底部第二格是「点单」还是「掌勺」 */
+  view: ViewRole;
 
   /* 本地改动（提交即同步：每次都会触发推送） */
   addRecipe(input: { title: string; source: Recipe['source']; url: string; author: string; art: string; note: string }): Recipe;
@@ -128,6 +131,8 @@ export interface StoreValue {
   setProfiles(next: Partial<Record<PersonKey, string>>): void;
   /** 切换「本机这个人是谁」（本地设置，不触发推送） */
   setMe(person: PersonKey): void;
+  /** 切换「本机当前角色」（本地设置，不触发推送）：底部第二格在「点单 / 掌勺」之间切 */
+  setView(view: ViewRole): void;
   /**
    * 首次设置：把自己认领到某一格。
    * 昵称是共享的，所以「我是谁」由名字决定 —— 本机默认格子若已被别人占用，就换另一格。
@@ -185,6 +190,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       needsSetup: !state.db.configured,
       connected: Boolean(state.db.config?.repo && state.db.config?.token),
       me: meOf(state.db.config),
+      view: viewOf(state.db.config),
 
       addRecipe(input) {
         const rec: Recipe = {
@@ -277,7 +283,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             /* 断开连接之后改身份：给一份最小的本机配置，别让这一下静默失效 */
             db.config = {
               repo: '', branch: 'main', token: '', tokenMask: '',
-              me: person, autoPull: false, intervalSec: 0,
+              me: person, view: 'order', autoPull: false, intervalSec: 0,
+              lastPulledAt: '—', lastPushedAt: '—',
+            };
+          }
+          return db;
+        });
+      },
+
+      setView(view) {
+        commitSilent((db) => {
+          if (db.config) {
+            db.config.view = view;
+          } else {
+            /* 与本机身份同样兜底：给一份最小配置，别让这一下静默失效 */
+            db.config = {
+              repo: '', branch: 'main', token: '', tokenMask: '',
+              me: 'a', view, autoPull: false, intervalSec: 0,
               lastPulledAt: '—', lastPushedAt: '—',
             };
           }
@@ -313,7 +335,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           else {
             db.config = {
               repo: '', branch: 'main', token: '', tokenMask: '',
-              me: slot, autoPull: false, intervalSec: 0,
+              me: slot, view: 'order', autoPull: false, intervalSec: 0,
               lastPulledAt: '—', lastPushedAt: '—',
             };
           }

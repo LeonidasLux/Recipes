@@ -5,6 +5,8 @@ export type SourceKey = 'red' | 'bili' | 'douyin' | 'generic';
 export type PersonKey = 'a' | 'b';
 export type OrderStatus = 'pending' | 'accepted' | 'done';
 export type Meal = 'lunch' | 'dinner';
+/** 本机当前扮演的角色：决定底部第二格是「点单」还是「掌勺」（本地设置，不进仓库） */
+export type ViewRole = 'order' | 'cook';
 
 export interface Recipe {
   id: string;
@@ -65,6 +67,8 @@ export interface SyncConfig {
   tokenMask: string;
   /** 本机这个人是谁（本地设置，不进仓库） */
   me: PersonKey;
+  /** 本机当前角色（本地设置，不进仓库）：决定底部第二格是「点单」还是「掌勺」 */
+  view: ViewRole;
   autoPull: boolean;
   intervalSec: 0 | 60 | 600;
   lastPulledAt: string;

@@ -22,6 +22,7 @@ db.config = {
   token: 'ghp_example_token_value',
   tokenMask: 'ghp_••••••••alue',
   me: (process.argv[3] as 'a' | 'b') ?? 'a',
+  view: 'order',
   autoPull: true,
   intervalSec: 60,
   lastPulledAt: '12:05',

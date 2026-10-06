@@ -9,7 +9,7 @@
 
 - 两个人（内部记作 `a` / `b`）：**角色不绑在人身上** —— 谁点单、谁掌勺由每张订单的方向决定，两个人谁都能点单、也都能掌勺，共用同一份数据。
 - 收藏来自小红书 / B站 / 抖音等平台的菜谱：粘贴分享文案或链接，写备注，配本地卡通插画封面。
-- 下单的人从菜谱库多选几道菜凑成一单（午餐 / 晚餐）发给对方；收到单的人在「我掌勺」里「接下这顿」→「全部做好了」回传状态。
+- 下单的人从菜谱库多选几道菜凑成一单（午餐 / 晚餐）发给对方；收到单的人在「掌勺」里「接下这顿」→「全部做好了」回传状态。
 - **数据真源是用户自己的 GitHub 仓库**（三个 JSON 文件）；本地 `localStorage` 只是缓存，换手机、两人共用都不丢。
 - **提交即同步**：本地内容改动后自动推送回仓库；后台按间隔轮询拉取对方改动。
 - 没有自建后端，浏览器 / Android WebView 直接调用 GitHub Contents API（`api.github.com`）。
@@ -19,12 +19,12 @@
 ## 2. 数据模型（`src/data/types.ts`）
 
 - `SourceKey`：`red`（小红书）/ `bili`（B站）/ `douyin`（抖音）/ `generic`（其它网页）。
-- `PersonKey`：`a` / `b`（两个人；角色随订单方向而定，不再有 orderer / cook 两个固定身份）；`OrderStatus`：`pending` / `accepted` / `done`；`Meal`：`lunch` / `dinner`；`SyncStatus`：`off` / `idle` / `busy` / `ok` / `err`。
+- `PersonKey`：`a` / `b`（两个人；角色随订单方向而定，不再有 orderer / cook 两个固定身份）；`OrderStatus`：`pending` / `accepted` / `done`；`Meal`：`lunch` / `dinner`；`SyncStatus`：`off` / `idle` / `busy` / `ok` / `err`；`ViewRole`：`order` / `cook`（本机当前角色，只决定底部第二格与默认屏，不改变数据归属）。
 - `Recipe`：`id, title, source, url, author, art, note, updatedAt`。`art` 为本地插画文件名（如 `tomato-beef.svg`），空串则用标题首字占位。
 - `OrderItem`：`recipeId: string | null, dishName`。`recipeId` 为 `null` 表示**临时手动输入的菜**。
 - `Order`：`id, meal, status, items[], note, createdAt, updatedAt, placedBy`（一单多菜；`placedBy` 是下单那个人，做饭的是另一个人）。
 - `Profile`：`nickname, updatedAt`；`Profiles`：`{ a, b }`（昵称绑人、不绑角色，所以换角色不会串位）。**两格一定都在**：任何来源的 profiles 都先过 `normalizeProfiles`（缺格补空、角色形状对号入座），因为调用方（`joinAs` / `setProfiles` / 同步页）都直接取 `profiles[人].nickname`。
-- `SyncConfig`：`repo, branch, token, tokenMask, me, autoPull, intervalSec(0 | 60 | 600), lastPulledAt, lastPushedAt, lastSyncError?`。其中 `token` 与 `me`（本机这个人是谁）**仅存本机，永不入库**。
+- `SyncConfig`：`repo, branch, token, tokenMask, me, view, autoPull, intervalSec(0 | 60 | 600), lastPulledAt, lastPushedAt, lastSyncError?`。其中 `token`、`me`（本机这个人是谁）与 `view`（本机当前角色）**仅存本机，永不入库**。
 - `DB`：`schema(=3), configured, updatedAt, config, profiles, recipes[], orders[], logs[]`。`logs` 只保留最近 8 条。
 - 仓库文件形状：`RemoteRecipes { schema, updatedAt, recipes[] }`、`RemoteOrders { schema, updatedAt, orders[] }`、`RemoteProfiles { schema, updatedAt, profiles }`。
 
@@ -32,10 +32,10 @@
 
 - 基于 `useReducer`。**唯一写入口**是 `{ type: 'mutate', updater, bumpRev }`，`updater` 作用在 reducer 拿到的**当前** `state.db` 上（不能在 dispatch 前用 ref 预计算，否则连续多次改动会基于同一份陈旧快照互相覆盖）。
 - `rev` 计数器：**本地内容改动 +1**；拉取远端不 +1。同步引擎据 `rev !== pushedRev` 判断「有本地改动待推送」。
-- 两个提交助手：`commit`（`bumpRev=true`，内容改动 → 会触发推送）与 `commitSilent`（`bumpRev=false`，本机设置：我是谁 / token / 开关 / 时间戳 / `applyRemote`）。
+- 两个提交助手：`commit`（`bumpRev=true`，内容改动 → 会触发推送）与 `commitSilent`（`bumpRev=false`，本机设置：我是谁 / 当前角色 / token / 开关 / 时间戳 / `applyRemote`）。
 - 持久化到 `localStorage`，key = `jishiben-db-v1`；启动时 `loadDb()` → `migrate()`（v1 单菜订单 → v2 `items[]`；v2 角色槽 → v3 两个人：`orderer`/`cook` 映射为 `a`/`b`、`config.role` → `config.me`、旧订单补 `placedBy`；旧的 `config.nickname` 迁入 `profiles`；补齐字段）。**形状规整（`normalizeOrders` / `normalizeProfiles`）每次都会跑，不看 `schema` 版本号** —— 仓库里存量的老结构不等于「缓存版本旧」，只按版本号判断会漏掉。
-- 对外 API：`addRecipe`、`updateRecipeNote`、`addOrder`（自动带 `placedBy = me`）、`setOrderStatus`、`setProfiles`（按人槽改昵称）、`setMe`（切「我是谁」）、`joinAs`（首次设置：按名字把本机认领到 `a`/`b` 一格并落昵称）、`setConfig`、`patchConfig`、`disconnect`、`applyRemote`、`setSyncState`。
-- 派生状态：`needsSetup = !configured`；`connected = 有 repo 且 有 token`；`me`（本机这个人）。
+- 对外 API：`addRecipe`、`updateRecipeNote`、`addOrder`（自动带 `placedBy = me`）、`setOrderStatus`、`setProfiles`（按人槽改昵称）、`setMe`（切「我是谁」）、`setView`（切「当前角色」→ 底部第二格在点单 / 掌勺之间换）、`joinAs`（首次设置：按名字把本机认领到 `a`/`b` 一格并落昵称）、`setConfig`、`patchConfig`、`disconnect`、`applyRemote`、`setSyncState`。
+- 派生状态：`needsSetup = !configured`；`connected = 有 repo 且 有 token`；`me`（本机这个人）；`view`（本机当前角色，缺省 `order`）。
 - 业务副作用（写日志、改 `updatedAt`）在对应 action 内完成，例如加菜谱 / 下单 / 改状态 / 改昵称都会 `pushLog(..., 'ok', ...)`。
 - `applyRemote` 只在远端**确实给了**某一块时才替换该块，避免拉取冲掉本地并发的配置 / 改动；替换前先用 `normalizeOrders` / `normalizeProfiles` 把老仓库里的旧结构（角色形状的 profiles、单菜订单）规整成当前 schema，否则按 `a` / `b` 取值的地方会在渲染期抛错、整页白屏。
 
@@ -83,7 +83,8 @@ GitHub Contents API：
   - `/` 固定回菜谱库（两人都能点单也能掌勺，不再按身份分叉）。
   - `/library` 菜谱库、`/recipe/:id` 详情、`/add` 添加、`/order` 点单、`/cook` 今日菜单、`/sync` 同步。
   - `*` → `/`。
-- **底部导航 4 格**：`[菜谱库] [今天] [＋添加] [同步]`，两个人完全一致。「今天」把点单与掌勺合成一屏，页内用 `DaySwitch`（我点单 / 我掌勺）来回切，路由仍是 `/order` 与 `/cook`。
+- **底部导航 4 格**：`[菜谱库] [点单 / 掌勺] [＋添加] [同步]`。第二格跟着**本机当前角色**（`config.view`）走：角色是点单 → 第二格「点单」（`/order`）；角色是掌勺 → 第二格「掌勺」（`/cook`）。角色**不绑在人身上**，只决定这格指向哪块屏；切角色的入口在「同步」页里（见 §7 Sync），是本地设置、不触发推送。
+- 角色与「我是谁」各管一摊：`config.view` 决定底部第二格；`config.me` 决定每块屏上「我 / 对方」是谁。两台设备可以一个选点单、一个选掌勺，数据仍共用同一份（`placedBy` 方向才是真相）。
 - 屏的「谁在说话」由**本机这个人**（`config.me`）决定：点单屏是「我」下单、对方掌勺；今日菜单是「对方」点的单、我来做（见 `src/data/useNames.ts`）。
 - 昵称显示规则：`nicknameOf(profiles, person)`，没设过退回中性称呼「我 / 对方」，不显示空白。
 - 已移除走查参数 `?view=cook|orderer`（不再有按身份分叉的视角）。
@@ -100,7 +101,7 @@ GitHub Contents API：
 - 四步说明（建空仓库 → 填你和另一半的昵称 → 生成 contents 读写 token → 填 token + 仓库连接）。
 - 「导入配置」折叠区：粘贴另一半发来的 JSON（字段 `nickname` / `partnerNickname?` / `token` / `repo` / `branch` / `intervalSec`）填充表单，含字段校验。
 - 字段与校验：我的昵称 1–12 字；另一半昵称可留空、≤12 字；token 形状校验（`autoCapitalize=none` / `autoCorrect=off` 防手机键盘改写）；仓库须为 `owner/repo`；分支非空。全部输入框走 `preserveTypedValue`（见「通用输入行为」），失焦校验读的是输入框里的真实内容。
-- 不再选「点菜方 / 掌勺方」。连上仓库后由 `joinAs` 按名字把本机认领到 `a` / `b` 中的一格（本机默认槽已被别人占用时自动换另一格），之后可在同步页改「我是谁」。
+- 不再选「点菜方 / 掌勺方」。连上仓库后由 `joinAs` 按名字把本机认领到 `a` / `b` 中的一格（本机默认槽已被别人占用时自动换另一格），之后可在同步页改「我是谁」；本机角色（`config.view`）默认是「点单」，也在同步页切换。
 - 「连接并拉取」→ `sync.connect`；失败时**报错横幅位于提交按钮正上方**（`role=alert`），并按 `GithubError.kind` 给出针对性提示（尤其说明「私有仓库无权限访问时 GitHub 一律回 404」）。
 - 「稍后再说（本地模式）」：不连仓库，仅本机使用（需昵称）。
 - 连接成功视图：显示 `seeded` 说明、仓库 @ 分支、首次拉取的菜谱/点单条数、开始使用按钮。
@@ -125,18 +126,19 @@ GitHub Contents API：
 - 备注（可选）；「保存并同步到仓库」需标题非空，保存中显示 spinner，成功后回菜谱库。
 
 **Order 点单**
-- 页内 `DaySwitch` 可切到「我掌勺」。午 / 晚餐切换（segmented）。
+- 午 / 晚餐切换（segmented）。
 - 顶部组合器：已选菜 chips（点 × 移除）、发送按钮（无选菜禁用）。发送按钮文案含「发给<对方> · 午餐/晚餐 · N 道」。
 - 从菜谱库多选网格（选中态打勾）、「随机加一道」（从没选的菜里随机，挑完给提示）。
 - 手动输入临时菜（≤18 字，去重，`recipeId=null`）「加进这顿」。
-- 「已下的单」只列**我点的单**（`placedBy === me`）。每张单可展开看每道菜（缩略图 + 菜名 + 来源）、给掌勺的话、状态 chip、以及「<对方>回传状态后自动更新」提示；已完成单显示「<对方>已做完这顿」。
+- 「今日点单」只列**我点的、时间戳是「今天」的单**（`placedBy === me` 且 `isTodayOrder`）。每张单可展开看每道菜（缩略图 + 菜名 + 来源）、给掌勺的话、状态 chip、以及「<对方>回传状态后自动更新」提示；已完成单显示「<对方>已做完这顿」。
+- 「历史点单」把我点的其余单（昨天及更早）收进一条折叠条，默认折叠、只显示数量（`N 份`），点一下才逐张铺开。
 - 支持 `?add=<recipeId>` 从详情页预选一道菜（处理后会从 URL 移除该参数）。
 - 空态：还没有订单时给引导文案。
 
 **CookToday 今日菜单**
-- 页内 `DaySwitch` 可切到「我点单」。只列**对方点的单**（`placedBy !== me`）。顶栏显示「我」的名字与「<对方>点给你的几道菜」。
+- 只列**对方点的单**（`placedBy !== me`）。顶栏显示「我」的名字与「<对方>点给你的几道菜」。
 - 未完成单卡片：午/晚餐、道数、下单时间、状态 chip、每道菜、备注；主动作按钮 `pending → 接下这顿`，`accepted → 全部做好了`（点击后 600ms 回传状态并 toast）。
-- 「已做完」分组展示完成单，显示「做完啦，<对方>已收到」。
+- 「已做完」收进一条折叠条，默认折叠、只显示数量（`N 份`），点一下才逐张铺开完成单；完成单上显示「做完啦，<对方>已收到」。
 - 底部提示按 `autoPull` / `intervalSec` 显示「每 N 分钟自动拉取」或「仅手动同步」。
 - 空态：今天还没人点单。
 
@@ -145,6 +147,7 @@ GitHub Contents API：
 - 仓库信息：当前仓库、分支、Token（掩码 + 修改，含形状校验）。
 - 后台自动拉取开关（读 `autoPull` / `intervalSec`）。
 - 昵称编辑：我 / 另一半两个名字都能改，保存后随仓库同步；清空表示未设置。输入框同样走 `preserveTypedValue`（见「通用输入行为」）。
+- 「当前角色」切换（点单 / 掌勺）：只改本机 `config.view`，底部第二格随之在「点单 / 掌勺」之间换；本地设置、不触发推送。两台设备各选各的。
 - 「我是谁」切换（本机是 `a` / `b` 中的哪一位），只改本机身份、随即对调页面上的称呼（不再决定底部菜单）。
 - 最近同步日志（最多 8 条，err 高亮）。
 - 已连接时提供「断开并清除本地缓存」（需二次点击确认）；未连接时提供「去首次设置」。
@@ -155,7 +158,7 @@ GitHub Contents API：
 - `Bits.tsx`：`SkeletonRows`、`SourceBadge`、`SourceDot`、`StatusChip`、`Thumb`、`StateCard`、`SyncPill`。
 - `Toast.tsx`：Toast 容器（约 1.7s 显示，最多同时 3 条）；`ErrorBoundary.tsx`：渲染期异常的兜底页（见 §6）。
 - `LiveSyncPill.tsx`：顶栏同步状态 pill，直接反映真实状态机（未连接显示「本地模式」）。
-- `TabBar.tsx`：底部导航（`[菜谱库][今天][＋添加][同步]`）+ `usePreviewState`；`DaySwitch.tsx`：点单 / 掌勺页内切换。
+- `TabBar.tsx`：底部导航（`[菜谱库][点单 / 掌勺][＋添加][同步]`，第二格读 `config.view`）+ `usePreviewState`。原 `DaySwitch.tsx` 的页内切换已移除 —— 角色切换挪进了「同步」页。
 - 样式：`src/styles/app.css`（设计系统 token + 卡通组件，移植自原型 `shared/app.css`）+ `src/styles/screens.css`（按 `.s-xxx` 作用域）。`npm run classes` 对账 TSX 用到的 class 在样式表里都有定义。
 - 刻意保留：`.h3` **故意未定义**（原型如此，用于维持观感）。
 
@@ -184,11 +187,11 @@ GitHub Contents API：
 
 测试防护是强制约束（见 `AGENTS.md` §5）：**每个功能都要有对应测试，功能变更必须同步新增 / 调整测试**。冒烟测试（`scripts/smoke.tsx`）分七段：
 
-- 渲染层：路由重定向、各屏内容断言、导航 4 格统一、详情 CTA 常驻 / 禁用态、空态 / 错态（`?state=error`）/ 本地模式、老缓存 v1→v2 与 v2→v3 迁移、schema 已最新但 profiles 缺格的脏缓存。
+- 渲染层：路由重定向、各屏内容断言、底部导航 4 格（第二格随 `config.view` 在点单 / 掌勺之间变）、详情 CTA 常驻 / 禁用态、空态 / 错态（`?state=error`）/ 本地模式、老缓存 v1→v2 与 v2→v3 迁移、schema 已最新但 profiles 缺格的脏缓存。
 - 交互层：点单组合器（多选 / 手动 / 去重 / 随机 / 长度上限）、掌勺状态回传、备注保存、添加菜谱（小红书 / B站 / 只贴链接）、搜索筛选、昵称联动、token 形状校验、输入框以 DOM 为准（中文输入法 `compositionend` 之后不补 `input`）—— 每个文本输入框都断言「输入不丢字」且「值真的被用上」。
 - 纯函数：`share.ts`（解析 / 链接提取 / 来源识别 / 插画猜测）、`github.ts`（`maskToken` / `normalizeToken` / `tokenShapeError` / `withTimeout` / `getJson` / `putJson` / `verifyRepo` 及全部错误分类 / UTF-8 base64）、`helpers.ts`（称呼 / 摘要 / 状态 / 在单检测）、`seed` / `migrate` 数据契约。
 - 同步引擎（stub `fetch`）：首次连接（空仓库 / 已有数据 / 失败分支 / **仓库里是老结构**）、立即同步拉取、本地改动自动推送且只推变化的那一份、空仓库先拉后推、409 自动重试一次、断开二次确认、「我是谁」静默切换、日志上限 8 条。
-- 组件与界面边界：详情占位卡、Toast 最多同时 3 条、顶栏同步 pill（已同步 / 本地模式）、DaySwitch、导入配置 JSON、本地模式进入、错误边界兜底页（渲染期抛错不白屏）。
+- 组件与界面边界：详情占位卡、Toast 最多同时 3 条、顶栏同步 pill（已同步 / 本地模式）、「同步」页切角色（落库 `config.view`、底部第二格立刻变、不触发推送）、点单页「历史点单」与掌勺页「已做完」默认折叠只露数量、导入配置 JSON、本地模式进入、错误边界兜底页（渲染期抛错不白屏）。
 
 `scripts/register-dom.mjs` 用 `node --import` 预加载 jsdom，**不能**改成普通 `import`。
 
@@ -204,6 +207,7 @@ GitHub Contents API：
 - 「识别」是**解析分享文案**，不是抓页面（平台无 CORS）。
 - 同步冲突处理是 **last-write-wins**，没有字段级合并；推送撞车只自动重试一次。
 - Token 存在 `localStorage`（仅本机语义）；要更强保护需走原生凭据库（未实现）。
+- 订单没有真实时间戳字段，`createdAt` 是「今天 09:40」「昨天 10:15」这类展示串；点单页的「今日点单 / 历史点单」按 `createdAt` 是否以「今天」开头来分（`isTodayOrder`）。跨天不滚动：一条昨天下的单若时间戳仍写着「今天」，就还会落在「今日点单」里。
 - 拉取时只规整 `orders` / `profiles` 的形状（单菜订单、角色形状昵称）；`recipes` 的字段不做补全 —— 缺字段只是显示为空，不会崩。
 - 输入框的 DOM 兜底（`src/lib/inputs.ts`）靠 `onCompositionEnd` / `onBlur` 补同步；若某个浏览器既不补 `input`、也不在这两个时机把值落进 DOM，仍会丢字（暂未遇到）。
 - `.gitignore` 忽略 `.env*` 本地凭证、`dist/`、`.tmp/`、`node_modules/` 等，凭据绝不入库。

@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { useStore } from '../data/store';
 import { useToast } from '../components/Toast';
 import { TabBar, usePreviewState } from '../components/TabBar';
-import { DaySwitch } from '../components/DaySwitch';
 import { LiveSyncPill } from '../components/LiveSyncPill';
 import { SkeletonRows, StateCard, StatusChip } from '../components/Bits';
 import { Icon } from '../components/Icons';
@@ -13,12 +12,14 @@ import type { Order } from '../data/types';
 export default function CookToday() {
   const { db, setOrderStatus, me } = useStore();
   const { toast } = useToast();
-  /* 掌勺屏：只做对方点的单；我自己点的那份留在「我点单」里 */
+  /* 掌勺屏：只做对方点的单；我自己点的那份留在「点单」里 */
   const names = useNames();
   const preview = usePreviewState();
 
   const [loading, setLoading] = useState(true);
   const [pendingId, setPendingId] = useState<string | null>(null);
+  /* 已做完默认折叠：只露数量，点一下才铺开 */
+  const [showDone, setShowDone] = useState(false);
 
   useEffect(() => {
     const t = window.setTimeout(() => setLoading(false), 460);
@@ -62,8 +63,6 @@ export default function CookToday() {
         </div>
       </header>
 
-      <DaySwitch active="cook" />
-
       <main className="scroll">
         <div className="pad" style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingTop: 14, paddingBottom: 20 }}>
           {loading ? (
@@ -99,21 +98,32 @@ export default function CookToday() {
 
               {doneOrders.length > 0 && (
                 <section>
-                  <div className="row-between" style={{ padding: '0 2px' }}>
-                    <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>已做完</h2>
-                  </div>
-                  <div className="stack" style={{ gap: 12, marginTop: 4 }}>
-                    {doneOrders.map((o) => (
-                      <CookCard
-                        key={o.id}
-                        order={o}
-                        db={db}
-                        partner={names.partnerName}
-                        pending={false}
-                        onAdvance={() => {}}
-                      />
-                    ))}
-                  </div>
+                  <button
+                    type="button"
+                    className={`morebar${showDone ? ' open' : ''}`}
+                    aria-expanded={showDone}
+                    onClick={() => setShowDone((v) => !v)}
+                  >
+                    <span className="mb-t">已做完</span>
+                    <span className="mb-c">{doneOrders.length} 份</span>
+                    <span className="chev">
+                      <Icon name="chevronDown" />
+                    </span>
+                  </button>
+                  {showDone && (
+                    <div className="stack" style={{ gap: 12, marginTop: 12 }}>
+                      {doneOrders.map((o) => (
+                        <CookCard
+                          key={o.id}
+                          order={o}
+                          db={db}
+                          partner={names.partnerName}
+                          pending={false}
+                          onAdvance={() => {}}
+                        />
+                      ))}
+                    </div>
+                  )}
                 </section>
               )}
             </>
@@ -126,7 +136,7 @@ export default function CookToday() {
         {noticeLabel}
       </div>
 
-      <TabBar active="today" />
+      <TabBar active="cook" />
     </div>
   );
 }

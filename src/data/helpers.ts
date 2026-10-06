@@ -9,6 +9,7 @@ import type {
   Recipe,
   SourceKey,
   SyncConfig,
+  ViewRole,
 } from './types';
 
 /* ─── 时间 ───────────────────────────────────── */
@@ -150,6 +151,21 @@ export function nicknameOf(profiles: Profiles | undefined, p: PersonKey): string
 /** 本机这个人是谁（config.me）；缺省算 a */
 export function meOf(cfg: SyncConfig | null): PersonKey {
   return cfg?.me === 'b' ? 'b' : 'a';
+}
+
+/** 本机当前角色（config.view）：决定底部第二格是「点单」还是「掌勺」；缺省算点单 */
+export function viewOf(cfg: SyncConfig | null): ViewRole {
+  return cfg?.view === 'cook' ? 'cook' : 'order';
+}
+
+/**
+ * 这张单是不是「今天的单」。
+ *
+ * 订单时间戳是 `今天 09:40` / `昨天 10:15` 这类展示串（见 nowStamp），
+ * 所以按前缀判断：点单页用它把「今日点单」与「历史点单」分开。
+ */
+export function isTodayOrder(o: Order): boolean {
+  return (o?.createdAt ?? '').startsWith('今天');
 }
 
 /* ─── 插画路径 ───────────────────────────────── */

@@ -205,6 +205,7 @@ function useDb(mutate?: (db: DB) => void) {
     token: 'ghp_example_token_value',
     tokenMask: 'ghp_••••••••alue',
     me: 'a',
+    view: 'order',
     autoPull: true,
     intervalSec: 60,
     lastPulledAt: '12:05',
@@ -455,7 +456,7 @@ async function renderChecks() {
     '小红书',
     'B站',
     '搜菜名、备注或作者',
-    '今天',
+    '点单',
     '已同步 12:05',
   ]);
   await expectIn(
@@ -480,7 +481,7 @@ async function renderChecks() {
     '今天中午',
     '从菜谱库挑选',
     '随机加一道',
-    '已下的单',
+    '今日点单',
     '先选几道菜',
     '番茄炖牛腩 等 2 道',
     '已接',
@@ -488,6 +489,7 @@ async function renderChecks() {
   await expectIn('5b 详情带来的预选菜', '/order?add=r2', ['溏心蛋葱油拌面', '发给小红 · 午餐 · 1 道']);
   await expectIn('6 同步与仓库', '/sync', [
     '同步与仓库',
+    '当前角色',
     '我是谁',
     'xiaoman/family-recipes',
     '最近同步',
@@ -500,21 +502,32 @@ async function renderChecks() {
   /* me = a 时，掌勺屏只显示对方（b）点的单：o2 待接、o3 已做完 */
   await expectIn('7 今日菜单', '/cook', [
     '今日菜单',
-    '我点单',
-    '我掌勺',
     '晚餐单 · 2 道菜',
-    '午餐单 · 1 道菜',
     '接下这顿',
     '已做完',
     '少放辣',
   ]);
 
-  /* 底部导航固定 4 格，两个人完全一致 */
+  /* 底部导航固定 4 格：第二格跟着本机角色（config.view）走 */
   {
     const m = await mount('/library');
     const got = m.$$('.tabbar .tab').map((t) => (t.textContent ?? '').trim());
-    const want = ['菜谱库', '今天', '添加', '同步'];
+    const want = ['菜谱库', '点单', '添加', '同步'];
     check(got.join(' / ') === want.join(' / '), `底部导航顺序：${want.join(' / ')}`, `实际：${got.join(' / ')}`);
+    await m.close();
+  }
+  {
+    useDb((db) => {
+      db.config!.view = 'cook';
+    });
+    const m = await mount('/library');
+    const got = m.$$('.tabbar .tab').map((t) => (t.textContent ?? '').trim());
+    const want = ['菜谱库', '掌勺', '添加', '同步'];
+    check(
+      got.join(' / ') === want.join(' / '),
+      `掌勺角色 → 底部第二格为掌勺：${want.join(' / ')}`,
+      `实际：${got.join(' / ')}`,
+    );
     await m.close();
   }
 
@@ -808,9 +821,12 @@ async function interactionChecks() {
   {
     useDb(); // me=a：我掌勺，做的是小红点的单
     const m = await mount('/cook');
-    const html = m.html();
+    let html = m.html();
     check(html.includes('小辉 · 掌勺'), '掌勺问候语用「小辉」');
     check(html.includes('小红点给你的几道菜'), '掌勺副标题用对方「小红」');
+    /* 已完成单默认折叠：先展开，才能看到完成标记里的称呼 */
+    await m.clickByText('.morebar', '已做完');
+    html = m.html();
     check(html.includes('做完啦，小红已收到'), '已完成标记也用对方的昵称');
     await m.close();
   }
@@ -1361,6 +1377,11 @@ function helperChecks() {
     delete noProfiles.profiles;
     const fixed = migrate(noProfiles as unknown as DB);
     check(fixed.profiles.a.nickname === '' && fixed.profiles.b.nickname === '', '★ schema 已最新但缺 profiles → 照样补齐');
+
+    /* schema 已最新、但本机角色缺省（老缓存 / 手改过的配置）→ 补「点单」 */
+    const noView = seed() as unknown as Record<string, unknown>;
+    delete (noView.config as Record<string, unknown>).view;
+    check(migrate(noView as unknown as DB).config?.view === 'order', '★ 配置缺 view → 补为「点单」');
   }
 }
 
@@ -1396,6 +1417,7 @@ async function migrationChecks() {
       const db = readDb();
       check(db.profiles?.a?.nickname === '小辉', '★ config.nickname 迁移进 profiles.a');
       check(db.config?.me === 'a', '旧角色 orderer → 本机 me=a');
+      check(db.config?.view === 'order', '旧角色 orderer → 本机默认角色点单');
       check(
         !('nickname' in (db.config ?? {})),
         '旧字段已从 config 移除（不再有第二份真相）',
@@ -1426,6 +1448,7 @@ async function migrationChecks() {
     const db = readDb();
     check(db.profiles?.b?.nickname === '小红', '旧角色 cook → 昵称落进 profiles.b');
     check(db.config?.me === 'b', '本机 me=b');
+    check(db.config?.view === 'cook', '★ 旧角色 cook → 本机默认角色掌勺');
     check(db.profiles?.a?.nickname === '', '另一栏留空，等对方设备填');
   }
   localStorage.clear();
@@ -1758,6 +1781,13 @@ async function syncChecks() {
     check(readDb().config?.me === 'b', '★ 切换「我是谁」落库到本机 config');
     const puts = gh.calls.slice(before).filter((c) => c.startsWith('PUT'));
     check(puts.length === 0, '★ 切身份是本地设置，不触发推送', `实际 PUT：${puts.join(',') || '（无）'}`);
+
+    const beforeView = gh.calls.length;
+    await m.clickByText('.idpick', '掌勺'); // 切角色
+    await m.wait(900);
+    check(readDb().config?.view === 'cook', '★ 切换角色落库到本机 config.view');
+    const viewPuts = gh.calls.slice(beforeView).filter((c) => c.startsWith('PUT'));
+    check(viewPuts.length === 0, '★ 切角色也是本地设置，不触发推送', `实际 PUT：${viewPuts.join(',') || '（无）'}`);
     await m.close();
     gh.restore();
   }
@@ -1816,13 +1846,39 @@ async function edgeChecks() {
     await m.close();
   }
 
-  console.log('\n[边界 · 「已下的单」只列我点的]');
+  console.log('\n[边界 · 「今日点单」只列我点的]');
   useDb();
   {
     const m = await mount('/order');
     const html = m.html();
     check(html.includes('1 份'), 'me=a → 只数我点的单（1 份）');
     check(!html.includes('少放辣'), '不显示对方点的单（o2 的备注）');
+    await m.close();
+  }
+
+  console.log('\n[边界 · 历史点单默认折叠，只露数量]');
+  useDb((db) => {
+    db.config!.me = 'b'; // b 点的单：o2 今天、o3 昨天
+  });
+  {
+    const m = await mount('/order');
+    const html = m.html();
+    check(html.includes('今日点单') && html.includes('历史点单'), '点单页同时有今日与历史两段');
+    check(html.includes('1 份'), '今天 1 份 / 历史 1 份都显示数量', `实际片段：${html.length}`);
+    check(!html.includes('昨天 10:15'), '历史单默认折叠，不铺开卡片');
+    await m.clickByText('.morebar', '历史点单');
+    check(m.html().includes('昨天 10:15'), '点历史条 → 展开昨天的单');
+    await m.close();
+  }
+
+  console.log('\n[边界 · 已做完默认折叠，只露数量]');
+  useDb(); // me=a：掌勺屏看到 o2（待接）+ o3（已做完，昨天）
+  {
+    const m = await mount('/cook');
+    check(m.html().includes('已做完'), '掌勺页有「已做完」折叠条');
+    check(!m.html().includes('昨天 10:15'), '已完成单默认折叠，不铺开卡片');
+    await m.clickByText('.morebar', '已做完');
+    check(m.html().includes('昨天 10:15'), '点「已做完」→ 展开完成单');
     await m.close();
   }
 
@@ -1880,16 +1936,21 @@ async function edgeChecks() {
     await m.close();
   }
 
-  console.log('\n[边界 · DaySwitch 页内切换]');
+  console.log('\n[边界 · 角色切换在同步页，底部第二格随之变化]');
   useDb();
   {
-    const m = await mount('/order');
-    check(m.html().includes('我点单') && m.html().includes('我掌勺'), '点单页有切换按钮');
-    check((m.$('.dayseg button.on')?.textContent ?? '').includes('我点单'), '当前高亮「我点单」');
-    await m.clickByText('.dayseg button', '我掌勺');
-    await m.wait(120);
-    check(m.html().includes('今日菜单'), '点「我掌勺」→ 跳到今日菜单');
-    check((m.$('.dayseg button.on')?.textContent ?? '').includes('我掌勺'), '今日菜单高亮「我掌勺」');
+    const m = await mount('/sync');
+    check(m.html().includes('当前角色'), '★ 「同步」页里有角色切换区');
+    check((m.$$('.tabbar .tab')[1]?.textContent ?? '').includes('点单'), '点单角色 → 底部第二格是「点单」');
+
+    await m.clickByText('.idpick', '掌勺');
+    await m.wait(80);
+    check(readDb().config?.view === 'cook', '★ 切角色落库到本机 config.view');
+    check((m.$$('.tabbar .tab')[1]?.textContent ?? '').includes('掌勺'), '★ 角色换成掌勺后，底部第二格立刻变「掌勺」');
+
+    await m.clickByText('.tabbar .tab', '掌勺');
+    await m.wait(700);
+    check(m.html().includes('今日菜单'), '点第二格 → 进入掌勺屏');
     await m.close();
   }
 
