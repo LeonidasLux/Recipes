@@ -9,10 +9,10 @@ import { Icon } from '../components/Icons';
 import { maskToken, normalizeToken, tokenShapeError } from '../lib/github';
 import { preserveTypedValue } from '../lib/inputs';
 import { nicknameOf, partnerOf, PERSON_KEYS } from '../data/helpers';
-import type { PersonKey, ViewRole } from '../data/types';
+import type { PersonKey } from '../data/types';
 
 export default function SyncScreen() {
-  const { db, connected, patchConfig, setProfiles, setMe, setView, view, disconnect } = useStore();
+  const { db, connected, patchConfig, setProfiles, setMe, disconnect } = useStore();
   const sync = useSync();
   const { toast } = useToast();
 
@@ -47,12 +47,6 @@ export default function SyncScreen() {
     if (next === me) return;
     setMe(next);
     toast(`已切换为「${nicknameOf(db.profiles, next) || '未命名'}」`);
-  }
-
-  function pickView(next: ViewRole) {
-    if (next === view) return;
-    setView(next);
-    toast(next === 'cook' ? '已切到「掌勺」· 底部第二格换成掌勺' : '已切到「点单」· 底部第二格换成点单');
   }
 
   function saveToken() {
@@ -127,52 +121,6 @@ export default function SyncScreen() {
             <Icon name="sync" style={{ width: 18, height: 18 }} />
             <span>立即同步</span>
           </button>
-
-          {/* ─── 当前角色（本机本地设置，不进仓库）─── */}
-          <section className="card sticker" style={{ padding: '14px 16px' }}>
-            <div className="row-between" style={{ marginBottom: 10 }}>
-              <div>
-                <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>当前角色</h2>
-                <p className="meta" style={{ fontSize: 11 }}>
-                  决定底部第二格是「点单」还是「掌勺」 · 两台设备各选各的
-                </p>
-              </div>
-              <span className="pill syncing" style={{ fontSize: 11 }}>
-                <span>{view === 'cook' ? '掌勺' : '点单'}</span>
-              </span>
-            </div>
-
-            <div className="idgrid" role="group" aria-label="选择角色">
-              <button
-                type="button"
-                className={`idpick${view === 'order' ? ' on' : ''}`}
-                aria-pressed={view === 'order'}
-                onClick={() => pickView('order')}
-              >
-                <span className="ic">
-                  <Icon name="roleOrderer" />
-                </span>
-                <span>
-                  <b>点单</b>
-                  <small>{view === 'order' ? '底部第二格就是点单' : '我来点，对方掌勺'}</small>
-                </span>
-              </button>
-              <button
-                type="button"
-                className={`idpick${view === 'cook' ? ' on' : ''}`}
-                aria-pressed={view === 'cook'}
-                onClick={() => pickView('cook')}
-              >
-                <span className="ic">
-                  <Icon name="roleCook" />
-                </span>
-                <span>
-                  <b>掌勺</b>
-                  <small>{view === 'cook' ? '底部第二格就是掌勺' : '对方点，我来做'}</small>
-                </span>
-              </button>
-            </div>
-          </section>
 
           {/* ─── 仓库与 token ─── */}
           <section className="card sticker" style={{ padding: '2px 16px' }}>

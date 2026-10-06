@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom';
 import { useStore } from '../data/store';
 import { useSync } from '../lib/useSync';
 import { TabBar, usePreviewState } from '../components/TabBar';
-import { LiveSyncPill } from '../components/LiveSyncPill';
 import { SkeletonRows, SourceBadge, StateCard, Thumb } from '../components/Bits';
 import { Icon } from '../components/Icons';
 import { preserveTypedValue } from '../lib/inputs';
@@ -65,7 +64,6 @@ export default function Library() {
           <h1 className="ptitle" style={{ margin: 0 }}>
             我的菜谱库
           </h1>
-          <LiveSyncPill />
         </div>
       </header>
 

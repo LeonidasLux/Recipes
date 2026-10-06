@@ -488,8 +488,7 @@ async function renderChecks() {
     'B站',
     '搜菜名、备注或作者',
     '点单',
-    '已同步 12:05',
-  ]);
+  ], ['已同步', '本地模式', '同步中']);
   await expectIn(
     '3 菜谱详情（r5 不在任何单里）',
     '/recipe/r5',
@@ -520,7 +519,6 @@ async function renderChecks() {
   await expectIn('5b 详情带来的预选菜', '/order?add=r2', ['溏心蛋葱油拌面', '发给小红 · 午餐 · 1 道']);
   await expectIn('6 同步与仓库', '/sync', [
     '同步与仓库',
-    '当前角色',
     '我是谁',
     'xiaoman/family-recipes',
     '最近同步',
@@ -572,7 +570,7 @@ async function renderChecks() {
     db.config!.tokenMask = '';
   });
   console.log('\n[本地模式 · 未连仓库]');
-  await expectIn('菜谱库显示本地模式 pill', '/library', ['我的菜谱库', '本地模式']);
+  await expectIn('菜谱库不再显示同步状态', '/library', ['我的菜谱库'], ['本地模式', '已同步']);
   await expectIn('同步页显示未连接面板', '/sync', ['还没有连接仓库', '去首次设置']);
 }
 
@@ -1822,13 +1820,6 @@ async function syncChecks() {
     check(readDb().config?.me === 'b', '★ 切换「我是谁」落库到本机 config');
     const puts = gh.calls.slice(before).filter((c) => c.startsWith('PUT'));
     check(puts.length === 0, '★ 切身份是本地设置，不触发推送', `实际 PUT：${puts.join(',') || '（无）'}`);
-
-    const beforeView = gh.calls.length;
-    await m.clickByText('.idpick', '掌勺'); // 切角色
-    await m.wait(900);
-    check(readDb().config?.view === 'cook', '★ 切换角色落库到本机 config.view');
-    const viewPuts = gh.calls.slice(beforeView).filter((c) => c.startsWith('PUT'));
-    check(viewPuts.length === 0, '★ 切角色也是本地设置，不触发推送', `实际 PUT：${viewPuts.join(',') || '（无）'}`);
     await m.close();
     gh.restore();
   }
@@ -1954,6 +1945,53 @@ async function edgeChecks() {
     await m.close();
   }
 
+  console.log('\n[边界 · 掌勺点菜弹出菜品详情]');
+  localStorage.clear();
+  {
+    useDb();
+    const m = await mount('/cook');
+    check(m.$('.dishsheet') === null, '默认不弹详情');
+    check(m.$$('.cc-items .dit').length === 2, '待接的单里有 2 道菜可点', `实际 ${m.$$('.cc-items .dit').length}`);
+
+    await m.clickByText('.cc-items .dit', '溏心蛋葱油拌面');
+    const sheet = m.$('.dishsheet');
+    check(sheet !== null, '★ 点一道菜 → 弹出菜品详情');
+    check(
+      sheet?.getAttribute('role') === 'dialog' && sheet?.getAttribute('aria-modal') === 'true',
+      '弹窗是对话框语义',
+    );
+    const html = m.html();
+    check(html.includes('我的备注') && html.includes('葱油一次多熬一点'), '★ 详情里带这道菜的备注');
+    check(html.includes('深夜食堂阿伟') && html.includes('B站'), '带来源与作者');
+    check(html.includes('查看原文') && html.includes('https://b23.tv/scallion-noodle'), '★ 带原文链接');
+
+    await m.click('.ds-close');
+    check(m.$('.dishsheet') === null, '点 × 关掉详情');
+
+    await m.clickByText('.cc-items .dit', '溏心蛋葱油拌面');
+    await m.click('.ds-mask');
+    check(m.$('.dishsheet') === null, '点遮罩也能关');
+
+    await m.clickByText('.cc-items .dit', '溏心蛋葱油拌面');
+    await act(async () => {
+      window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+    });
+    check(m.$('.dishsheet') === null, '按 Esc 也能关');
+    await m.close();
+  }
+  {
+    /* 临时加的菜（点单时手输的）菜谱库里没有 → 只给说明，不硬凑原文链接 */
+    useDb((db) => {
+      const o = db.orders.find((x) => x.id === 'o2')!;
+      o.items = [...o.items, { recipeId: null, dishName: '临时加的蛋花汤' }];
+    });
+    const m = await mount('/cook');
+    await m.clickByText('.cc-items .dit', '临时加的蛋花汤');
+    check(m.html().includes('这道菜是点单时临时加的'), '★ 临时菜给出说明');
+    check(!m.html().includes('查看原文'), '临时菜不显示「查看原文」');
+    await m.close();
+  }
+
   console.log('\n[边界 · 今日菜单底部同步提示]');
   useDb();
   {
@@ -1991,11 +2029,13 @@ async function edgeChecks() {
     await m.close();
   }
 
-  console.log('\n[边界 · 顶栏同步 pill]');
+  console.log('\n[边界 · 设置格图标反映同步状态]');
   useDb();
   {
     const m = await mount('/library');
-    check(m.$('.pill.synced') !== null && m.html().includes('已同步 12:05'), '已连接 → 已同步 pill');
+    check(m.$('.tabbar .tab.sync-ok') !== null, '★ 已同步 → 设置格图标变绿');
+    check(m.$('.tabbar .tab.sync-err') === null, '没出错就不该是红的');
+    check(m.$('.pill') === null, '★ 菜谱库顶栏不再出现同步状态');
     await m.close();
   }
   {
@@ -2004,36 +2044,109 @@ async function edgeChecks() {
       db.config!.token = '';
     });
     const m = await mount('/library');
-    check(m.$('.pill.syncoff') !== null && m.html().includes('本地模式'), '未连接 → 本地模式 pill');
+    check(
+      m.$('.tabbar .tab.sync-ok') === null && m.$('.tabbar .tab.sync-err') === null,
+      '★ 未连接 → 设置格图标不染色（也算不上「已同步」）',
+    );
+    await m.close();
+  }
+  {
+    /* 同步失败 → 设置格图标变红。用真实的失败响应（500）走一遍完整的失败分类。 */
+    useDb();
+    const prevFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ message: 'boom' }), { status: 500 })) as typeof fetch;
+    const m = await mount('/sync');
+    check(m.$('.pill.synced') !== null, '设置页仍然显示同步状态');
+    await m.click('.btn-primary'); /* 立即同步 */
+    await m.wait(600);
+    check(m.$('.tabbar .tab.sync-err') !== null, '★ 同步失败 → 设置格图标变红');
+    check(m.$('.tabbar .tab.sync-ok') === null, '失败时不会同时显示成已同步');
+    await m.close();
+    globalThis.fetch = prevFetch;
+  }
+  {
+    const m = await mount('/order');
+    check(m.$('.tabbar .tab.sync-ok') !== null, '点单屏：图标照样带状态色');
+    check(m.$('.pill') === null, '★ 点单屏顶栏也没有同步状态');
     await m.close();
   }
 
-  console.log('\n[边界 · 角色切换在设置页，底部第二格随之变化]');
-  useDb();
+  console.log('\n[边界 · 角色切换贴在第二格屏右上角]');
+  localStorage.clear();
   {
-    const m = await mount('/sync');
-    check(m.html().includes('当前角色'), '★ 「设置」页里有角色切换区');
-    /* 位置：角色区必须在「当前仓库」那一行上方（用户明确要求的位置） */
-    const roleHead = m.$$('.s-sync h2').find((h) => (h.textContent ?? '').trim() === '当前角色');
-    const repoKey = m.$$('.s-sync .kvrow .k').find((k) => (k.textContent ?? '').includes('当前仓库'));
-    if (!roleHead || !repoKey) {
-      fail('角色区位置', `找不到角色标题或「当前仓库」行（role=${!!roleHead} repo=${!!repoKey}）`);
-    } else {
-      check(
-        (roleHead.compareDocumentPosition(repoKey) & window.Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
-        '★ 「当前角色」排在「当前仓库」上方',
-      );
-    }
+    useDb();
+    const local = readDb();
+    const gh = installFakeGithub({
+      recipes: { schema: 3, updatedAt: 'x', recipes: local.recipes },
+      orders: { schema: 3, updatedAt: 'x', orders: local.orders },
+      profiles: { schema: 3, updatedAt: 'x', profiles: local.profiles },
+    });
+
+    const m = await mount('/order');
+    check(m.$('.topbar .rolesw') !== null, '★ 点单屏右上角有角色开关');
+    check(m.$('.topbar > .toprow > .rolesw') !== null, '开关就挂在顶栏第一行的右端');
+    check((m.$('.rolesw button.on')?.textContent ?? '') === '点单', '当前角色 → 开关高亮「点单」');
     check((m.$$('.tabbar .tab')[1]?.textContent ?? '').includes('点单'), '点单角色 → 底部第二格是「点单」');
 
-    await m.clickByText('.idpick', '掌勺');
-    await m.wait(80);
+    await m.wait(900); /* 先让挂载后的自动推送落定，再看切角色会不会额外推 */
+    const before = gh.calls.length;
+    await m.clickByText('.rolesw button', '掌勺');
+    await m.wait(900);
     check(readDb().config?.view === 'cook', '★ 切角色落库到本机 config.view');
-    check((m.$$('.tabbar .tab')[1]?.textContent ?? '').includes('掌勺'), '★ 角色换成掌勺后，底部第二格立刻变「掌勺」');
+    check((m.$$('.tabbar .tab')[1]?.textContent ?? '').includes('掌勺'), '★ 切角色后底部第二格立刻变「掌勺」');
+    check(m.html().includes('今日菜单'), '★ 在点单屏切角色 → 直接落到掌勺屏');
+    const puts = gh.calls.slice(before).filter((c) => c.startsWith('PUT'));
+    check(puts.length === 0, '★ 切角色是本地设置，不触发推送', `实际 PUT：${puts.join(',') || '（无）'}`);
+    await m.close();
 
-    await m.clickByText('.tabbar .tab', '掌勺');
-    await m.wait(700);
-    check(m.html().includes('今日菜单'), '点第二格 → 进入掌勺屏');
+    useDb((db) => {
+      db.config!.view = 'cook';
+    });
+    const m2 = await mount('/cook');
+    check(m2.$('.topbar .rolesw') !== null, '掌勺屏右上角也有角色开关');
+    check((m2.$('.rolesw button.on')?.textContent ?? '') === '掌勺', '掌勺角色 → 开关高亮「掌勺」');
+    check(m2.$('.topbar > .toprow > .rolesw') !== null, '掌勺屏：开关同样是顶栏第一行的右端');
+    await m2.clickByText('.rolesw button', '点单');
+    await m2.wait(900);
+    check(readDb().config?.view === 'order', '从掌勺屏切回点单');
+    check(m2.html().includes('点一顿饭'), '切回点单 → 落到点单屏');
+    await m2.close();
+
+    const s = await mount('/sync');
+    check(!s.html().includes('当前角色'), '★ 角色切换已从设置页移走');
+    await s.close();
+
+    gh.restore();
+  }
+
+  console.log('\n[边界 · 掌勺没做完的单在角色开关上有红点]');
+  localStorage.clear();
+  {
+    /* 种子里 me=a：对方点的一单待接（o2）+ 一单已完成（o3）→ 只算没做完的 1 单 */
+    useDb();
+    const m = await mount('/order');
+    const badge = m.$('.rolesw .badge');
+    check(badge?.textContent?.trim() === '1', '★ 掌勺有没做完的单 → 开关右上角挂数字红点', `实际「${badge?.textContent ?? '（无）'}」`);
+    check(m.$('.rolesw button.on')?.textContent === '点单', '红点不影响原来的高亮态');
+    check((badge?.getAttribute('title') ?? '').includes('1 单没做完'), '红点带一句说明');
+    await m.close();
+  }
+  {
+    /* 对方那几单全做完 → 红点消失 */
+    useDb((db) => {
+      db.orders = db.orders.map((o) => (o.placedBy === 'b' ? { ...o, status: 'done' as const } : o));
+    });
+    const m = await mount('/order');
+    check(m.$('.rolesw .badge') === null, '★ 没有没做完的单 → 不显示红点');
+    await m.close();
+  }
+  {
+    /* 自己点的单不算掌勺的活；掌勺屏自己也带着这枚红点 */
+    useDb();
+    const m = await mount('/cook');
+    check(m.$('.rolesw .badge')?.textContent?.trim() === '1', '掌勺屏同样带红点（切过去也看得见）');
+    check((m.$('.rolesw button[aria-label]')?.getAttribute('aria-label') ?? '').includes('1 单没做完'), '按钮的无障碍名带上单数');
     await m.close();
   }
 

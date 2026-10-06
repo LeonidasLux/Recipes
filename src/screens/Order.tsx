@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useStore } from '../data/store';
 import { useToast } from '../components/Toast';
 import { TabBar, usePreviewState } from '../components/TabBar';
-import { LiveSyncPill } from '../components/LiveSyncPill';
+import { RoleSwitch } from '../components/RoleSwitch';
 import { SkeletonRows, SourceBadge, SourceDot, StateCard, StatusChip, Thumb } from '../components/Bits';
 import { Icon } from '../components/Icons';
 import { artUrl, initial, isTodayOrder, itemArt, mealLabel, orderArt, orderItems, orderMain, orderSummary, todayLine } from '../data/helpers';
@@ -123,12 +123,14 @@ export default function OrderScreen() {
   return (
     <div className="app s-order">
       <header className="topbar" style={{ paddingBottom: 8 }}>
-        <p className="greeting">{todayLine()}</p>
-        <div className="navrow" style={{ alignItems: 'flex-end' }}>
+        <div className="toprow">
+          <p className="greeting">{todayLine()}</p>
+          <RoleSwitch />
+        </div>
+        <div className="navrow">
           <h1 className="ptitle" style={{ margin: 0, fontSize: 25 }}>
             点一顿饭
           </h1>
-          <LiveSyncPill />
         </div>
       </header>
 

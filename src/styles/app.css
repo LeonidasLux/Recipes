@@ -98,6 +98,34 @@ body {
 .navrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .navrow .left { display: flex; align-items: center; gap: 10px; min-width: 0; }
 
+/* 顶栏第一行：日期在左，角色开关贴在右上角。
+   下面留一点缝，别让开关的贴纸投影顶到第二行的同步 pill。 */
+.toprow { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.toprow .greeting { margin: 0; }
+
+/* 角色切换（点单 / 掌勺）：紧凑的贴纸开关，占位小但一眼能看到 */
+.rolesw {
+  display: inline-flex; align-items: center; gap: 2px; padding: 2px; flex: 0 0 auto;
+  position: relative;
+  border: 2px solid var(--ink); border-radius: 999px;
+  background: var(--surface); box-shadow: var(--shadow-sticker);
+}
+.rolesw button {
+  border: 0; background: transparent; color: var(--muted);
+  font: inherit; font-size: 12.5px; font-weight: 700; line-height: 1;
+  padding: 7px 11px; border-radius: 999px; cursor: pointer;
+}
+.rolesw button.on { background: var(--accent); color: var(--on-accent); box-shadow: 0 1px 0 0 var(--ink); }
+.rolesw button:active { transform: translateY(1px); }
+/* 掌勺还有没做完的单：开关右上角的数字红点 */
+.rolesw .badge {
+  position: absolute; top: -7px; right: -7px; z-index: 1;
+  box-sizing: border-box; min-width: 17px; height: 17px; padding: 0 4px;
+  border-radius: 999px; background: var(--danger); color: #fff;
+  font-family: var(--font-mono); font-size: 10.5px; font-weight: 700; line-height: 17px;
+  text-align: center; box-shadow: 0 1px 0 0 var(--ink);
+}
+
 .h2 { font-family: var(--font-display); font-size: 20px; margin: 0; line-height: 1.2; }
 .meta { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); }
 .num  { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
@@ -228,8 +256,10 @@ textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible {
 .spin { animation: odspin 1s linear infinite; }
 @keyframes odspin { to { transform: rotate(360deg); } }
 
-/* 筛选 chip（可点，高 44px 保证触达） */
-.chips { display: flex; gap: 8px; overflow-x: auto; padding: 6px 18px 10px; scrollbar-width: none; }
+/* 筛选 chip（可点，高 44px 保证触达）。
+   flex: 0 0 auto 是必须的：.app 是固定高度的纵向 flex，只有 .scroll 该伸缩；
+   否则菜谱列表越长，这行就被压得越扁，和列表的间距会跟着列表长短变。 */
+.chips { display: flex; flex: 0 0 auto; gap: 8px; overflow-x: auto; padding: 6px 18px 10px; scrollbar-width: none; }
 .chips::-webkit-scrollbar { display: none; }
 .chip {
   flex: 0 0 auto; min-height: 44px; padding: 8px 16px;
@@ -370,6 +400,9 @@ textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible {
 .tab.active .bubble { background: var(--accent); }
 .tab:hover:not(.active) { color: var(--accent-ink); }
 .tab:active { opacity: 0.75; }
+/* 「设置」格图标随同步状态变色：已同步绿、同步失败红（其余状态保持原色） */
+.tab.sync-ok svg { stroke: var(--ok); }
+.tab.sync-err svg { stroke: var(--danger); }
 /* 中置凸起的“添加” */
 .tab.add .bubble { display: none; }
 .tab.add .fab {
@@ -399,6 +432,32 @@ textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible {
 .sk-line { height: 12px; margin-bottom: 8px; }
 .sk-line.w60 { width: 60%; } .sk-line.w40 { width: 40%; }
 .sk-line:last-child { margin-bottom: 0; }
+
+/* ─── 菜品详情弹窗（掌勺页点一道菜）────────── */
+/* z-index 取 30：要盖住底部导航（3），但让 Toast（40）浮在上面 */
+.dishsheet { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 24px 18px; }
+.ds-mask { position: absolute; inset: 0; border: 0; padding: 0; cursor: pointer;
+  background: color-mix(in oklch, var(--ink) 44%, transparent); animation: odfade .16s ease; }
+.ds-card { position: relative; width: min(420px, 100%); max-height: calc(100dvh - 48px); overflow-y: auto;
+  padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 10px; animation: odpop .18s ease; }
+.ds-close { position: absolute; top: 10px; right: 10px; z-index: 1; width: 36px; height: 36px; border-radius: 50%;
+  border: 0; background: color-mix(in oklch, var(--ink) 10%, transparent); color: var(--fg);
+  display: grid; place-items: center; cursor: pointer; }
+.ds-close:hover { background: color-mix(in oklch, var(--ink) 20%, transparent); }
+.ds-close svg { width: 17px; height: 17px; stroke: currentColor; fill: none; stroke-width: 2.2; }
+.ds-hero { position: relative; height: 168px; border-radius: 18px; overflow: hidden; border: 2px solid var(--ink);
+  background: var(--accent-soft); display: grid; place-items: center; }
+.ds-hero img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ds-hero .mono-fallback { font-size: 56px; }
+.ds-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ds-title { margin: 0; font-family: var(--font-display); font-size: 21px; line-height: 1.25; }
+.ds-note { display: flex; flex-direction: column; gap: 4px; background: var(--accent-soft);
+  border-radius: 14px; padding: 10px 12px; }
+.ds-note p { margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--fg); }
+.ds-note p.empty { color: var(--muted); }
+.ds-manual { margin: 0; }
+.ds-link { justify-content: center; }
+@keyframes odpop { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: none; } }
 
 /* ─── Toast（提交/同步反馈）────────────────── */
 .toast {

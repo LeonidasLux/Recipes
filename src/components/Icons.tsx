@@ -83,6 +83,7 @@ const PATHS = {
   x: <path d="M6 6l12 12M18 6 6 18" />,
   back: <path d="M15 6l-6 6 6 6" />,
   chevronDown: <path d="m6 9 6 6 6-6" />,
+  chevronRight: <path d="m9 6 6 6-6 6" />,
   pencil: (
     <>
       <path d="M12 20h9" />

@@ -1,6 +1,8 @@
 import { Link, useSearchParams } from 'react-router-dom';
 import { useStore } from '../data/store';
+import { useSync } from '../lib/useSync';
 import { Icon, type IconName } from './Icons';
+import type { SyncStatus } from '../data/types';
 
 export type TabKey = 'library' | 'order' | 'cook' | 'sync';
 
@@ -24,18 +26,33 @@ export function usePreviewState(): 'populated' | 'empty' | 'error' {
 }
 
 /**
+ * 「设置」格图标自带同步状态色：已同步（ok / idle）绿、失败（err）红，
+ * 其余状态（未连接 / 同步中）保持原色。
+ *
+ * 同步状态只在这枚图标和设置页里体现 —— 其他屏不再挂顶栏 pill，
+ * 免得点单、掌勺的时候被同步信息分心，但出了问题又能一眼看见。
+ */
+function syncTone(connected: boolean, status: SyncStatus): string {
+  if (!connected) return '';
+  if (status === 'err') return ' sync-err';
+  if (status === 'ok' || status === 'idle') return ' sync-ok';
+  return '';
+}
+
+/**
  * 底部导航 4 格： [菜谱库] [点单 / 掌勺] [＋添加] [同步]
  *
  * 第二格跟着「本机当前角色」（config.view）走：
  * 角色是点单 → 第二格「点单」（/order）；角色是掌勺 → 第二格「掌勺」（/cook）。
- * 角色本身在「设置」页（/sync）里切换（本地设置，不触发推送）。
+ * 角色切换贴在这两块屏的右上角（见 components/RoleSwitch.tsx），是本地设置、不触发推送。
  */
 export function TabBar({ active }: { active: TabKey }) {
-  const { view } = useStore();
+  const { view, connected } = useStore();
+  const { status } = useSync();
   const second = view === 'cook' ? COOK_TAB : ORDER_TAB;
 
-  const tab = (t: TabDef) => (
-    <Link key={t.key} to={t.to} className={`tab${t.key === active ? ' active' : ''}`}>
+  const tab = (t: TabDef, extra = '') => (
+    <Link key={t.key} to={t.to} className={`tab${extra}${t.key === active ? ' active' : ''}`}>
       <Icon name={t.icon} />
       <span>{t.label}</span>
       <span className="bubble" />
@@ -53,7 +70,7 @@ export function TabBar({ active }: { active: TabKey }) {
         <span className="lbl">添加</span>
         <span className="bubble" />
       </Link>
-      {tab(SYNC_TAB)}
+      {tab(SYNC_TAB, syncTone(connected, status))}
     </nav>
   );
 }

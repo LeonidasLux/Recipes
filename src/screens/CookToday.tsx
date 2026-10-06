@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react';
 import { useStore } from '../data/store';
 import { useToast } from '../components/Toast';
 import { TabBar, usePreviewState } from '../components/TabBar';
-import { LiveSyncPill } from '../components/LiveSyncPill';
+import { RoleSwitch } from '../components/RoleSwitch';
 import { SkeletonRows, StateCard, StatusChip } from '../components/Bits';
 import { Icon } from '../components/Icons';
+import { DishSheet } from '../components/DishSheet';
 import { artUrl, initial, itemArt, mealLabel, orderItems } from '../data/helpers';
 import { useNames } from '../data/useNames';
-import type { Order } from '../data/types';
+import type { Order, OrderItem } from '../data/types';
 
 export default function CookToday() {
   const { db, setOrderStatus, me } = useStore();
@@ -20,6 +21,8 @@ export default function CookToday() {
   const [pendingId, setPendingId] = useState<string | null>(null);
   /* 已做完默认折叠：只露数量，点一下才铺开 */
   const [showDone, setShowDone] = useState(false);
+  /* 点了哪道菜 → 弹它的详情；null 表示没弹 */
+  const [dish, setDish] = useState<OrderItem | null>(null);
 
   useEffect(() => {
     const t = window.setTimeout(() => setLoading(false), 460);
@@ -49,8 +52,11 @@ export default function CookToday() {
   return (
     <div className="app s-cook">
       <header className="topbar">
-        <p className="greeting">{names.meNamed ? `${names.meName} · 掌勺` : '我来掌勺'}</p>
-        <div className="navrow" style={{ alignItems: 'flex-end' }}>
+        <div className="toprow">
+          <p className="greeting">{names.meNamed ? `${names.meName} · 掌勺` : '我来掌勺'}</p>
+          <RoleSwitch />
+        </div>
+        <div className="navrow">
           <div>
             <h1 className="ptitle" style={{ margin: 0 }}>
               今日菜单
@@ -59,7 +65,6 @@ export default function CookToday() {
               {names.partnerNamed ? `${names.partnerName}点给你的几道菜` : '点给你的几道菜'}
             </small>
           </div>
-          <LiveSyncPill />
         </div>
       </header>
 
@@ -91,6 +96,7 @@ export default function CookToday() {
                       partner={names.partnerName}
                       pending={pendingId === o.id}
                       onAdvance={() => advance(o)}
+                      onOpenDish={setDish}
                     />
                   ))}
                 </section>
@@ -120,6 +126,7 @@ export default function CookToday() {
                           partner={names.partnerName}
                           pending={false}
                           onAdvance={() => {}}
+                          onOpenDish={setDish}
                         />
                       ))}
                     </div>
@@ -137,6 +144,8 @@ export default function CookToday() {
       </div>
 
       <TabBar active="cook" />
+
+      {dish && <DishSheet item={dish} db={db} onClose={() => setDish(null)} />}
     </div>
   );
 }
@@ -147,6 +156,7 @@ function CookCard({
   partner,
   pending,
   onAdvance,
+  onOpenDish,
 }: {
   order: Order;
   db: ReturnType<typeof useStore>['db'];
@@ -154,6 +164,8 @@ function CookCard({
   partner: string;
   pending: boolean;
   onAdvance: () => void;
+  /** 点某道菜 → 上层弹它的详情 */
+  onOpenDish: (item: OrderItem) => void;
 }) {
   const items = orderItems(order);
   const isDone = order.status === 'done';
@@ -174,13 +186,22 @@ function CookCard({
         {items.map((it, i) => {
           const a = itemArt(it, db);
           return (
-            <div className="dit" key={`${it.recipeId ?? 'm'}-${i}`}>
-              <div className="da">
+            <button
+              type="button"
+              className="dit"
+              key={`${it.recipeId ?? 'm'}-${i}`}
+              aria-label={`查看「${it.dishName}」的详情`}
+              onClick={() => onOpenDish(it)}
+            >
+              <span className="da">
                 {a ? <img src={artUrl(a)} alt={it.dishName} /> : <span className="mono">{initial(it.dishName)}</span>}
-              </div>
-              <div className="dn">{it.dishName}</div>
-              <span className="qt">1 道</span>
-            </div>
+              </span>
+              <span className="dn">{it.dishName}</span>
+              <span className="qt">
+                1 道
+                <Icon name="chevronRight" />
+              </span>
+            </button>
           );
         })}
       </div>
