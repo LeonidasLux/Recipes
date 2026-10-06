@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useStore } from '../data/store';
+import { useToast } from '../components/Toast';
 import { useSync } from '../lib/useSync';
 import { TabBar, usePreviewState } from '../components/TabBar';
 import { SkeletonRows, SourceBadge, StateCard, Thumb } from '../components/Bits';
 import { Icon } from '../components/Icons';
 import { preserveTypedValue } from '../lib/inputs';
 import { todayLine } from '../data/helpers';
-import type { SourceKey } from '../data/types';
+import type { Recipe, SourceKey } from '../data/types';
 
 const FILTERS: Array<{ key: SourceKey | 'all'; label: string }> = [
   { key: 'all', label: '全部' },
@@ -17,13 +18,18 @@ const FILTERS: Array<{ key: SourceKey | 'all'; label: string }> = [
 ];
 
 export default function Library() {
-  const { db } = useStore();
+  const { db, deleteRecipe } = useStore();
   const sync = useSync();
+  const { toast } = useToast();
   const preview = usePreviewState();
 
   const [active, setActive] = useState<SourceKey | 'all'>('all');
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(true);
+  /* 长按某条菜谱 → 在这条旁边弹一个小 tooltip，里面有删除 */
+  const [tip, setTip] = useState<{ id: string; title: string; top: number; left: number } | null>(null);
+  const pressTimer = useRef<number | null>(null);
+  const longPressed = useRef(false);
 
   /* 进场骨架 → 呈现（与设计源 520ms 一致） */
   useEffect(() => {
@@ -54,6 +60,38 @@ export default function Library() {
     setLoading(true);
     void sync.pull();
     window.setTimeout(() => setLoading(false), 700);
+  }
+
+  /* ─── 长按删除 ─────────────────────────────────
+     按下开始计时（450ms），松手 / 划走 / 滚动就取消 —— 普通点按还是进详情。
+     长按弹出后，紧随其后的那次 click 要吞掉，不然会顺带跳进详情页。 */
+  function cancelPress() {
+    if (pressTimer.current !== null) {
+      window.clearTimeout(pressTimer.current);
+      pressTimer.current = null;
+    }
+  }
+
+  function startPress(el: HTMLElement, r: Recipe) {
+    longPressed.current = false;
+    cancelPress();
+    const rect = el.getBoundingClientRect();
+    pressTimer.current = window.setTimeout(() => {
+      pressTimer.current = null;
+      longPressed.current = true;
+      setTip({ id: r.id, title: r.title, top: rect.bottom + 6, left: Math.max(12, rect.right - 100) });
+    }, 450);
+  }
+
+  function closeTip() {
+    longPressed.current = false;
+    setTip(null);
+  }
+
+  function removeRecipe(id: string, title: string) {
+    deleteRecipe(id);
+    closeTip();
+    toast(`已删除「${title}」`);
   }
 
   return (
@@ -106,7 +144,7 @@ export default function Library() {
         })}
       </nav>
 
-      <main className="scroll">
+      <main className="scroll" onScroll={closeTip}>
         <section className="pad feed">
           {loading ? (
             <div className="cardlist" style={{ padding: '6px 16px' }}>
@@ -161,7 +199,23 @@ export default function Library() {
               )}
               <div className="cardlist">
                 {list.map((r) => (
-                  <Link className="dishrow" key={r.id} to={`/recipe/${r.id}`}>
+                  <Link
+                    className="dishrow"
+                    key={r.id}
+                    to={`/recipe/${r.id}`}
+                    onPointerDown={(e) => startPress(e.currentTarget, r)}
+                    onPointerUp={cancelPress}
+                    onPointerLeave={cancelPress}
+                    onPointerCancel={cancelPress}
+                    onClick={(e) => {
+                      if (!longPressed.current) return;
+                      /* 长按已经弹了删除提示，这一次 click 不算「点开详情」，
+                         但提示要留着 —— 用户还得点里面的删除 */
+                      longPressed.current = false;
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                  >
                     <span className="thumb">
                       <Thumb art={r.art || null} title={r.title} />
                     </span>
@@ -184,6 +238,23 @@ export default function Library() {
           )}
         </section>
       </main>
+
+      {tip && (
+        <>
+          <button type="button" className="tip-mask" aria-label="收起删除提示" onClick={closeTip} />
+          <div className="tip" role="tooltip" style={{ top: tip.top, left: tip.left }}>
+            <button
+              type="button"
+              className="tip-del"
+              aria-label={`删除「${tip.title}」`}
+              onClick={() => removeRecipe(tip.id, tip.title)}
+            >
+              <Icon name="trash" />
+              删除
+            </button>
+          </div>
+        </>
+      )}
 
       <TabBar active="library" />
     </div>

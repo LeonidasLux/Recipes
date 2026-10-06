@@ -9,7 +9,7 @@ import { preserveTypedValue } from '../lib/inputs';
 
 export default function RecipeDetail() {
   const { id = '' } = useParams();
-  const { db, updateRecipeNote } = useStore();
+  const { db, updateRecipe, deleteRecipe } = useStore();
   const { toast } = useToast();
   const navigate = useNavigate();
 
@@ -17,7 +17,8 @@ export default function RecipeDetail() {
 
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [draft, setDraft] = useState({ title: '', url: '', note: '' });
 
   useEffect(() => {
     const t = window.setTimeout(() => setLoading(false), 480);
@@ -32,15 +33,29 @@ export default function RecipeDetail() {
   }
 
   function startEdit() {
-    setDraft(recipe?.note ?? '');
+    if (!recipe) return;
+    setDraft({ title: recipe.title, url: recipe.url, note: recipe.note });
     setEditing(true);
   }
 
-  function saveNote() {
+  function saveEdit() {
     if (!recipe) return;
-    updateRecipeNote(recipe.id, draft.trim());
+    const title = draft.title.trim();
+    if (!title) {
+      toast('菜名不能为空', false);
+      return;
+    }
+    updateRecipe(recipe.id, { title, url: draft.url.trim(), note: draft.note.trim() });
     setEditing(false);
-    toast('备注已保存并同步');
+    toast('已保存并同步');
+  }
+
+  function removeRecipe() {
+    if (!recipe) return;
+    const title = recipe.title;
+    deleteRecipe(recipe.id);
+    toast(`已删除「${title}」`);
+    navigate('/library');
   }
 
   function openOrderWithThis() {
@@ -88,7 +103,15 @@ export default function RecipeDetail() {
         <h1 className="title" style={{ flex: 1, textAlign: 'center' }}>
           菜谱详情
         </h1>
-        <span style={{ width: 44 }} />
+        <button
+          id="editRecipeBtn"
+          className="inlinebtn"
+          aria-pressed={editing}
+          onClick={() => (editing ? setEditing(false) : startEdit())}
+        >
+          <Icon name={editing ? 'x' : 'pencil'} />
+          {editing ? '取消' : '编辑'}
+        </button>
       </div>
 
       <main className="scroll">
@@ -116,73 +139,115 @@ export default function RecipeDetail() {
               </div>
             </section>
 
-            <section className="pad" style={{ paddingTop: 16 }}>
-              <div className="meta-row">
-                <SourceBadge source={recipe.source} />
-                <span className="meta">{recipe.author}</span>
-                <span className="meta">·</span>
-                <span className="meta">{recipe.updatedAt} 更新</span>
-              </div>
-              <h1 className="ptitle" style={{ fontSize: 27, marginTop: 10 }}>
-                {recipe.title}
-              </h1>
-            </section>
-
-            <section className="pad" style={{ paddingTop: 14 }}>
-              <div className="card linkcard sticker" style={{ padding: '12px 16px' }}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>原文出处</div>
-                  <div className="ellip" style={{ fontSize: 13, color: 'var(--fg)', marginTop: 1 }}>
-                    {recipe.url}
+            {editing ? (
+              <section className="pad" style={{ paddingTop: 16 }}>
+                <div className="card sticker notecard" style={{ padding: 16 }}>
+                  <h3 style={{ margin: '0 0 10px' }}>编辑这道菜</h3>
+                  <div className="editrow show">
+                    <div className="field">
+                      <label htmlFor="editTitle">菜名</label>
+                      <input
+                        id="editTitle"
+                        type="text"
+                        maxLength={18}
+                        value={draft.title}
+                        onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
+                        {...preserveTypedValue((v) => setDraft((d) => ({ ...d, title: v })))}
+                        placeholder="例如：番茄炖牛腩"
+                      />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="editUrl">原文出处</label>
+                      <input
+                        id="editUrl"
+                        type="url"
+                        inputMode="url"
+                        autoComplete="off"
+                        spellCheck={false}
+                        value={draft.url}
+                        onChange={(e) => setDraft((d) => ({ ...d, url: e.target.value }))}
+                        {...preserveTypedValue((v) => setDraft((d) => ({ ...d, url: v })))}
+                        placeholder="https://…"
+                      />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="editNote">我的备注</label>
+                      <textarea
+                        id="editNote"
+                        value={draft.note}
+                        onChange={(e) => setDraft((d) => ({ ...d, note: e.target.value }))}
+                        {...preserveTypedValue((v) => setDraft((d) => ({ ...d, note: v })))}
+                        placeholder="做法心得、替代食材、另一半的口味，都可以记在这里。"
+                      />
+                    </div>
+                    <div className="row" style={{ justifyContent: 'flex-end' }}>
+                      <button className="btn-sticker" onClick={() => setEditing(false)}>
+                        取消
+                      </button>
+                      <button className="btn-sticker primary" onClick={saveEdit}>
+                        保存并同步
+                      </button>
+                    </div>
                   </div>
                 </div>
-                <a className="btn-sticker" href={recipe.url} target="_blank" rel="noreferrer">
-                  <Icon name="link" />
-                  查看原文
-                </a>
-              </div>
-            </section>
-
-            <section className="pad" style={{ paddingTop: 14 }}>
-              <div className="card sticker notecard" style={{ padding: 16 }}>
-                <h3 style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '0 0 8px' }}>
-                  <span>我的备注</span>
-                  {/* 两个人谁都能改备注 —— 菜谱库这块不按角色区分 */}
-                  {!editing && (
-                    <button className="inlinebtn" onClick={startEdit}>
-                      <Icon name="pencil" />
-                      编辑
-                    </button>
-                  )}
-                </h3>
-
-                <div className={`viewmode${editing ? ' off' : ''}`}>
-                  <p className={`note-text${hasNote ? '' : ' empty'}`}>
-                    {hasNote
-                      ? recipe.note
-                      : '还没有备注。做过一次、踩了坑，或「辣椒减半」这种口味备忘，都可以记下来，随时能改。'}
-                  </p>
-                </div>
-
-                <div className={`editrow${editing ? ' show' : ''}`}>
-                  <textarea
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    {...preserveTypedValue(setDraft)}
-                    placeholder="做法心得、替代食材、另一半的口味，都可以记在这里。"
-                  />
-                  <div className="row" style={{ justifyContent: 'flex-end' }}>
-                    <button className="btn-sticker" onClick={() => setEditing(false)}>
-                      取消
-                    </button>
-                    <button className="btn-sticker primary" onClick={saveNote}>
-                      保存并同步
-                    </button>
+              </section>
+            ) : (
+              <>
+                <section className="pad" style={{ paddingTop: 16 }}>
+                  <div className="meta-row">
+                    <SourceBadge source={recipe.source} />
+                    <span className="meta">{recipe.author}</span>
+                    <span className="meta">·</span>
+                    <span className="meta">{recipe.updatedAt} 更新</span>
                   </div>
-                </div>
-              </div>
-            </section>
-            <div style={{ height: 8 }} />
+                  <h1 className="ptitle" style={{ fontSize: 27, marginTop: 10 }}>
+                    {recipe.title}
+                  </h1>
+                </section>
+
+                <section className="pad" style={{ paddingTop: 14 }}>
+                  <div className="card linkcard sticker" style={{ padding: '12px 16px' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 12, color: 'var(--muted)' }}>原文出处</div>
+                      <div className="ellip" style={{ fontSize: 13, color: 'var(--fg)', marginTop: 1 }}>
+                        {recipe.url || '没有填'}
+                      </div>
+                    </div>
+                    {recipe.url && (
+                      <a className="btn-sticker" href={recipe.url} target="_blank" rel="noreferrer">
+                        <Icon name="link" />
+                        查看原文
+                      </a>
+                    )}
+                  </div>
+                </section>
+
+                <section className="pad" style={{ paddingTop: 14 }}>
+                  <div className="card sticker notecard" style={{ padding: 16 }}>
+                    <h3 style={{ margin: '0 0 8px' }}>我的备注</h3>
+                    <div className="viewmode">
+                      <p className={`note-text${hasNote ? '' : ' empty'}`}>
+                        {hasNote
+                          ? recipe.note
+                          : '还没有备注。做过一次、踩了坑，或「辣椒减半」这种口味备忘，都可以记下来，随时能改。'}
+                      </p>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="pad" style={{ paddingTop: 18 }}>
+                  <button
+                    className="dang"
+                    style={{ margin: '0 auto', display: 'block' }}
+                    onClick={() => (confirmDelete ? removeRecipe() : setConfirmDelete(true))}
+                    onBlur={() => setConfirmDelete(false)}
+                  >
+                    {confirmDelete ? '再点一次，确认删除这道菜' : '删除这道菜'}
+                  </button>
+                </section>
+                <div style={{ height: 8 }} />
+              </>
+            )}
           </article>
         )}
       </main>

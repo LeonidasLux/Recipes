@@ -101,6 +101,10 @@ interface Mounted {
    * 等价于「已经滚到底」——正好用来驱动滚动懒加载。
    */
   scroll(sel: string): Promise<void>;
+  pointerDown(sel: string): Promise<void>;
+  pointerUp(sel: string): Promise<void>;
+  /** 长按：按下 → 推进虚拟时间（默认 600ms）→ 松手 */
+  longPress(sel: string, ms?: number): Promise<void>;
   value(sel: string): string;
   /** 在某个容器里按文字定位卡片，再点它里面的目标元素 */
   clickInCard(cardSel: string, matchText: string, targetSel: string): Promise<void>;
@@ -205,6 +209,25 @@ async function mount(path: string): Promise<Mounted> {
       await act(async () => {
         el.dispatchEvent(new window.Event('scroll', { bubbles: true }));
       });
+    },
+    async pointerDown(sel) {
+      const el = root.querySelector<HTMLElement>(sel);
+      if (!el) throw new Error(`找不到 ${sel}`);
+      await act(async () => {
+        el.dispatchEvent(new window.Event('pointerdown', { bubbles: true }));
+      });
+    },
+    async pointerUp(sel) {
+      const el = root.querySelector<HTMLElement>(sel);
+      if (!el) throw new Error(`找不到 ${sel}`);
+      await act(async () => {
+        el.dispatchEvent(new window.Event('pointerup', { bubbles: true }));
+      });
+    },
+    async longPress(sel, ms = 600) {
+      await mounted.pointerDown(sel);
+      await settle(ms);
+      await mounted.pointerUp(sel);
     },
     value(sel) {
       const el = root.querySelector<HTMLInputElement | HTMLTextAreaElement>(sel);
@@ -668,14 +691,14 @@ async function interactionChecks() {
   useDb();
   {
     const m = await mount('/recipe/r5');
-    await m.click('.inlinebtn');
+    await m.click('#editRecipeBtn');
     await m.type('.editrow textarea', '九层塔换成罗勒也行，但香气差一点。');
     await m.click('.editrow .btn-sticker.primary');
     await m.wait(200);
     const r5 = readDb().recipes.find((r) => r.id === 'r5')!;
     if (r5.note !== '九层塔换成罗勒也行，但香气差一点。') fail('保存备注', `note = ${r5.note}`);
     else ok('编辑备注 → 落库并写日志');
-    if (!readDb().logs.some((l) => l.text.includes('备注已更新'))) fail('备注写日志', '日志里没有');
+    if (!readDb().logs.some((l) => l.text.includes('已更新'))) fail('备注写日志', '日志里没有');
     else ok('备注保存写入同步日志');
     await m.close();
   }
@@ -730,7 +753,7 @@ async function interactionChecks() {
   useDb();
   {
     const m = await mount('/recipe/r2');
-    await m.click('.inlinebtn');
+    await m.click('#editRecipeBtn');
     await m.type('.editrow textarea', '葱油分两次淋，第一次拌面第二次提香。');
     await m.click('.editrow .btn-sticker.primary');
     await m.wait(200);
@@ -1040,7 +1063,7 @@ async function interactionChecks() {
   useDb();
   {
     const m = await mount('/recipe/r5');
-    await m.click('.inlinebtn');
+    await m.click('#editRecipeBtn');
     await m.ime('.editrow textarea', '九层塔最后放，关火再拌');
     await m.blur('.editrow textarea');
     await m.click('.editrow .btn-sticker.primary');
@@ -1780,7 +1803,7 @@ async function syncChecks() {
     const seedLogs = readDb().logs.length;
     const m = await mount('/recipe/r5');
     for (let i = 1; i <= 9; i++) {
-      await m.click('.inlinebtn');
+      await m.click('#editRecipeBtn');
       await m.type('.editrow textarea', `第 ${i} 次备注`);
       await m.click('.editrow .btn-sticker.primary');
     }
@@ -1791,7 +1814,7 @@ async function syncChecks() {
       '★ 日志全量保留，不再截断到 8 条',
       `实际 ${db.logs.length}（种子 ${seedLogs} + 9）`,
     );
-    check(db.logs[0].text.includes('备注已更新'), '最新一条排在最前');
+    check(db.logs[0].text.includes('已更新'), '最新一条排在最前');
     check(
       db.logs.filter((l) => l.text.startsWith('r5 ·')).length === 9,
       '九次改动一条都没丢',
@@ -2147,6 +2170,101 @@ async function edgeChecks() {
     const m = await mount('/cook');
     check(m.$('.rolesw .badge')?.textContent?.trim() === '1', '掌勺屏同样带红点（切过去也看得见）');
     check((m.$('.rolesw button[aria-label]')?.getAttribute('aria-label') ?? '').includes('1 单没做完'), '按钮的无障碍名带上单数');
+    await m.close();
+  }
+
+  console.log('\n[边界 · 详情页改菜名 / 原文出处 / 备注]');
+  localStorage.clear();
+  {
+    useDb();
+    const m = await mount('/recipe/r5');
+    await m.click('#editRecipeBtn');
+    check(
+      m.$('#editTitle') !== null && m.$('#editUrl') !== null && m.$('#editNote') !== null,
+      '★ 编辑表单有菜名 / 原文出处 / 备注三个字段',
+    );
+    check(m.value('#editTitle') === '台式三杯鸡', '带出当前菜名', m.value('#editTitle'));
+
+    /* 菜名清空 → 不保存，并给出提示 */
+    await m.type('#editTitle', '   ');
+    await m.click('.editrow .btn-sticker.primary');
+    await m.wait(300);
+    check(readDb().recipes.find((r) => r.id === 'r5')!.title === '台式三杯鸡', '★ 菜名清空不允许保存');
+    check(m.html().includes('菜名不能为空'), '给出菜名必填提示');
+
+    await m.type('#editTitle', '三杯鸡（改良版）');
+    await m.type('#editUrl', 'https://www.xiachufang.com/recipe/100');
+    await m.type('#editNote', '九层塔最后放，关火再拌。');
+    await m.click('.editrow .btn-sticker.primary');
+    await m.wait(300);
+    const r5 = readDb().recipes.find((r) => r.id === 'r5')!;
+    check(
+      r5.title === '三杯鸡（改良版）' && r5.url === 'https://www.xiachufang.com/recipe/100' && r5.note === '九层塔最后放，关火再拌。',
+      '★ 菜名 / 原文出处 / 备注都落库',
+      JSON.stringify({ title: r5.title, url: r5.url, note: r5.note }),
+    );
+    check(m.html().includes('三杯鸡（改良版）'), '改完详情页立刻显示新菜名');
+    check(m.html().includes('https://www.xiachufang.com/recipe/100'), '原文出处也跟着更新');
+    check(readDb().logs.some((l) => l.text.includes('已更新')), '改菜谱写同步日志');
+    await m.close();
+  }
+
+  console.log('\n[边界 · 详情页删除菜谱（二次确认）]');
+  localStorage.clear();
+  {
+    useDb();
+    const m = await mount('/recipe/r5');
+    check(readDb().recipes.length === 6, '删之前 6 条');
+    await m.clickByText('.dang', '删除这道菜');
+    check(m.html().includes('再点一次'), '第一次点击只是要确认');
+    check(readDb().recipes.length === 6, '★ 确认之前不真删');
+    await m.clickByText('.dang', '再点一次');
+    await m.wait(100);
+    check(readDb().recipes.length === 5, '★ 二次确认后删掉', `实际 ${readDb().recipes.length}`);
+    check(!readDb().recipes.some((r) => r.id === 'r5'), '删的正是这一条');
+    check(readDb().logs.some((l) => l.text.includes('已删除菜谱')), '删除写同步日志');
+    check(m.html().includes('我的菜谱库'), '删完回到菜谱库');
+    await m.close();
+  }
+
+  console.log('\n[边界 · 菜谱库长按删除]');
+  localStorage.clear();
+  {
+    useDb();
+    const m = await mount('/library');
+    check(m.$$('.cardlist .dishrow').length === 6, '6 条菜谱', `实际 ${m.$$('.cardlist .dishrow').length}`);
+    check(m.$('.tip') === null, '默认没有删除 tooltip');
+
+    /* 按一下就松 → 不算长按 */
+    await m.pointerDown('.dishrow');
+    await m.wait(150);
+    await m.pointerUp('.dishrow');
+    await m.wait(600);
+    check(m.$('.tip') === null, '★ 短按不弹删除 tooltip');
+
+    await m.longPress('.dishrow');
+    check(m.$('.tip') !== null, '★ 长按弹出删除 tooltip');
+    check(m.$('.tip .tip-del svg') !== null, 'tooltip 里有删除图标');
+
+    await m.click('.tip-del');
+    check(m.$('.tip') === null, '删完收起 tooltip');
+    check(readDb().recipes.length === 5, '★ 菜谱从库里删掉', `实际 ${readDb().recipes.length}`);
+    check(!readDb().recipes.some((r) => r.title === '番茄炖牛腩'), '删的是长按的那条');
+    check(readDb().logs.some((l) => l.text.includes('已删除菜谱')), '删除写同步日志');
+    check(m.html().includes('已删除「番茄炖牛腩」'), '给出删除提示');
+    await m.close();
+  }
+  {
+    /* 长按之后紧接着的那次 click 不该顺带跳进详情页 */
+    useDb();
+    const m = await mount('/library');
+    await m.pointerDown('.dishrow');
+    await m.wait(600);
+    await m.clickEl(m.$$('.cardlist .dishrow')[0]);
+    check(m.html().includes('我的菜谱库'), '★ 长按后不会顺带跳进详情页');
+    check(m.$('.tip') !== null, 'tooltip 还开着');
+    await m.click('.tip-mask');
+    check(m.$('.tip') === null, '点别处收起 tooltip');
     await m.close();
   }
 

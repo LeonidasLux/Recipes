@@ -124,7 +124,10 @@ export interface StoreValue {
 
   /* 本地改动（提交即同步：每次都会触发推送） */
   addRecipe(input: { title: string; source: Recipe['source']; url: string; author: string; art: string; note: string }): Recipe;
-  updateRecipeNote(id: string, note: string): void;
+  /** 改菜谱的菜名 / 原文出处 / 备注（内容改动，会触发推送） */
+  updateRecipe(id: string, patch: { title?: string; url?: string; note?: string }): void;
+  /** 删菜谱（内容改动，会触发推送）；订单里的菜名是快照，不受影响 */
+  deleteRecipe(id: string): void;
   addOrder(input: { meal: Meal; items: OrderItem[]; note?: string }): Order;
   setOrderStatus(id: string, status: OrderStatus): void;
   /** 改昵称：两个人谁都能改，改完随仓库同步（内容改动，会触发推送） */
@@ -212,14 +215,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return rec;
       },
 
-      updateRecipeNote(id, note) {
+      updateRecipe(id, patch) {
         commit((db) => {
           const r = db.recipes.find((x) => x.id === id);
-          if (r) {
-            r.note = note;
-            r.updatedAt = '刚刚';
-            pushLog(db, 'ok', `${r.id} · ${r.title} 备注已更新并推送`);
-          }
+          if (!r) return db;
+          if (patch.title !== undefined) r.title = patch.title;
+          if (patch.url !== undefined) r.url = patch.url;
+          if (patch.note !== undefined) r.note = patch.note;
+          r.updatedAt = '刚刚';
+          pushLog(db, 'ok', `${r.id} · ${r.title} 已更新并推送`);
+          return db;
+        });
+      },
+
+      deleteRecipe(id) {
+        commit((db) => {
+          const r = db.recipes.find((x) => x.id === id);
+          if (!r) return db;
+          db.recipes = db.recipes.filter((x) => x.id !== id);
+          pushLog(db, 'ok', `已删除菜谱：${r.title}`);
           return db;
         });
       },
