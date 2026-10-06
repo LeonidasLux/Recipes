@@ -116,7 +116,7 @@ npm run check        # 一次跑完：类型 + 类名对账 + 33 项冒烟 + 构
 - 点单：多选 → 切午/晚 → 点胶囊移除 → 手动输一道 → 发送 → 校验落库为「一单两菜、临时菜 `recipeId` 为 null」→ 组合器清空 → 展开订单看每道菜
 - 掌勺：`接下这顿` → 状态回传 `accepted` → 按钮变 `全部做好了` → 再点回传 `done` → 校验同步日志
 - 备注：进编辑 → 输入 → 保存 → 校验落库与日志
-- 添加菜谱：粘贴小红书链接 → 识别出来源与标题插画 → 保存 → 新菜谱进库
+- 添加菜谱：粘贴小红书链接 → 识别出菜名与来源（配了 DeepSeek Key 还能拆做法 / 作者）→ 保存 → 新菜谱进库
 - 搜索与筛选：关键词计数、无结果空态、按平台筛选
 - token 形状校验：自动大写的 `Ghp_`、混入空格的、位数不足的、合法的
 - 昵称：两个视角看到的称呼不同（点单屏说「发给小红」、今日菜单说「小辉点给你的」）、
@@ -212,6 +212,17 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk   # 数据线�
 或者把那个 APK 文件直接发到手机（微信/网盘/数据线都行），在手机上点开安装
 （需要允许「安装未知来源应用」）。
 
+### 交给 GitHub 自动打包（不用装 Android SDK）
+
+`.github/workflows/android-apk.yml` 已经配好：**每次 push 到 `main`**（也可以在 Actions 页面手动触发），
+GitHub 会用和你本机一样的 `npm run apk` 打一次包，然后：
+
+- 把 `app-debug.apk` 传成这次运行的构建产物（Actions → 对应运行 → Artifacts 下载）；
+- 建一个 Release（tag `v1.0.0-build.<运行序号>`），把 APK 作为附件挂上去，手机点开链接就能下。
+
+Release 里挂的是 debug 签名的包 —— 和本机 `npm run apk` 出来的那份一样，**能直接装、不能上架**。
+想自己签名出正式包，见下面的「Debug 包 vs Release 包」。
+
 ### 改了图标之后
 
 ```bash
@@ -220,8 +231,11 @@ npx cap sync android
 npm run apk
 ```
 
-Android 图标是脚本直接画的（`scripts/make-icons.mjs`）：自适应图标的前景层是**透明底**、
-图形收在安全区内，背景色取自 App 主色。所以桌面图标在圆角/圆形/方形几种启动器下都不会被裁掉。
+桌面图标就是**首次设置页顶部那张插画**（`public/art/sync-pot.svg`）：`scripts/make-icons.mjs`
+里带了个极简 SVG 光栅化（纯 Node、零依赖，只认这张插画用到的元素与命令），把同一张图烘成
+PWA 图标和各密度 launcher 图标 —— 改插画，图标跟着变。自适应图标的前景层是**透明底**、
+去掉插画自带的那块圆角底（背景色用同样的奶油色 `#FFF3DC`），图形收在安全区内，
+所以圆角 / 圆形 / 方形几种启动器下都不会被裁掉。
 
 ### 关于国内网络环境（两处已经改过）
 
@@ -271,6 +285,9 @@ keytool -genkey -v -keystore jishiben.keystore -alias jishiben \
 2. 生成 Personal access token，**权限只需要 `contents` 读写**（Fine-grained token 请把仓库范围限定到这一个仓库）。
 3. 把 `用户名/仓库名`、分支（默认 `main`）、token 填进向导。
 
+向导的**「高级设置」里还能顺手填一个可选的 DeepSeek API Key**（留空也行）：
+填了，「识别」当场就能用 AI（菜名 / 作者 / 做法一起拆）；不填就是纯本地解析，之后到「设置」里补也一样。
+
 连接成功后：
 
 | 情况 | 行为 |
@@ -304,6 +321,7 @@ profiles.json   { schema, updatedAt, profiles: Profiles   }
 `更新昵称` 提交，不会顺带重写菜谱和订单。
 
 **Token 只存在本机**（浏览器 localStorage），不会写进仓库、不会发给除了 `api.github.com` 以外的任何地方。
+DeepSeek 的 AI Key 同理，只发给 `api.deepseek.com`；两者都不会出现在仓库文件里（`config` 永远不进仓库，只有 `recipes.json` / `orders.json` / `profiles.json` 会被推送）。
 `schema` 目前是 `2`（订单为「一单多菜」的 `items[]` 结构）。
 
 ---
@@ -354,6 +372,8 @@ src/
 ├── lib/
 │   ├── github.ts            GitHub Contents API 客户端（UTF-8 安全 base64 / 错误分类）
 │   ├── share.ts             分享文案解析 + 封面插画猜测
+│   ├── ai.ts                DeepSeek Chat Completions 客户端（AI 识别 + Key 工具）
+│   ├── reader.ts            经第三方阅读器抓原链接，压成「页面线索」
 │   └── useSync.tsx          同步引擎：提交即推送、只推变化的文件、轮询拉取、冲突重试
 ├── components/
 │   ├── Icons.tsx            图标库（逐条转写原型 SVG path）
@@ -365,7 +385,7 @@ src/
     ├── Setup.tsx            1 首次设置（昵称 / 身份 / token / 仓库 / JSON 导入）
     ├── Library.tsx          2 菜谱库（搜索 + 平台筛选 + 五态）
     ├── RecipeDetail.tsx     3 菜谱详情（备注编辑 / 掌勺只读）
-    ├── AddRecipe.tsx        4 添加菜谱（链接识别 + 手动回退）
+    ├── AddRecipe.tsx        4 添加菜谱（本地解析 / DeepSeek AI 识别 + 手动添加）
     ├── Order.tsx            5 点单（多选组合器 + 随机加一道 + 可展开订单）
     ├── CookToday.tsx        6 掌勺今日菜单（整单接下 / 做完）
     └── Sync.tsx             7 同步与仓库（五态面板 + 身份切换 + 日志）
@@ -376,6 +396,8 @@ scripts/                     （开发工具，不参与打包）
 ├── check-classes.mjs        CSS 类名对账
 ├── make-icons.mjs           PWA 图标生成
 └── dump.tsx                 把某屏的真实 HTML 打出来做结构目检
+
+.github/workflows/android-apk.yml   提交到 main 后自动打包 APK 并出 Release
 ```
 
 ### 设计走查参数
@@ -415,6 +437,57 @@ scripts/                     （开发工具，不参与打包）
 > 原型里这块是**写死的样本**：任何小红书链接都会返回「蒜香黄油虾仁」。
 > 那是 prototype 的占位实现，已经删掉了。
 
+### 再进一步：接入 DeepSeek AI（可选）
+
+分享文案里往往还夹着食材和步骤，启发式解析只挑得出标题。为此加了一层**可选的 AI 识别**
+（`src/lib/ai.ts`）：在「设置 → AI 识别（DeepSeek）」里填一个自己的 DeepSeek API Key，
+「识别」就会把这段文案交给 `deepseek-chat`，让它一次抽出**菜名 / 作者 / 做法 / 小贴士**。
+
+- 走 Chat Completions（`https://api.deepseek.com/chat/completions`，`response_format=json_object`），
+  `api.deepseek.com` 会回 CORS 头，所以浏览器可以直连，仍然不需要自建后端。
+- **链接和来源永远以本地解析为准**；提示词明确要求「只抄文案里写到的信息、绝不编造」，
+  结果同样只是预填，四个字段都能改。做法抓不到时留空，而不是让模型编一段。
+- **失败不阻断**：没配 Key、关掉开关、或 DeepSeek 报错（Key 失效 / 余额不足 / 限流 / 超时…）
+  都会退回原来的本地解析，并把原因用中文 toast 出来。
+- Key 与 GitHub token 同级别：**只存本机 `localStorage`**，设置页只显示掩码，
+  不进仓库、也不发给 `api.deepseek.com` 以外的任何地方。设置页还有「测试连接」（走 `GET /models`，
+  只校验 Key、不消耗对话额度）。
+
+### 标题只留菜名
+
+分享文案常写成「西红柿炒鸡蛋，你就像我这样做，真的很下饭！」，标题要的只是「西红柿炒鸡蛋」。
+所以两条路都做了收窄：
+
+- **本地解析**：取最长那行后，从第一个分隔标点截断，**反复剥**掉「保姆级教程 / 超详细 / 手把手 / 的做法 /
+  教程 / 配方 / 合集 / 分享 / 来了」这类营销尾巴，再裁到 20 字（`src/lib/share.ts` 的 `toDishName`）。
+  例：「酸甜爽脆的腌萝卜保姆级教程来了‼️」→「酸甜爽脆的腌萝卜」。
+- **AI**：提示词要求「只填菜名本身，2～12 字」并点名去掉营销词，给了例子；模型万一还是把整句视频标题
+  丢回来，`normalizeAiRecipe` 会用同一套 `toDishName()` 再收一次。
+
+另外，**只贴一条搜索链接**（B站 `search.bilibili.com/all?keyword=…`、YouTube、百度…）时，
+标题直接取链接里的搜索词（`searchKeyword()`，认 `keyword` / `search_query` / `query` / `q` / `wd` / `word`）
+—— 这种链接没有文案可解析，但搜索词能顶上一个标题（AI 抽不出菜名时用它兜底）。配了 AI 时按提示词
+约定取**搜索结果第一条的菜名**，所以搜「村驴」那条链接最终得到的是「腌萝卜」而不是 UP 主名。
+
+启发式不可能全对（长而不带标点的句子会留长），但配了 AI 时基本都能收成菜名。
+
+### 想要作者 / 账号：读原链接（默认就用）
+
+作者名只在原页面上，分享文案里通常没有。但**浏览器读不到平台页面** —— 小红书 / B站 / 抖音
+都不返回 CORS 头（实测 B站开放接口也没有 `access-control-allow-origin`），这也是当初「不做抓取」的原因。
+
+所以这里走一条明摆着的折中路（`src/lib/reader.ts`）：借第三方阅读器 `r.jina.ai` 去打开页面。
+它替我们渲染目标页、**自己带 CORS 头**（preflight 放行 `GET` 与 `x-respond-with`），浏览器能直接读。
+拿到整页 HTML 后，用 `DOMParser`（不执行脚本）压成一小段「页面线索」：页面标题 / og 描述 /
+**作者候选**（meta、作者区块、页面内嵌 JSON 里的 `nickname`）/ 正文摘录，再交给 DeepSeek。
+
+- **没有开关，默认就走**：只要配了 DeepSeek Key，识别带链接的文案时会自动读一次原链接。
+  链接会交给 `r.jina.ai`、页面片段再交给 DeepSeek —— 这些内容会离开你的设备；免费额度有限（实测 20 次/分钟）。
+  不想外发就别配 AI Key，那样识别是纯本地解析。
+- 抓不到（小红书有反爬 / 登录墙、超时、被限流）就静默退回「只解析文案」，不打断识别。
+- 实测 B站可用：读一集视频页能拿到 `作者候选: 编剧六一`，模型据此把 `author` 填成「编剧六一」。
+  小红书能不能读，取决于那条笔记的分享链接是否带足参数、以及当时是否撞上反爬 —— 建议拿真实链接试一次。
+
 ---
 
 ## 与原型的刻意差异
@@ -450,7 +523,9 @@ scripts/                     （开发工具，不参与打包）
 
 ## 已知限制 / 后续可做
 
-- 「识别」走的是**解析分享文案**，不是抓页面 —— 原因和做法见下方专节。
+- 没配 AI Key 时「识别」走的是**解析分享文案**，不是抓页面 —— 原因和做法见下方专节。配了 Key 之后，带链接的识别会默认把链接交给第三方 `r.jina.ai` 读页面（没有开关），且小红书不一定抓得到。
+- 「标题只留菜名」是启发式：带标点的文案收得干净，长而不带标点的会留长（配 AI 时由模型兜）；搜索链接配了 AI 时取搜索结果第一条的菜名，没配 AI 时才用搜索词顶。
+- AI 识别要用户自备 DeepSeek API Key；没配 / 关掉 / 失败都退回本地解析。识别时文案会发给 `api.deepseek.com`，介意就别开 AI。
 - 冲突处理是 last-write-wins，没有做字段级合并。
 - Token 存在 localStorage，等价于原型里「仅存本机」的语义。要更强的保护需要走原生容器（见下）。
 - **打包成真正的 Android/iOS App**：这套代码可以直接被 Capacitor 包成原生壳

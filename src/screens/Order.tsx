@@ -22,6 +22,8 @@ export default function OrderScreen() {
   const [meal, setMeal] = useState<Meal>('lunch');
   const [selected, setSelected] = useState<OrderItem[]>([]);
   const [manual, setManual] = useState('');
+  /* 给掌勺的话（可不填），随这一单一起发出去 */
+  const [note, setNote] = useState('');
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -95,9 +97,11 @@ export default function OrderScreen() {
     setSending(true);
     const items = selected;
     const mealNow = meal;
+    const noteNow = note.trim();
     window.setTimeout(() => {
-      addOrder({ meal: mealNow, items });
+      addOrder({ meal: mealNow, items, note: noteNow });
       setSelected([]);
+      setNote('');
       setSending(false);
       toast(`已发给${names.partnerName} · 等待接单`);
     }, 720);
@@ -164,6 +168,19 @@ export default function OrderScreen() {
             ))
           )}
         </div>
+
+        <input
+          className="ordernote"
+          type="text"
+          value={note}
+          maxLength={30}
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="给掌勺的话（可不填）"
+          aria-label="给掌勺的话"
+          onChange={(e) => setNote(e.target.value)}
+          {...preserveTypedValue(setNote)}
+        />
 
         <button className="sendbtn" disabled={!canSend} onClick={send}>
           {sending ? (

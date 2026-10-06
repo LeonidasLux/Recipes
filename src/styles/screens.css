@@ -47,6 +47,8 @@
 .s-detail .editrow.show { display: flex; }
 .s-detail .viewmode { display: flex; flex-direction: column; gap: 10px; }
 .s-detail .viewmode.off { display: none; }
+/* 做法：手动加的菜谱主要靠这段，保留换行，读起来才像步骤 */
+.s-detail .steps-text { margin: 0; font-size: 14px; line-height: 1.65; white-space: pre-wrap; }
 .s-detail .openlink { color: var(--accent-ink); font-weight: 600; text-decoration: none; }
 .s-detail .meta-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 2px; }
 .s-detail .linkcard { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -148,6 +150,13 @@
   color: var(--fg); display: grid; place-items: center; cursor: pointer; padding: 0; }
 .s-order .sel .x svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2.2; }
 .s-order .sel .x:hover { background: var(--danger); color: #fff; }
+/* 给掌勺的话：贴在发送键上方的一条窄输入，保持组合器别太高 */
+.s-order .ordernote { width: 100%; min-height: 38px; margin: 0 0 8px; padding: 0 14px;
+  border-radius: 14px; border: 1.5px solid color-mix(in oklch, var(--on-accent) 40%, transparent);
+  background: color-mix(in oklch, #fff 76%, transparent); color: var(--fg); font: inherit; font-size: 13.5px; }
+.s-order .ordernote::placeholder { color: color-mix(in oklch, var(--on-accent) 62%, transparent); }
+.s-order .ordernote:focus { outline: 3px solid color-mix(in oklch, #fff 65%, transparent); outline-offset: 1px;
+  background: #fff; border-color: var(--ink); }
 .s-order .sendbtn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 46px;
   border-radius: 16px; border: 2px solid var(--ink); background: #fff; color: var(--on-accent);
   box-shadow: 0 3px 0 0 var(--ink); font: inherit; font-size: 15px; font-weight: 700; cursor: pointer; }
@@ -242,6 +251,9 @@
 .s-sync .kvrow .v.tagval { font-family: var(--font-body); }
 .s-sync .editrow { display: none; flex-direction: column; gap: 10px; padding: 12px 0; border-top: 1.5px solid var(--border); }
 .s-sync .editrow.show { display: flex; }
+/* AI 识别（DeepSeek）：Key 输入区下面那行「测试连接」结果，成功灰、失败红 */
+.s-sync .aimsg { margin: 0; font-size: 11.5px; color: var(--muted); }
+.s-sync .aimsg.err { color: var(--danger); }
 .s-sync .switch { position: relative; width: 52px; height: 30px; flex: 0 0 auto; }
 .s-sync .switch input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
 .s-sync .switch .track { position: absolute; inset: 0; border-radius: 999px; background: color-mix(in oklch, var(--muted) 22%, #fff);

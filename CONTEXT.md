@@ -8,7 +8,7 @@
 记食本（`package.json` name = `jishiben`）是一个**双人协作的菜谱收藏 + 点单**应用，形态为 PWA，并可用 Capacitor 打包成 Android APK。
 
 - 两个人（内部记作 `a` / `b`）：**角色不绑在人身上** —— 谁点单、谁掌勺由每张订单的方向决定，两个人谁都能点单、也都能掌勺，共用同一份数据。
-- 收藏来自小红书 / B站 / 抖音等平台的菜谱：粘贴分享文案或链接，写备注，配本地卡通插画封面。
+- 收藏来自小红书 / B站 / 抖音等平台的菜谱：粘贴分享文案或链接，**「识别」可选接入 DeepSeek AI** 把文案拆成菜名 / 作者 / 做法（没配 Key 时退回本地启发式解析），写备注，配本地卡通插画封面。
 - 下单的人从菜谱库多选几道菜凑成一单（午餐 / 晚餐）发给对方；收到单的人在「掌勺」里「接下这顿」→「全部做好了」回传状态。
 - **数据真源是用户自己的 GitHub 仓库**（三个 JSON 文件）；本地 `localStorage` 只是缓存，换手机、两人共用都不丢。
 - **提交即同步**：本地内容改动后自动推送回仓库；后台按间隔轮询拉取对方改动。
@@ -18,13 +18,13 @@
 
 ## 2. 数据模型（`src/data/types.ts`）
 
-- `SourceKey`：`red`（小红书）/ `bili`（B站）/ `douyin`（抖音）/ `generic`（其它网页）。
+- `SourceKey`：`red`（小红书）/ `bili`（B站）/ `douyin`（抖音）/ `generic`（其它网页）/ `manual`（**手动添加，没有来源平台**）。
 - `PersonKey`：`a` / `b`（两个人；角色随订单方向而定，不再有 orderer / cook 两个固定身份）；`OrderStatus`：`pending` / `accepted` / `done`；`Meal`：`lunch` / `dinner`；`SyncStatus`：`off` / `idle` / `busy` / `ok` / `err`；`ViewRole`：`order` / `cook`（本机当前角色，只决定底部第二格与默认屏，不改变数据归属）。
-- `Recipe`：`id, title, source, url, author, art, note, updatedAt`。`art` 为本地插画文件名（如 `tomato-beef.svg`），空串则用标题首字占位。
+- `Recipe`：`id, title, source, url, author, art, steps, note, createdAt, updatedAt`。`art` 为本地插画文件名（如 `tomato-beef.svg`），空串则用标题首字占位。`steps` 是**做法**（多行文本，详情页按换行原样展示），手动添加的菜谱主要就靠它；剪藏来的可以留空。`createdAt` 是收藏时间（新增时写「刚刚」），`updatedAt` 每次编辑变「刚刚」；两个时间都只在菜谱详情页显示。
 - `OrderItem`：`recipeId: string | null, dishName`。`recipeId` 为 `null` 表示**临时手动输入的菜**。
 - `Order`：`id, meal, status, items[], note, createdAt, updatedAt, placedBy`（一单多菜；`placedBy` 是下单那个人，做饭的是另一个人）。
 - `Profile`：`nickname, updatedAt`；`Profiles`：`{ a, b }`（昵称绑人、不绑角色，所以换角色不会串位）。**两格一定都在**：任何来源的 profiles 都先过 `normalizeProfiles`（缺格补空、角色形状对号入座），因为调用方（`joinAs` / `setProfiles` / 同步页）都直接取 `profiles[人].nickname`。
-- `SyncConfig`：`repo, branch, token, tokenMask, me, view, autoPull, intervalSec(0 | 60 | 600), lastPulledAt, lastPushedAt, lastSyncError?`。其中 `token`、`me`（本机这个人是谁）与 `view`（本机当前角色）**仅存本机，永不入库**。
+- `SyncConfig`：`repo, branch, token, tokenMask, aiKey, aiKeyMask, aiOn, me, view, autoPull, intervalSec(0 | 60 | 600), lastPulledAt, lastPushedAt, lastSyncError?`。其中 `token`、`aiKey`/`aiKeyMask`（DeepSeek API Key 及其掩码）、`me`（本机这个人是谁）与 `view`（本机当前角色）**仅存本机，永不入库**；`aiOn` 是「识别时是否走 AI」的本机开关（默认 `true`，没填 Key 时不起作用）。老缓存缺这几个字段由 `migrate()` 补齐。
 - `DB`：`schema(=3), configured, updatedAt, config, profiles, recipes[], orders[], logs[]`。`logs` **全量保留**（只存本机，不进仓库）；设置页默认折叠，展开后滚动懒加载，每次 20 条。
 - 仓库文件形状：`RemoteRecipes { schema, updatedAt, recipes[] }`、`RemoteOrders { schema, updatedAt, orders[] }`、`RemoteProfiles { schema, updatedAt, profiles }`。
 
@@ -34,7 +34,7 @@
 - `rev` 计数器：**本地内容改动 +1**；拉取远端不 +1。同步引擎据 `rev !== pushedRev` 判断「有本地改动待推送」。
 - 两个提交助手：`commit`（`bumpRev=true`，内容改动 → 会触发推送）与 `commitSilent`（`bumpRev=false`，本机设置：我是谁 / 当前角色 / token / 开关 / 时间戳 / `applyRemote`）。
 - 持久化到 `localStorage`，key = `jishiben-db-v1`；启动时 `loadDb()` → `migrate()`（v1 单菜订单 → v2 `items[]`；v2 角色槽 → v3 两个人：`orderer`/`cook` 映射为 `a`/`b`、`config.role` → `config.me`、旧订单补 `placedBy`；旧的 `config.nickname` 迁入 `profiles`；补齐字段）。**形状规整（`normalizeOrders` / `normalizeProfiles`）每次都会跑，不看 `schema` 版本号** —— 仓库里存量的老结构不等于「缓存版本旧」，只按版本号判断会漏掉。
-- 对外 API：`addRecipe`、`updateRecipe`（改菜名 / 原文出处 / 备注）、`deleteRecipe`（删菜谱；订单里存的是菜名快照，不受影响）、`addOrder`（自动带 `placedBy = me`）、`setOrderStatus`、`setProfiles`（按人槽改昵称）、`setMe`（切「我是谁」）、`setView`（切「当前角色」→ 底部第二格在点单 / 掌勺之间换）、`joinAs`（首次设置：按名字把本机认领到 `a`/`b` 一格并落昵称）、`setConfig`、`patchConfig`、`disconnect`、`applyRemote`、`setSyncState`。
+- 对外 API：`addRecipe`、`updateRecipe`（改菜名 / 原文出处 / 备注）、`deleteRecipe`（删菜谱；订单里存的是菜名快照，不受影响）、`addOrder`（自动带 `placedBy = me`，可带 `note`）、`setOrderStatus`、`setProfiles`（按人槽改昵称）、`setMe`（切「我是谁」）、`setView`（切「当前角色」→ 底部第二格在点单 / 掌勺之间换）、`joinAs`（首次设置：按名字把本机认领到 `a`/`b` 一格并落昵称）、`setConfig`、`patchConfig`、`disconnect`、`applyRemote`、`setSyncState`。
 - 派生状态：`needsSetup = !configured`；`connected = 有 repo 且 有 token`；`me`（本机这个人）；`view`（本机当前角色，缺省 `order`）。
 - 业务副作用（写日志、改 `updatedAt`）在对应 action 内完成，例如加菜谱 / 下单 / 改状态 / 改昵称都会 `pushLog(..., 'ok', ...)`。
 - `applyRemote` 只在远端**确实给了**某一块时才替换该块，避免拉取冲掉本地并发的配置 / 改动；替换前先用 `normalizeOrders` / `normalizeProfiles` 把老仓库里的旧结构（角色形状的 profiles、单菜订单）规整成当前 schema，否则按 `a` / `b` 取值的地方会在渲染期抛错、整页白屏。
@@ -65,15 +65,29 @@ GitHub Contents API：
 - **`disconnect`**：清 `config`、`configured=false`，同步状态置 `off`。
 - 拉下来的内容视为「已推送」，避免紧接着又被原样写回，制造噪音提交。
 
-## 5. 分享文案解析与封面（`src/lib/share.ts`）
+## 5. 分享文案解析、AI 识别、读原链接与封面（`src/lib/share.ts`、`src/lib/ai.ts`、`src/lib/reader.ts`）
 
-- **不做页面抓取**：小红书 / B站 / 抖音不返回 CORS 头，浏览器读不到页面内容；改为解析用户粘贴的分享文案。
+- **默认不抓页面**：小红书 / B站 / 抖音不返回 CORS 头，浏览器读不到页面内容，所以本地解析只吃用户粘贴的分享文案；配了 AI Key 后识别会额外读一次原链接（见下方「读原链接」，走第三方代理）。
 - `extractUrl`：取文案里第一个链接。
 - `detectSource`：按域名判断来源（`xiaohongshu`/`xhslink` → red；`bilibili`/`b23.tv` → bili；`douyin`/`iesdouyin` → douyin；否则 generic）。
-- `parseShare`：先按 `BOILERPLATE` 去平台固定尾巴（**顺序有意义：长而具体的在前**），去掉链接后 **取最长的一行当标题**，再去话题标签 / 表情、裁到 40 字；抖音文案会顺手用 `看看【xxx的作品】` 捞作者。
+- `parseShare`：先按 `BOILERPLATE` 去平台固定尾巴（**顺序有意义：长而具体的在前**），去掉链接后 **取最长的一行**，再去话题标签 / 表情；抖音文案会顺手用 `看看【xxx的作品】` 捞作者。
+- **只贴一条搜索链接时，用链接里的搜索词当标题**：`searchKeyword()` 认 `keyword` / `search_query` / `query` / `q` / `wd` / `word` 这几个查询参数（B站搜索页、YouTube、百度…）。搜「村驴」得到的 `search.bilibili.com/all?keyword=村驴` 标题就是「村驴」——这是链接里写着的词，不算编造。文案里另有文字时仍以文案为准。
+- `ParsedShare` 多一个 `fromSearch`：标题取自搜索词时为 `true`。走 AI 时以模型抽出的菜名为准；模型抽不出（返回空）才会保留这个搜索词，不会被清空。
+- **标题只留菜名**（本地解析也一样，`toDishName()`）：拿最长的那行再从第一个分隔标点（`，。！？；、|～—·#‼` 等）截断；**反复剥**掉「保姆级教程 / 保姆级 / 超详细 / 手把手 / 零失败 / 一看就会 / 的（做）教程 / 做法 / 食谱 / 配方 / 合集 / 分享 / 来了 / 视频 / vlog」这类营销尾巴（一条标题里常叠着好几个）；去掉 `‼ ❗` 与不可见的变体选择符；再在「汉字 + 空格 + 说明」处截断（英文名里的空格不受影响），最后裁到 20 字。例：「西红柿炒鸡蛋，你就像我这样做，真的很下饭！」→「西红柿炒鸡蛋」；「酸甜爽脆的腌萝卜保姆级教程来了‼️」→「酸甜爽脆的腌萝卜」。这只是启发式，长而不带标点的句子仍会留长，配了 AI 时由模型兜底。
 - **只贴一条链接时不编造标题**，标题留空交给用户手填。
 - `guessArt(title)`：按标题关键词（番茄牛腩 / 虾 / 椰子鸡 / 芒果糯米饭 / 三杯鸡 / 芝士蛋糕 / 面 等）匹配一张本地卡通插画；猜错只是示意图。
 - 解析结果**永远只是预填**，标题 / 作者 / 来源 / 链接四个字段始终可改。
+
+**AI 识别（`src/lib/ai.ts`，DeepSeek）**
+- 设置页填了 DeepSeek API Key 且「识别时使用 AI」开着时，「识别」会走 AI：把同一段分享文案（可再带一段「原链接页面线索」，见下）交给 DeepSeek 的 Chat Completions（`https://api.deepseek.com/chat/completions`，`model=deepseek-chat`，`response_format=json_object`，`temperature=0`），让它抽出 **菜名 / 作者 / 做法 / 小贴士** —— 本地启发式只挑得出标题，做法基本靠这一段。
+- 提示词要求 `title` **只填菜名本身**（2～12 字、最多 20 字），明确点名去掉「保姆级 / 教程 / 配方 / 分享 / 合集 / 来了」这类营销词，并给了两个例子：「西红柿炒鸡蛋，你就像我这样做…」→「西红柿炒鸡蛋」，「酸甜爽脆的腌萝卜保姆级教程来了」→「酸甜爽脆的腌萝卜」。另外约定：**页面线索若是搜索 / 列表页，就取第一条结果里的菜名**。模型万一还是把整句视频标题丢回来，`normalizeAiRecipe` 会用同一套 `toDishName()` 再收一次（裁 20 字、去书名号、剥营销尾巴）。
+- **链接与来源永远以本地解析为准**（`extractUrl` / `detectSource` 按域名判断，比模型稳），AI 只补内容字段；备注不覆盖用户已经写下的内容。
+- 提示词明确要求**只抄文案里写到的信息、绝不编造**；抽取结果仍只是预填，四个字段都可手改。
+- 请求头 `Authorization: Bearer <aiKey>`；`api.deepseek.com` 会回 CORS 头（实测 preflight 放行 `POST` + `authorization,content-type`），所以和 GitHub 一样浏览器直连，无自建后端。
+- 错误分类 `DeepseekError.kind`：`auth`(401) / `balance`(402 余额不足) / `ratelimit`(429) / `badrequest`(400·422，优先展示 DeepSeek 原话) / `server`(5xx) / `network`(超时或连不上) / `format`(返回空内容或非 JSON) / `unknown`，每种都带可直接展示的中文 `message`。
+- **AI 失败不阻断识别**：报错 toast 之后保留本地解析的预填结果，用户照样能存。
+- 响应解析宽容：`choices[0].message.content` 若是 ```json 代码块或前后带解释，会先剥壳再取第一个 `{…}`；字段名兼容中文（菜名 / 作者 / 做法 / 小贴士），菜名去书名号并裁到 20 字。
+- `maskAiKey` / `normalizeAiKey`（去空白）/ `aiKeyShapeError`（`sk-` 前缀、长度、不可见字符）与 GitHub token 那套同思路；`verifyAiKey` 走 `GET /models` 只校验 Key、不消耗对话额度（设置页「测试连接」用）。
 
 ## 6. 路由与身份（`src/App.tsx`、`src/components/TabBar.tsx`）
 
@@ -100,8 +114,9 @@ GitHub Contents API：
 
 **Setup 首次设置**
 - 四步说明（建空仓库 → 填你和另一半的昵称 → 生成 contents 读写 token → 填 token + 仓库连接）。
-- 「导入配置」折叠区：粘贴另一半发来的 JSON（字段 `nickname` / `partnerNickname?` / `token` / `repo` / `branch` / `intervalSec`）填充表单，含字段校验。
+- 「导入配置」折叠区：粘贴另一半发来的 JSON（字段 `nickname` / `partnerNickname?` / `token` / `repo` / `branch` / `intervalSec` / `aiKey?`）填充表单，含字段校验。
 - 字段与校验：我的昵称 1–12 字；另一半昵称可留空、≤12 字；token 形状校验（`autoCapitalize=none` / `autoCorrect=off` 防手机键盘改写）；仓库须为 `owner/repo`；分支非空。全部输入框走 `preserveTypedValue`（见「通用输入行为」），失焦校验读的是输入框里的真实内容。
+- **「高级设置」里还有可选的 DeepSeek API Key**（`#fAiKey`，`sk-` 形状校验，同样关掉自动大写 / 更正）：留空不填就是纯本地解析文案，填了识别就能走 AI；两种都允许连接。填了就随 `setConfig` 一起落到本机 `config`（`aiKey` / `aiKeyMask` / `aiOn=true`），JSON 导入也认 `aiKey`（给了但形状不对会拦下来）。连上之后想改还是去「设置」页。
 - 不再选「点菜方 / 掌勺方」。连上仓库后由 `joinAs` 按名字把本机认领到 `a` / `b` 中的一格（本机默认槽已被别人占用时自动换另一格），之后可在设置页改「我是谁」；本机角色（`config.view`）默认是「点单」，在点单 / 掌勺屏的右上角切换。
 - 「连接并拉取」→ `sync.connect`；失败时**报错横幅位于提交按钮正上方**（`role=alert`），并按 `GithubError.kind` 给出针对性提示（尤其说明「私有仓库无权限访问时 GitHub 一律回 404」）。
 - 「稍后再说（本地模式）」：不连仓库，仅本机使用（需昵称）。
@@ -110,28 +125,32 @@ GitHub Contents API：
 **Library 菜谱库**
 - 顶栏：日期问候 + 「我的菜谱库」。**同步状态不在这屏显示**（只在设置页与底部「设置」格图标上体现，见 §3 / §7）。
 - 搜索框（标题 / 备注 / 作者，子串匹配），有词时显示「找到 N 道」与清除按钮。
-- 来源筛选 chips（全部 / 小红书 / B站 / 抖音），带计数；数量为 0 的来源不显示。
+- 来源筛选 chips（全部 / 小红书 / B站 / 抖音 / 手动），带计数；数量为 0 的来源不显示。
 - 进场 520ms 骨架屏。
-- 五态：加载 / 错态（`?state=error` 或同步失败且无数据）/ 空态（无菜谱）/ 无搜索结果 / 列表。列表行为缩略图（插画或首字）、标题、来源徽章、备注、更新时间。
+- 五态：加载 / 错态（`?state=error` 或同步失败且无数据）/ 空态（无菜谱）/ 无搜索结果 / 列表。列表行为缩略图（插画或首字）、标题、来源徽章、备注 —— **不显示任何时间**（收藏 / 更新时间只在详情页看）。
 - **长按一条菜谱 → 弹出删除 tooltip**：tooltip 贴在那条附近，里面是带删除图标的「删除」按钮，点一下直接删（同时 toast + 写同步日志）；点别处 / 滚动列表收起。长按后紧接着的那次 click 会被吞掉，不会顺带跳进详情页；普通点按仍然是进详情。
 
 **RecipeDetail 菜谱详情**
 - 480ms 骨架屏；封面用插画或标题首字占位。
-- 元信息行：来源徽章、作者、更新时间；标题。
+- 元信息行：来源徽章、作者；标题；标题下面是「收藏于 <createdAt> · 更新于 <updatedAt>」（**这两个时间只在这一页显示**，列表页不显示时间）。
 - 原文出处卡片：显示 `url` 并有「查看原文」外链。
-- 编辑：顶栏右上角「编辑」→ 表单里可改**菜名 / 原文出处 / 我的备注**（菜名必填，清空则拒绝保存并 toast），「保存并同步」→ `updateRecipe` + toast。**两个人谁都能编辑**。
+- 编辑：顶栏右上角「编辑」→ 表单里可改**菜名 / 原文出处 / 做法 / 我的备注**（菜名必填，清空则拒绝保存并 toast），「保存并同步」→ `updateRecipe` + toast。**两个人谁都能编辑**。
+- 做法卡（有内容才显示）：按换行原样展示 `steps`。
 - 备注卡：查看态展示「我的备注」（没写时给引导文案）。
 - **删除**：内容区末尾的「删除这道菜」需二次点击确认（第一次变成「再点一次，确认删除这道菜」），确认后 `deleteRecipe` + toast 并回菜谱库。
 - 底部 CTA「去点单 · 带上这道菜」**对谁都常驻**（谁都能点单）；若该菜已在未完成单里则按钮禁用并显示「去点单查看」链接。找不到菜时显示占位卡。
 
 **AddRecipe 添加菜谱**
-- 粘贴分享文案（或仅链接）→「识别」→ 预填标题 / 作者 / 来源 / 链接，并显示封面预览与详情提示；识别前手动区隐藏。
-- 解析只是预填：标题 / 作者（可留空，默认「来自剪藏」）/ 来源下拉 / 链接 都可改。
-- 备注（可选）；「保存并同步到仓库」需标题非空，保存中显示 spinner，成功后回菜谱库。
+- 两条入口：**「识别」**（粘贴分享文案或仅链接 → 解析）和**「手动添加」**（跳过粘贴，直接展开手填区，来源默认成「手动添加（无来源）」）。识别前手填区是收起的（`.manual` 加 `.show` 才展开）。
+- **「识别」按设置分两路**：设置页填了 DeepSeek Key 且开着 AI → 按钮文案变成「AI 识别」，先本地解析打底（链接 / 来源），再请求 DeepSeek 补菜名 / 作者 / 做法 / 小贴士，过程中按钮转 spinner（禁用防连点）；没配 Key 或把 AI 关掉 → 按钮就是「识别」，只跑本地启发式解析。AI 失败会 toast 原因并保留本地解析结果。按钮下方有一行说明当前是「AI 识别已开启（DeepSeek）」还是「在设置里填 DeepSeek API Key…」。
+- **识别时会先读一次原链接**（只要走 AI、且文案里有链接）：先经 `r.jina.ai` 抓页面、压成「页面线索」，再连同文案一起交给 AI —— 作者 / 账号主要靠这一步补；抓不到就静默退回只按文案识别，不打断。按钮下方那行会说明「会先打开原链接补作者 / 账号」。
+- 解析只是预填：标题 / 做法 / 作者（可留空，默认「来自剪藏」）/ 来源下拉 / 链接 都可改。
+- **做法**（可选，多行）；**备注**（可选）；「保存并同步到仓库」需标题非空，保存中显示 spinner，成功后回菜谱库。
+- 手动添加时链接可以留空 —— 那就只存标题 / 做法 / 备注，来源徽章显示「手动」。
 
 **Order 点单**
 - 午 / 晚餐切换（segmented）。
-- 顶部组合器：已选菜 chips（点 × 移除）、发送按钮（无选菜禁用）。发送按钮文案含「发给<对方> · 午餐/晚餐 · N 道」。
+- 顶部组合器：已选菜 chips（点 × 移除）、**「给掌勺的话」备注输入**（可不填，≤30 字，发送时去掉首尾空格、发送后清空）、发送按钮（无选菜禁用）。发送按钮文案含「发给<对方> · 午餐/晚餐 · N 道」。备注随这一单落库，掌勺屏会以「少放辣」那种提示条显示。
 - 从菜谱库多选网格（选中态打勾）、「随机加一道」（从没选的菜里随机，挑完给提示）。
 - 手动输入临时菜（≤18 字，去重，`recipeId=null`）「加进这顿」。
 - 「今日点单」只列**我点的、时间戳是「今天」的单**（`placedBy === me` 且 `isTodayOrder`）。每张单可展开看每道菜（缩略图 + 菜名 + 来源）、给掌勺的话、状态 chip、以及「<对方>回传状态后自动更新」提示；已完成单显示「<对方>已做完这顿」。
@@ -151,6 +170,7 @@ GitHub Contents API：
 - 五态状态面板：未连接 / busy（同步中）/ err（失败，含重试 + 重新填写 token）/ ok（已同步 + 文件条数）。面板状态下有「立即同步」。
 - 「当前角色」切换**不在这一页**：它贴在点单屏 / 掌勺屏的右上角（见 §3 底部导航）。只改本机 `config.view`，底部第二格随之在「点单 / 掌勺」之间换、并顺手跳到对应那屏；本地设置、不触发推送。两台设备各选各的。
 - 仓库信息：当前仓库、分支、Token（掩码 + 修改，含形状校验）。
+- **AI 识别（DeepSeek）**：Key（掩码 + 修改，含 `sk-` 形状校验）、「识别时使用 AI」开关（没 Key 时禁用；保存 Key 后自动打开）、「测试连接」（走 `GET /models`，成功 / 失败各给一行结果）。Key 只存本机 `localStorage`（同 token 语义，不进仓库、不外发）；「清除」会把 Key 清空并把开关关回本地解析。
 - 后台自动拉取开关（读 `autoPull` / `intervalSec`）。
 - 昵称编辑：我 / 另一半两个名字都能改，保存后随仓库同步；清空表示未设置。输入框同样走 `preserveTypedValue`（见「通用输入行为」）。
 - 「我是谁」切换（本机是 `a` / `b` 中的哪一位），只改本机身份、随即对调页面上的称呼（不再决定底部菜单）。
@@ -190,29 +210,53 @@ GitHub Contents API：
 | `npm run apk` | 构建 Web → `cap sync android` → `gradlew assembleDebug` |
 | `npm run apk:release` | 同上，出 release 包 |
 
-测试防护是强制约束（见 `AGENTS.md` §5）：**每个功能都要有对应测试，功能变更必须同步新增 / 调整测试**。冒烟测试（`scripts/smoke.tsx`）分七段：
+测试防护是强制约束（见 `AGENTS.md` §5）：**每个功能都要有对应测试，功能变更必须同步新增 / 调整测试**。冒烟测试（`scripts/smoke.tsx`）分八段（编号一～八）：
 
 - 渲染层：路由重定向、各屏内容断言、底部导航 4 格（第二格随 `config.view` 在点单 / 掌勺之间变）、详情 CTA 常驻 / 禁用态、空态 / 错态（`?state=error`）/ 本地模式、老缓存 v1→v2 与 v2→v3 迁移、schema 已最新但 profiles 缺格的脏缓存。
-- 交互层：点单组合器（多选 / 手动 / 去重 / 随机 / 长度上限）、掌勺状态回传、菜谱编辑（菜名 / 原文出处 / 备注一起落库、菜名必填）、添加菜谱（小红书 / B站 / 只贴链接）、搜索筛选、昵称联动、token 形状校验、输入框以 DOM 为准（中文输入法 `compositionend` 之后不补 `input`）—— 每个文本输入框都断言「输入不丢字」且「值真的被用上」。
-- 纯函数：`share.ts`（解析 / 链接提取 / 来源识别 / 插画猜测）、`github.ts`（`maskToken` / `normalizeToken` / `tokenShapeError` / `withTimeout` / `getJson` / `putJson` / `verifyRepo` 及全部错误分类 / UTF-8 base64）、`helpers.ts`（称呼 / 摘要 / 状态 / 在单检测）、`seed` / `migrate` 数据契约。
+- 交互层：点单组合器（多选 / 手动 / 去重 / 随机 / 长度上限）、点单备注（随单落库、去掉首尾空格、发送后清空）、掌勺状态回传、菜谱编辑（菜名 / 原文出处 / 做法 / 备注一起落库、菜名必填）、时间显示（列表无时间、详情显示收藏 / 更新、改完只动更新时间、缺 `createdAt` 的老数据用 `updatedAt` 顶上）、添加菜谱（粘贴识别：小红书 / B站 / 只贴链接，**标题只留菜名**；**手动添加：无来源、标题 + 做法 + 备注**，做法落库并在详情页展示、列表能按「手动」筛）、**AI 识别（配 Key → 按钮变「AI 识别」、真的只调一次 DeepSeek 且带 Bearer、AI 的菜名 / 作者 / 做法 / 小贴士填进表单、链接与来源仍走本地解析、结果能一路存库；Key 失效 → toast 原因并回退本地解析；AI 关掉 → 完全不请求 DeepSeek；设置页填 / 存 / 清除 Key 与 AI 开关）**、**读原链接（只要走 AI 且有链接，就真的经 r.jina.ai 抓 `x-respond-with: html`、页面线索里的作者进了给 AI 的提示词并填进作者框；抓取失败照样走 AI；文案里没有链接就不去读；只贴一条 B站搜索链接时标题取搜索词；模型把整句视频标题丢回来时会被收成菜品名）**、搜索筛选、昵称联动、token 形状校验、输入框以 DOM 为准（中文输入法 `compositionend` 之后不补 `input`）—— 每个文本输入框都断言「输入不丢字」且「值真的被用上」。
+- 纯函数：`share.ts`（解析 / **标题只留菜名** / **搜索链接取搜索词当标题（`searchKeyword`）** / **营销尾巴剥离（`toDishName`）** / 链接提取 / 来源识别 / 插画猜测）、`ai.ts`（`maskAiKey` / `normalizeAiKey` / `aiKeyShapeError` / 提示词与 JSON 宽容解析 / `normalizeAiRecipe` / `recognizeRecipe` / `verifyAiKey` 及全部错误分类）、`reader.ts`（`isFetchableUrl` / `readPageHtml` 的成功与错误分支 / `compactPage` 的标题·描述·作者候选·内嵌 JSON 昵称·噪音过滤）、`github.ts`（`maskToken` / `normalizeToken` / `tokenShapeError` / `withTimeout` / `getJson` / `putJson` / `verifyRepo` 及全部错误分类 / UTF-8 base64）、`helpers.ts`（称呼 / 摘要 / 状态 / 在单检测）、`seed` / `migrate` 数据契约。
 - 同步引擎（stub `fetch`）：首次连接（空仓库 / 已有数据 / 失败分支 / **仓库里是老结构**）、立即同步拉取、本地改动自动推送且只推变化的那一份、空仓库先拉后推、409 自动重试一次、断开二次确认、「我是谁」静默切换、日志全量保留。
-- 组件与界面边界：详情占位卡、Toast 最多同时 3 条、「设置」格图标随同步状态变绿 / 变红（未连接不染色）、菜谱库 / 点单 / 掌勺顶栏不再出现同步状态（设置页仍显示）、点单 / 掌勺屏右上角切角色（落库 `config.view`、底部第二格立刻变、顺手跳到对应那屏、不触发推送、设置页已无角色区、掌勺有没做完的单时开关右上角挂数字红点、全做完则不挂）、掌勺点一道菜弹出菜品详情（带备注与原文链接；× / 遮罩 / Esc 都能关；临时菜只给说明不给外链）、菜谱库长按删除（短按不弹、长按弹 tooltip、点删除真删、长按后不误跳详情）、详情页删除需二次确认、设置页同步日志（默认折叠、展开先 20 条、滚到底每次再 20 条、到底提示已全部加载）、点单页「历史点单」与掌勺页「已做完」默认折叠只露数量、导入配置 JSON、本地模式进入、错误边界兜底页（渲染期抛错不白屏）。
+- 组件与界面边界：详情占位卡、Toast 最多同时 3 条、「设置」格图标随同步状态变绿 / 变红（未连接不染色）、菜谱库 / 点单 / 掌勺顶栏不再出现同步状态（设置页仍显示）、点单 / 掌勺屏右上角切角色（落库 `config.view`、底部第二格立刻变、顺手跳到对应那屏、不触发推送、设置页已无角色区、掌勺有没做完的单时开关右上角挂数字红点、全做完则不挂）、掌勺点一道菜弹出菜品详情（带备注与原文链接；× / 遮罩 / Esc 都能关；临时菜只给说明不给外链）、菜谱库长按删除（短按不弹、长按弹 tooltip、点删除真删、长按后不误跳详情）、详情页删除需二次确认、设置页同步日志（默认折叠、展开先 20 条、滚到底每次再 20 条、到底提示已全部加载）、点单页「历史点单」与掌勺页「已做完」默认折叠只露数量、导入配置 JSON、本地模式进入、**首次设置高级设置里的可选 DeepSeek Key（在折叠区内、密码框、可留空连接、填了就落 config、形状不对标红、本地模式也能带上）**、错误边界兜底页（渲染期抛错不白屏）。
+- 仓库结构：直接读 `.github/workflows/android-apk.yml`，断言「`push` 到 `main` 触发、跑的就是 `npm run apk`、上传 `app-debug.apk`、用 `gh release create` 出 Release、声明 `contents: write`」这几步没被删掉（静态断言，不涉及网络与界面）。
 
 `scripts/register-dom.mjs` 用 `node --import` 预加载 jsdom，**不能**改成普通 `import`。它还注入一个**虚拟时钟**（`globalThis.__domClock`）：默认不武装、定时器照常透传真实实现，所以 `dump` / `test:connect` 这类脚本完全不受影响；只有冒烟测试在启动时 `arm()`，之后用 `settle(ms)` 显式推进时间。各屏「进场骨架」（460～520ms）与同步防抖（700ms）因此不再真的空等挂钟 —— 整套冒烟从约 85s 降到约 2s，断言覆盖面不变（未注入时 `settle` 自动回退到真实等待）。
+
+### GitHub Actions 自动打包（`.github/workflows/android-apk.yml`）
+
+- 触发：`push` 到 `main`，外加手动 `workflow_dispatch`。
+- 步骤：`actions/setup-node@v4`（Node 20 + npm 缓存）→ `actions/setup-java@v4`（temurin 17 + gradle 缓存）→ `android-actions/setup-android@v3`（装 `platforms;android-34`、`build-tools;34.0.0`）→ `npm ci` → **`npm run apk`**（和本机同一条命令，不另写打包步骤）。
+- `package.json` 的 `apk` 脚本是 Windows 写法（`cd android && gradlew assembleDebug`），Linux runner 上要多做一步「让 gradlew 可用」：`android/gradlew` 在仓库里是**权限位 644 + CRLF + 带 BOM**（Windows 上提交的），直接跑会是 bad interpreter —— 工作流先就地 `sed` 成 LF 去 BOM（只改 runner 工作区，不进仓库）再 `chmod +x`，最后把 `$GITHUB_WORKSPACE/android` 追加进 `$GITHUB_PATH`，`sh` 才找得到这个不带扩展名的 wrapper。本机 Windows 走的是 `gradlew.bat`，不受影响。
+- 下载源：本机的**腾讯云 Gradle 镜像**只对国内链路有意义，工作流在 runner 上把 `distributionUrl` 的域名换回 `services.gradle.org/distributions/`（同样只改工作区，不进仓库）；Maven 那边仍沿用 `android/build.gradle` 里的阿里云镜像（后面还有 `google()` / `mavenCentral()` 兜底）。
+- 产物两条路：① `android/app/build/outputs/apk/debug/app-debug.apk` 作为 run artifact 上传（Actions 页面可下载）；② 用 runner 自带的 `gh` 建一个 Release，tag = `v<package.json version>-build.<run_number>`，附件名 `jishiben-<tag>.apk`，并标为 latest。同一 run 重跑时 tag 已存在，走 `gh release upload --clobber`。
+- Release 里挂的是 **debug 签名**的包（可直接安装、不能上架）；正式签名见 README「Debug 包 vs Release 包」。
+- 权限：只有 `contents: write`（建 Release 用 `github.token`）；仓库里不落任何 token（见 `AGENTS.md` §6）。
 
 ## 11. PWA 与 Android
 
 - PWA：`npm run build` 后把 `dist/` 部署到任意静态托管（HashRouter 无需 rewrite）；Android Chrome / iOS Safari 可「添加到主屏幕」，参数见 `public/manifest.webmanifest` 与 `index.html`。
 - Capacitor：应用 ID `com.leonidaslux.jishiben`，应用名「记食本」，`webDir=dist`；Android `minSdk 22 / compileSdk 34 / targetSdk 34`（`android/variables.gradle`）。
 - 国内网络：`android/gradle/wrapper/gradle-wrapper.properties` 的 `distributionUrl` 指向腾讯云镜像；`android/build.gradle` 把阿里云镜像放在 `google()` / `mavenCentral()` 之前。这两处是生成产物，删除 `android/` 重新生成后需重做。
-- 图标由 `scripts/make-icons.mjs` 生成（PWA + 各密度 launcher，自适应图标前景透明、图形收在安全区内）。
+- 自动打包：提交到 `main` 后由 `.github/workflows/android-apk.yml` 在 GitHub 上跑 `npm run apk` 并出一个 Release（细节见 §10）；CI 里 Gradle 发行包换回官方源（runner 在境外），Maven 仍走阿里云镜像。
+- 图标由 `scripts/make-icons.mjs` 生成（PWA + 各密度 launcher）：**单一来源是首次设置页顶部那张插画 `public/art/sync-pot.svg`** —— 脚本自带一个极简 SVG 光栅化（只认 rect / circle / path 的 M L H V C S Z，遇到别的命令直接报错），把插画烘成 PNG；`public/icon.svg` 直接复制同一张插画。maskable / 圆形图标垫满插画自带的奶油底（`#FFF3DC`）并把图形缩进安全区，自适应图标前景层用透明底 + 去掉插画自带的那块圆角底（背景色由 `values/ic_launcher_background.xml` 提供同样的奶油色），拼起来和原插画一致。
 
 ## 12. 已知限制
 
-- 「识别」是**解析分享文案**，不是抓页面（平台无 CORS）。
+- 没配 AI Key 时，「识别」就是**纯本地解析分享文案**（不抓页面，平台无 CORS）。
+- **读原链接是第三方依赖，且不保证成功**：只要配了 AI Key，识别带链接的文案时就会走这一步 —— 链接与页面内容会发给 `r.jina.ai`，页面片段再发给 DeepSeek；免费额度有限（实测 20 次/分钟）、页面慢时要等几秒；小红书有反爬与登录墙，可能抓不到（抓不到就退回只解析文案，作者会空缺）。B站实测可用（`作者候选` 能拿到 UP 主名）。想完全不外发链接，就别配 AI Key；这一条没有单独的开关（按需求默认就用）。
+- 标题「只留菜名」是启发式：带标点的分享文案截得很干净（「西红柿炒鸡蛋，你就像我这样做…」→「西红柿炒鸡蛋」），但**长而不带标点**的句子仍可能留长；配了 AI 时由模型按提示词兜成菜名。
+- AI 识别需要用户自备 DeepSeek API Key；没配 Key、关掉 AI、或 AI 请求失败时一律退回本地启发式解析，只拆得出标题那一档。模型会按提示词要求「只抄不编」，但输出仍是概率性的，所以结果只作预填、始终可改。
+- DeepSeek Key 与 GitHub token 一样只存 `localStorage`（仅本机语义），设置页里只显示掩码；要更强保护需走原生凭据库（未实现）。识别时文案会发给 `api.deepseek.com` —— 这是 AI 识别的固有代价，介意就别开 AI。
 - 同步冲突处理是 **last-write-wins**，没有字段级合并；推送撞车只自动重试一次。
 - Token 存在 `localStorage`（仅本机语义）；要更强保护需走原生凭据库（未实现）。
 - 订单没有真实时间戳字段，`createdAt` 是「今天 09:40」「昨天 10:15」这类展示串；点单页的「今日点单 / 历史点单」按 `createdAt` 是否以「今天」开头来分（`isTodayOrder`）。跨天不滚动：一条昨天下的单若时间戳仍写着「今天」，就还会落在「今日点单」里。
-- 拉取时只规整 `orders` / `profiles` 的形状（单菜订单、角色形状昵称）；`recipes` 的字段不做补全 —— 缺字段只是显示为空，不会崩。
+- 拉取和启动时都过 `normalizeRecipes` / `normalizeOrders` / `normalizeProfiles` 规整形状。`recipes` 只补两个字段：`createdAt`（老缓存 / 老仓库没有它，用 `updatedAt` 顶上，免得详情页显示成 undefined）和 `steps`（缺了补空串）；其余字段仍不做补全（缺了只是显示为空，不会崩）。
 - 输入框的 DOM 兜底（`src/lib/inputs.ts`）靠 `onCompositionEnd` / `onBlur` 补同步；若某个浏览器既不补 `input`、也不在这两个时机把值落进 DOM，仍会丢字（暂未遇到）。
 - `.gitignore` 忽略 `.env*` 本地凭证、`dist/`、`.tmp/`、`node_modules/` 等，凭据绝不入库。
+- `maskAiKey` / `normalizeAiKey`（去空白）/ `aiKeyShapeError`（`sk-` 前缀、长度、不可见字符）与 GitHub token 那套同思路；`verifyAiKey` 走 `GET /models` 只校验 Key、不消耗对话额度（设置页「测试连接」用）。
+
+**读原链接（`src/lib/reader.ts`）**
+- **直接 fetch 平台页面是不行的**：小红书 / B站 / 抖音都不返回 CORS 头（实测 B站开放接口 `api.bilibili.com/x/web-interface/view` 也没有 `access-control-allow-origin`），浏览器读不到内容 —— 这正是当初「识别只解析文案」的原因。
+- 所以走第三方「阅读器代理」`https://r.jina.ai/`：它替我们渲染目标页并把结果返回，**自己带 CORS 头**（实测 preflight 放行 `GET` 与 `x-respond-with`），浏览器可以直接读。请求 `https://r.jina.ai/<原链接>` 并带 `x-respond-with: html` 拿整页 HTML（作者名只在 HTML 里，markdown 摘要里常没有）。
+- `compactPage(html, url)` 用 `DOMParser`（不执行脚本）把整页压成一小段「页面线索」：页面标题 / og 标题 / 页面描述 / **作者候选** / 正文摘录（各截断，总长可控）。作者候选来自 `meta[name=author]`、`article:author`、`[class*=author|nickname|username]` 这类块，以及页面里内嵌 JSON 的 `nickname` / `authorName` / `user_name` / `up_name` 字段（小红书、抖音把账号名塞在 state 里）；`登录 / 关注 / 下载` 这类噪音词会被丢掉。
+- 只把这一小段线索交给 DeepSeek（不把 1MB 的整页塞进提示词）——省 token 也省时间；提示词里作者以「作者候选」为准。
+- **只要走 AI 且文案里有链接，就默认读一次**（没有开关）：读不到（小红书有反爬与登录墙、超时、被限流）就静默退回「只解析文案」，不打断识别。读取与 AI 调用各给 25 秒超时。想完全不外发链接，就别配 AI Key（那样识别是纯本地解析）。

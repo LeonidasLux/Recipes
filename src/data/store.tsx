@@ -123,9 +123,9 @@ export interface StoreValue {
   view: ViewRole;
 
   /* 本地改动（提交即同步：每次都会触发推送） */
-  addRecipe(input: { title: string; source: Recipe['source']; url: string; author: string; art: string; note: string }): Recipe;
-  /** 改菜谱的菜名 / 原文出处 / 备注（内容改动，会触发推送） */
-  updateRecipe(id: string, patch: { title?: string; url?: string; note?: string }): void;
+  addRecipe(input: { title: string; source: Recipe['source']; url: string; author: string; art: string; steps: string; note: string }): Recipe;
+  /** 改菜谱的菜名 / 原文出处 / 做法 / 备注（内容改动，会触发推送） */
+  updateRecipe(id: string, patch: { title?: string; url?: string; steps?: string; note?: string }): void;
   /** 删菜谱（内容改动，会触发推送）；订单里的菜名是快照，不受影响 */
   deleteRecipe(id: string): void;
   addOrder(input: { meal: Meal; items: OrderItem[]; note?: string }): Order;
@@ -204,7 +204,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           url: input.url,
           author: input.author,
           art: input.art,
+          steps: input.steps,
           note: input.note,
+          createdAt: '刚刚',
           updatedAt: '刚刚',
         };
         commit((db) => {
@@ -221,6 +223,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (!r) return db;
           if (patch.title !== undefined) r.title = patch.title;
           if (patch.url !== undefined) r.url = patch.url;
+          if (patch.steps !== undefined) r.steps = patch.steps;
           if (patch.note !== undefined) r.note = patch.note;
           r.updatedAt = '刚刚';
           pushLog(db, 'ok', `${r.id} · ${r.title} 已更新并推送`);
@@ -298,6 +301,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             /* 断开连接之后改身份：给一份最小的本机配置，别让这一下静默失效 */
             db.config = {
               repo: '', branch: 'main', token: '', tokenMask: '',
+              aiKey: '', aiKeyMask: '', aiOn: true,
               me: person, view: 'order', autoPull: false, intervalSec: 0,
               lastPulledAt: '—', lastPushedAt: '—',
             };
@@ -314,6 +318,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             /* 与本机身份同样兜底：给一份最小配置，别让这一下静默失效 */
             db.config = {
               repo: '', branch: 'main', token: '', tokenMask: '',
+              aiKey: '', aiKeyMask: '', aiOn: true,
               me: 'a', view, autoPull: false, intervalSec: 0,
               lastPulledAt: '—', lastPushedAt: '—',
             };
@@ -350,6 +355,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           else {
             db.config = {
               repo: '', branch: 'main', token: '', tokenMask: '',
+              aiKey: '', aiKeyMask: '', aiOn: true,
               me: slot, view: 'order', autoPull: false, intervalSec: 0,
               lastPulledAt: '—', lastPushedAt: '—',
             };

@@ -9,7 +9,7 @@ import {
 } from 'react';
 import { useStore } from '../data/store';
 import { useToast } from '../components/Toast';
-import { SCHEMA, normalizeOrders, normalizeProfiles } from '../data/seed';
+import { SCHEMA, normalizeOrders, normalizeProfiles, normalizeRecipes } from '../data/seed';
 import { nowHM } from '../data/helpers';
 import type { RemoteOrders, RemoteProfiles, RemoteRecipes, SyncStatus, SyncConfig } from '../data/types';
 import {
@@ -73,7 +73,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       ]);
       /* 仓库里可能是老版本写下的结构（角色形状的 profiles / 单菜订单）：先规整成当前 schema。
          「已推送」快照要用规整后的内容，才能和本地入库后的 db 对得上，不会白白重写一遍。 */
-      const pulledRecipes = rf?.data && Array.isArray(rf.data.recipes) ? rf.data.recipes : undefined;
+      const pulledRecipes = rf?.data && Array.isArray(rf.data.recipes) ? normalizeRecipes(rf.data.recipes) : undefined;
       const pulledOrders = of?.data && Array.isArray(of.data.orders) ? normalizeOrders(of.data.orders) : undefined;
       const pulledProfiles = pf?.data?.profiles ? normalizeProfiles(pf.data.profiles) : undefined;
 

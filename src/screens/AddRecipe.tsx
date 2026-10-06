@@ -6,11 +6,13 @@ import { SourceBadge } from '../components/Bits';
 import { Icon } from '../components/Icons';
 import { artUrl, initial } from '../data/helpers';
 import { detectSource, guessArt, parseShare } from '../lib/share';
+import { aiTimeout, DeepseekError, recognizeRecipe } from '../lib/ai';
+import { compactPage, isFetchableUrl, readPageHtml } from '../lib/reader';
 import { preserveTypedValue } from '../lib/inputs';
 import type { SourceKey } from '../data/types';
 
 export default function AddRecipe() {
-  const { addRecipe } = useStore();
+  const { addRecipe, db } = useStore();
   const { toast } = useToast();
   const navigate = useNavigate();
 
@@ -24,13 +26,19 @@ export default function AddRecipe() {
   const [author, setAuthor] = useState('');
   const [source, setSource] = useState<SourceKey>('generic');
   const [url, setUrl] = useState('');
+  const [steps, setSteps] = useState('');
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
+  /** AI 识别进行中（按钮换成 spinner，避免连点） */
+  const [aiBusy, setAiBusy] = useState(false);
 
   const cover = guessArt(title);
   const canSave = title.trim().length > 0 && !saving;
+  /* 设置页填了 DeepSeek Key 且开着 AI，识别才会走联网的 AI */
+  const aiKey = db.config?.aiKey ?? '';
+  const aiReady = (db.config?.aiOn ?? true) && aiKey !== '';
 
-  function recognize() {
+  async function recognize() {
     const text = raw.trim();
     setRawInvalid(false);
     if (!text) {
@@ -38,6 +46,7 @@ export default function AddRecipe() {
       return;
     }
 
+    /* 先用本地解析打底：链接与来源按域名判断，永远比 AI 猜得准 */
     const r = parseShare(text);
     setTitle(r.title);
     setAuthor(r.author);
@@ -45,9 +54,56 @@ export default function AddRecipe() {
     setUrl(r.url);
     setParsed(true);
 
-    if (r.title) toast('已从文案里拆出标题，确认一下');
-    else if (r.url) toast('认出链接了，标题手填一下', false);
-    else toast('没找到链接，当普通笔记存吧', false);
+    if (!aiReady) {
+      if (r.title) toast('已从文案里拆出标题，确认一下');
+      else if (r.url) toast('认出链接了，标题手填一下', false);
+      else toast('没找到链接，当普通笔记存吧', false);
+      return;
+    }
+
+    /* 配了 Key 就走 AI：菜名、作者、做法一起拆；失败回退到刚打底的本地解析 */
+    setAiBusy(true);
+    try {
+      /* 文案里有链接就先抓一次页面，作为作者 / 账号的补充线索（抓不到就跳过） */
+      let page = '';
+      if (isFetchableUrl(r.url)) {
+        const rt = aiTimeout(25000);
+        try {
+          page = compactPage(await readPageHtml(r.url, rt.signal), r.url);
+        } catch {
+          /* 抓不到（反爬 / 登录墙 / 超时）就只按文案识别，不打断 */
+        } finally {
+          rt.done();
+        }
+      }
+
+      const at = aiTimeout(25000);
+      let ai;
+      try {
+        ai = await recognizeRecipe(aiKey, text, { page, signal: at.signal });
+      } finally {
+        at.done();
+      }
+      /* AI 抽不出来时，本地解析的标题（比如搜索链接的搜索词）不会被清掉 */
+      if (ai.title) setTitle(ai.title);
+      if (ai.author) setAuthor(ai.author);
+      if (ai.steps) setSteps(ai.steps);
+      /* 备注不覆盖用户已经写下的内容 */
+      if (ai.note) setNote((n) => (n.trim() ? n : ai.note));
+      toast(ai.author ? 'AI 已识别（含作者），确认一下' : ai.title || ai.steps ? 'AI 已识别，确认一下' : 'AI 没拆出更多信息，手填一下');
+    } catch (e) {
+      toast(e instanceof DeepseekError ? e.message : 'AI 识别失败，已用本地解析', false);
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  /* 跳过「粘贴 → 识别」：直接手写一条，来源记成「手动」 */
+  function startManual() {
+    setRawInvalid(false);
+    setSource('manual');
+    setParsed(true);
+    toast('手动添加：填个标题就能存');
   }
 
   function save() {
@@ -60,6 +116,7 @@ export default function AddRecipe() {
         url: url.trim(),
         author: author.trim() || '来自剪藏',
         art: cover,
+        steps: steps.trim(),
         note: note.trim(),
       });
       toast('已保存 · 已同步');
@@ -130,10 +187,32 @@ export default function AddRecipe() {
             </div>
 
             <div className="row" style={{ justifyContent: 'flex-end' }}>
-              <button id="recognizeBtn" className="btn-sticker primary" onClick={recognize}>
-                识别
+              <button id="manualBtn" className="btn-sticker" onClick={startManual}>
+                手动添加
+              </button>
+              <button
+                id="recognizeBtn"
+                className="btn-sticker primary"
+                disabled={aiBusy}
+                onClick={() => void recognize()}
+              >
+                {aiBusy ? (
+                  <>
+                    <span className="spinner" aria-hidden /> AI 识别中…
+                  </>
+                ) : aiReady ? (
+                  'AI 识别'
+                ) : (
+                  '识别'
+                )}
               </button>
             </div>
+
+            <p className="meta" style={{ margin: 0 }}>
+              {aiReady
+                ? 'AI 识别已开启（DeepSeek）：会先打开原链接补作者 / 账号，再拆菜名和做法；结果仍可手改。'
+                : '在「设置」里填 DeepSeek API Key，识别就能连 AI 一起拆出做法和作者。'}
+            </p>
           </section>
 
           <section>
@@ -182,6 +261,18 @@ export default function AddRecipe() {
                   <span className="err">填个标题才能保存</span>
                 </div>
 
+                <div className="field">
+                  <label htmlFor="mSteps">做法（可留空）</label>
+                  <textarea
+                    id="mSteps"
+                    placeholder="一步一步写，换行分开就行。手动添加的菜谱主要就靠这一段。"
+                    style={{ minHeight: 96 }}
+                    value={steps}
+                    onChange={(e) => setSteps(e.target.value)}
+                    {...preserveTypedValue(setSteps)}
+                  />
+                </div>
+
                 <div className="row" style={{ gap: 12, alignItems: 'flex-start' }}>
                   <div className="field" style={{ flex: 1 }}>
                     <label htmlFor="mAuthor">作者 / 账号（可留空）</label>
@@ -202,6 +293,7 @@ export default function AddRecipe() {
                       value={source}
                       onChange={(e) => setSource(e.target.value as SourceKey)}
                     >
+                      <option value="manual">手动添加（无来源）</option>
                       <option value="generic">其他网页</option>
                       <option value="red">小红书</option>
                       <option value="bili">B站</option>
@@ -225,6 +317,7 @@ export default function AddRecipe() {
                     {canDetect ? '已从文案里认出链接。' : '没认出链接 —— 也可以先存着，以后补。'}
                   </span>
                 </div>
+
               </div>
             </div>
           </section>

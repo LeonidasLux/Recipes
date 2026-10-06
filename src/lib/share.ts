@@ -19,6 +19,8 @@ export interface ParsedShare {
   /** 解析出的标题，可能是空串（那就交给用户手填） */
   title: string;
   author: string;
+  /** 标题取自链接里的搜索词（keyword / q / …）—— AI 不该把它换成搜索结果里某条视频的名字 */
+  fromSearch: boolean;
 }
 
 /**
@@ -54,6 +56,29 @@ export function extractUrl(text: string): string {
   return text.match(URL_RE)?.[0] ?? '';
 }
 
+/**
+ * 搜索类链接里的搜索词。
+ *
+ * 用户常常直接丢一个搜索页链接过来（B站 `search.bilibili.com/all?keyword=村驴`、
+ * YouTube `results?search_query=…`、百度 `?wd=…`）。这种链接**没有任何文案可解析**，
+ * 但链接里的搜索词本身就是标题 —— 直接拿来用，不算编造。
+ */
+const SEARCH_PARAM_KEYS = ['keyword', 'search_query', 'query', 'q', 'wd', 'word'];
+
+export function searchKeyword(raw: string): string {
+  const url = extractUrl(raw) || raw.trim();
+  try {
+    const params = new URL(url).searchParams;
+    for (const key of SEARCH_PARAM_KEYS) {
+      const v = params.get(key)?.trim();
+      if (v) return v;
+    }
+  } catch {
+    /* 不是链接，就没有搜索词 */
+  }
+  return '';
+}
+
 /** 按域名判断来源 */
 export function detectSource(raw: string): SourceKey | null {
   const url = extractUrl(raw) || raw.trim();
@@ -69,9 +94,45 @@ export function detectSource(raw: string): SourceKey | null {
   return 'generic';
 }
 
+/* 表情里还漏了 ‼ ❗ 这类「加粗标点」和一个不可见的选择符，一起当噪音清掉 */
+const EMOJI_NOISE = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u203C\u2049\uFE0F]/gu;
+const DISH_SEPARATOR = /[，,。.！!？?；;、|｜/\\~～—－·•#‼]/;
+/**
+ * 标题里的营销尾巴：「…保姆级教程来了」「…超详细做法」这类。
+ * 会**反复剥**，因为一条标题里可能叠着好几个（先是「来了」，再是「保姆级教程」）。
+ */
+const TRAILING_NOISE =
+  /(的?保姆级教程|保姆级|超详细|详细教程|手把手|零失败|一看就会|有手就会|的?教程|的做法|做法|食谱|配方|合集|分享|来了|视频|vlog|Vlog)$/i;
+
+/**
+ * 把一行「标题味」的文字收成菜名：截标点、剥营销尾巴、裁长度。
+ * 分享文案常写成「西红柿炒鸡蛋，你就像我这样做，真的很下饭！」，标题要的是「西红柿炒鸡蛋」；
+ * B站视频标题常写「酸甜爽脆的腌萝卜保姆级教程来了」，要的是「酸甜爽脆的腌萝卜」。
+ */
+export function toDishName(raw: string): string {
+  let name = raw
+    .replace(/#[^#\s]{1,24}#?/g, ' ') // 话题标签
+    .replace(EMOJI_NOISE, ' ') // 表情 / 加粗标点
+    .replace(/\s{2,}/g, ' ')
+    .replace(/^[\s\-—–·|【]+|[\s\-—–·|】]+$/g, '') // 顺手去掉 B站标题外面的【】
+    .trim();
+
+  /* 只留菜名：从第一个分隔标点处截断（「菜名，你就像…」→「菜名」） */
+  name = name.split(DISH_SEPARATOR)[0].trim();
+  /* 剥营销尾巴，剥到稳定为止 */
+  for (let i = 0; i < 5 && TRAILING_NOISE.test(name); i++) {
+    name = name.replace(TRAILING_NOISE, '').trim();
+  }
+  /* 中文菜名后面跟一段说明时（「蒜香黄油虾仁 新手也不会翻车」），空格处截断；
+     英文名（Basque Cheesecake）里的空格不受影响 —— 只看「汉字 + 空格」 */
+  name = name.replace(/([\u4e00-\u9fa5])[\s]+.*$/, '$1').trim();
+
+  return name.slice(0, 20);
+}
+
 /**
  * 从文案里挑出最像标题的一句。
- * 策略：去掉链接和平台尾巴，再取最长的一行 —— 分享文案里标题几乎总是最长的那句。
+ * 策略：去掉链接和平台尾巴，取最长的一行，再交给 toDishName 收成菜名。
  */
 function pickTitle(text: string): string {
   let s = text;
@@ -85,16 +146,7 @@ function pickTitle(text: string): string {
     .filter((line) => line.length >= 2);
 
   if (!lines.length) return '';
-
-  const best = lines.reduce((a, b) => (b.length > a.length ? b : a));
-
-  return best
-    .replace(/#[^#\s]{1,24}#?/g, ' ') // 话题标签
-    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, ' ') // 表情
-    .replace(/\s{2,}/g, ' ')
-    .replace(/^[\s\-—–·|【]+|[\s\-—–·|】]+$/g, '') // 顺手去掉 B站标题外面的【】
-    .trim()
-    .slice(0, 40);
+  return toDishName(lines.reduce((a, b) => (b.length > a.length ? b : a)));
 }
 
 export function parseShare(text: string): ParsedShare {
@@ -104,11 +156,13 @@ export function parseShare(text: string): ParsedShare {
   /* 抖音文案里的作者最好拿；其它平台只能留空 */
   const author = text.match(DOUYIN_AUTHOR)?.[1]?.trim() ?? '';
 
-  /* 只有一条链接、没有别的文字 —— 那就没有标题可解，老实留空 */
+  /* 只有一条链接、没有别的文字：没有标题可解，老实留空；
+     但若这条链接是个搜索页，链接里的搜索词本身就是标题 */
   const leftover = text.replace(new RegExp(URL_RE.source, 'gi'), '').trim();
-  const title = leftover.length >= 2 ? pickTitle(text) : '';
+  const keyword = leftover.length >= 2 ? '' : searchKeyword(text);
+  const title = leftover.length >= 2 ? pickTitle(text) : toDishName(keyword);
 
-  return { url, source, title, author };
+  return { url, source, title, author, fromSearch: keyword !== '' };
 }
 
 /* ─── 封面插画猜测 ───────────────────────────── */

@@ -18,7 +18,7 @@ export default function RecipeDetail() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [draft, setDraft] = useState({ title: '', url: '', note: '' });
+  const [draft, setDraft] = useState({ title: '', url: '', steps: '', note: '' });
 
   useEffect(() => {
     const t = window.setTimeout(() => setLoading(false), 480);
@@ -34,7 +34,7 @@ export default function RecipeDetail() {
 
   function startEdit() {
     if (!recipe) return;
-    setDraft({ title: recipe.title, url: recipe.url, note: recipe.note });
+    setDraft({ title: recipe.title, url: recipe.url, steps: recipe.steps, note: recipe.note });
     setEditing(true);
   }
 
@@ -45,7 +45,12 @@ export default function RecipeDetail() {
       toast('菜名不能为空', false);
       return;
     }
-    updateRecipe(recipe.id, { title, url: draft.url.trim(), note: draft.note.trim() });
+    updateRecipe(recipe.id, {
+      title,
+      url: draft.url.trim(),
+      steps: draft.steps.trim(),
+      note: draft.note.trim(),
+    });
     setEditing(false);
     toast('已保存并同步');
   }
@@ -171,6 +176,16 @@ export default function RecipeDetail() {
                       />
                     </div>
                     <div className="field">
+                      <label htmlFor="editSteps">做法</label>
+                      <textarea
+                        id="editSteps"
+                        value={draft.steps}
+                        onChange={(e) => setDraft((d) => ({ ...d, steps: e.target.value }))}
+                        {...preserveTypedValue((v) => setDraft((d) => ({ ...d, steps: v })))}
+                        placeholder="一步一步写，换行分开就行。"
+                      />
+                    </div>
+                    <div className="field">
                       <label htmlFor="editNote">我的备注</label>
                       <textarea
                         id="editNote"
@@ -197,12 +212,14 @@ export default function RecipeDetail() {
                   <div className="meta-row">
                     <SourceBadge source={recipe.source} />
                     <span className="meta">{recipe.author}</span>
-                    <span className="meta">·</span>
-                    <span className="meta">{recipe.updatedAt} 更新</span>
                   </div>
                   <h1 className="ptitle" style={{ fontSize: 27, marginTop: 10 }}>
                     {recipe.title}
                   </h1>
+                  {/* 收藏时间 / 更新时间只在这一页显示（列表页不显示时间） */}
+                  <p className="meta" style={{ margin: '8px 0 0' }}>
+                    收藏于 {recipe.createdAt} · 更新于 {recipe.updatedAt}
+                  </p>
                 </section>
 
                 <section className="pad" style={{ paddingTop: 14 }}>
@@ -223,6 +240,12 @@ export default function RecipeDetail() {
                 </section>
 
                 <section className="pad" style={{ paddingTop: 14 }}>
+                  {recipe.steps.trim() && (
+                    <div className="card sticker notecard" style={{ padding: 16, marginBottom: 14 }}>
+                      <h3 style={{ margin: '0 0 8px' }}>做法</h3>
+                      <p className="steps-text">{recipe.steps}</p>
+                    </div>
+                  )}
                   <div className="card sticker notecard" style={{ padding: 16 }}>
                     <h3 style={{ margin: '0 0 8px' }}>我的备注</h3>
                     <div className="viewmode">

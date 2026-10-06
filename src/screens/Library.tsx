@@ -15,6 +15,7 @@ const FILTERS: Array<{ key: SourceKey | 'all'; label: string }> = [
   { key: 'red', label: '小红书' },
   { key: 'bili', label: 'B站' },
   { key: 'douyin', label: '抖音' },
+  { key: 'manual', label: '手动' },
 ];
 
 export default function Library() {
@@ -230,7 +231,6 @@ export default function Library() {
                         )}
                       </span>
                     </span>
-                    <span className="when meta">{r.updatedAt}</span>
                   </Link>
                 ))}
               </div>

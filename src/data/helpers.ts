@@ -41,6 +41,7 @@ const SRC_MAP: Record<SourceKey, SrcMeta> = {
   bili: { label: 'B站', cls: 'sbili' },
   douyin: { label: '抖音', cls: 'sdou' },
   generic: { label: '网页', cls: 'sgeneric' },
+  manual: { label: '手动', cls: 'smanual' },
 };
 
 export function srcMeta(key: SourceKey): SrcMeta {
@@ -56,6 +57,8 @@ export function srcColorVar(key: SourceKey): string {
       return 'var(--src-bili)';
     case 'douyin':
       return 'var(--src-douyin)';
+    case 'manual':
+      return 'var(--ink)';
     default:
       return 'var(--muted)';
   }

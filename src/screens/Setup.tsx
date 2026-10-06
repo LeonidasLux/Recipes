@@ -5,6 +5,7 @@ import { useSync } from '../lib/useSync';
 import { useToast } from '../components/Toast';
 import { Icon } from '../components/Icons';
 import { GithubError, maskToken, normalizeToken, tokenShapeError } from '../lib/github';
+import { aiKeyShapeError, maskAiKey, normalizeAiKey } from '../lib/ai';
 import { preserveTypedValue } from '../lib/inputs';
 import { partnerOf } from '../data/helpers';
 import type { PersonKey, SyncConfig } from '../data/types';
@@ -52,9 +53,12 @@ export default function Setup() {
   const [repo, setRepo] = useState('');
   const [branch, setBranch] = useState('main');
   const [intervalSec, setIntervalSec] = useState<IntervalSec>(60);
+  /* AI 识别（DeepSeek）：可选，留空就是纯本地解析，之后能在「设置」里补 */
+  const [aiKey, setAiKey] = useState('');
 
   const [invalid, setInvalid] = useState<Record<string, boolean>>({});
   const [tokenErr, setTokenErr] = useState<string | null>(null);
+  const [aiKeyErr, setAiKeyErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [connectError, setConnectError] = useState<{ msg: string; hint: string } | null>(null);
 
@@ -71,6 +75,8 @@ export default function Setup() {
     /* 对方昵称是可选的：留空表示「之后再说」，不拦着连接 */
     if (key === 'partner') return v.length <= 12;
     if (key === 'token') return tokenShapeError(v) === null;
+    /* DeepSeek Key 也是可选的：留空就用纯本地解析 */
+    if (key === 'aiKey') return v === '' || aiKeyShapeError(v) === null;
     if (key === 'repo') return /^[\w.-]+\/[\w.-]+$/.test(v);
     if (key === 'branch') return v.length > 0;
     return true;
@@ -83,16 +89,25 @@ export default function Setup() {
       setInvalid((s) => ({ ...s, token: msg !== null }));
       return;
     }
+    if (key === 'aiKey') {
+      const msg = value.trim() ? aiKeyShapeError(value) : null;
+      setAiKeyErr(msg);
+      setInvalid((s) => ({ ...s, aiKey: msg !== null }));
+      return;
+    }
     setInvalid((s) => ({ ...s, [key]: !validateOne(key, value) }));
   }
 
   function allValid(): boolean {
     const tokenMsg = tokenShapeError(token);
     setTokenErr(tokenMsg);
+    const aiMsg = aiKey.trim() ? aiKeyShapeError(aiKey) : null;
+    setAiKeyErr(aiMsg);
     const next = {
       nickname: !validateOne('nickname', myName),
       partner: !validateOne('partner', partnerName),
       token: tokenMsg !== null,
+      aiKey: aiMsg !== null,
       repo: !validateOne('repo', repo),
       branch: !validateOne('branch', branch),
     };
@@ -167,6 +182,13 @@ export default function Setup() {
       return;
     }
 
+    /* DeepSeek Key 同样可选：给了就校验形状，没给不影响导入 */
+    const ak = typeof cfg.aiKey === 'string' ? normalizeAiKey(cfg.aiKey) : '';
+    if (ak && aiKeyShapeError(ak) !== null) {
+      setImportErr('aiKey 格式不对（应以 sk- 开头）');
+      return;
+    }
+
     setNames((s) => {
       const next = { ...s };
       next[slot] = nick;
@@ -176,6 +198,7 @@ export default function Setup() {
     setToken(tk);
     setRepo(rp);
     setBranch(br);
+    setAiKey(ak);
     setIntervalSec(iv as IntervalSec);
     setInvalid({});
     toast('配置已导入，检查后连接');
@@ -195,6 +218,10 @@ export default function Setup() {
       branch: branch.trim() || 'main',
       token: normalizeToken(token),
       tokenMask: maskToken(normalizeToken(token)),
+      /* AI 识别（DeepSeek）：高级设置里可选填，留空之后能在「设置」里补 */
+      aiKey: normalizeAiKey(aiKey),
+      aiKeyMask: aiKey.trim() ? maskAiKey(normalizeAiKey(aiKey)) : '',
+      aiOn: true,
       me: slot,
       view: 'order',
       autoPull: intervalSec > 0,
@@ -233,6 +260,9 @@ export default function Setup() {
       branch: branch.trim() || 'main',
       token: '',
       tokenMask: '',
+      aiKey: normalizeAiKey(aiKey),
+      aiKeyMask: aiKey.trim() ? maskAiKey(normalizeAiKey(aiKey)) : '',
+      aiOn: true,
       me: slot,
       view: 'order',
       autoPull: false,
@@ -494,6 +524,36 @@ export default function Setup() {
                       <option value="600">每 10 分钟</option>
                       <option value="0">仅手动</option>
                     </select>
+                  </div>
+                  <div className={`field${invalid.aiKey ? ' invalid' : ''}`}>
+                    <label htmlFor="fAiKey">DeepSeek API Key（可留空）</label>
+                    <input
+                      id="fAiKey"
+                      type="password"
+                      autoComplete="off"
+                      spellCheck={false}
+                      /* 不关掉这两个，手机键盘的自动大写会把 sk- 写成 Sk- */
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      placeholder="sk-…"
+                      value={aiKey}
+                      onChange={(e) => {
+                        setAiKey(normalizeAiKey(e.target.value));
+                        if (aiKeyErr) setAiKeyErr(null);
+                      }}
+                      {...preserveTypedValue(
+                        (v) => {
+                          setAiKey(normalizeAiKey(v));
+                          if (aiKeyErr) setAiKeyErr(null);
+                        },
+                        (v) => blurCheck('aiKey', normalizeAiKey(v)),
+                      )}
+                    />
+                    <span className="err">{aiKeyErr ?? 'Key 格式不对（应以 sk- 开头）'}</span>
+                    <span className="hint">
+                      可留空 —— 不填就只用本地解析文案，之后能在「设置」里补。填了「识别」会用 DeepSeek 把菜名 /
+                      作者 / 做法一起拆出来。Key 只存本机，不写进仓库。
+                    </span>
                   </div>
                 </div>
               </details>

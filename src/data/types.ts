@@ -1,6 +1,7 @@
 ﻿/* 数据模型 —— 与设计源 recipe-app-plan.md §8 一致 */
 
-export type SourceKey = 'red' | 'bili' | 'douyin' | 'generic';
+/** manual = 手动加的（没有来源平台）；generic = 其他网页 */
+export type SourceKey = 'red' | 'bili' | 'douyin' | 'generic' | 'manual';
 /** 两个人：a / b。角色（点菜 / 掌勺）不再绑定到人，而是由每张订单的方向决定 */
 export type PersonKey = 'a' | 'b';
 export type OrderStatus = 'pending' | 'accepted' | 'done';
@@ -16,7 +17,11 @@ export interface Recipe {
   author: string;
   /** 本地插画资源名，如 tomato-beef.svg；空串则用首字占位 */
   art: string;
+  /** 做法（步骤）。手动加的菜谱主要就靠这一段；剪藏来的可以留空 */
+  steps: string;
   note: string;
+  /** 收藏时间（第一次存进来的时间）；老数据/老仓库没有，规整时用 updatedAt 顶上 */
+  createdAt: string;
   updatedAt: string;
 }
 
@@ -65,6 +70,11 @@ export interface SyncConfig {
   /** 仅存本机，永不写进仓库 */
   token: string;
   tokenMask: string;
+  /** DeepSeek API Key（AI 识别用）；同样只存本机，永不写进仓库 */
+  aiKey: string;
+  aiKeyMask: string;
+  /** 识别时是否走 AI（有 key 才真正生效） */
+  aiOn: boolean;
   /** 本机这个人是谁（本地设置，不进仓库） */
   me: PersonKey;
   /** 本机当前角色（本地设置，不进仓库）：决定底部第二格是「点单」还是「掌勺」 */

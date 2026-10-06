@@ -1,0 +1,87 @@
+# 提交到 main 之后，自动打 Android APK 并挂成一个 Release。
+# 打包命令与本机完全一致：npm run apk（= icons → build → cap sync android → gradlew assembleDebug）。
+name: Android APK
+
+on:
+  push:
+    branches: [main]
+  # 需要时可以在 Actions 页面手动点一次
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 取代码
+        uses: actions/checkout@v4
+
+      - name: 装 Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 装 JDK 17（AGP 8.2.1 要求）
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: 装 Android SDK（android-34 + build-tools 34）
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
+
+      - name: 装 npm 依赖
+        run: npm ci
+
+      # 仓库里的 wrapper 指向腾讯云镜像（本机在国内网络下才下得动 Gradle）；
+      # runner 在境外，官方源更快更稳，这里换回官方发行地址（只改 runner 工作区）。
+      - name: 换回 Gradle 官方下载源
+        run: |
+          sed -i 's#mirrors.cloud.tencent.com/gradle/#services.gradle.org/distributions/#' \
+            android/gradle/wrapper/gradle-wrapper.properties
+          grep distributionUrl android/gradle/wrapper/gradle-wrapper.properties
+
+      # package.json 里的 apk 脚本是 Windows 写法（`cd android && gradlew ...`），Linux 上要两步：
+      #   ① 仓库里的 gradlew 是在 Windows 上提交的（CRLF + BOM），直接跑会 bad interpreter，
+      #      这里就地转成 LF、去掉 BOM（只改 runner 的工作区，不进仓库）；
+      #   ② 置为可执行并放进 PATH，sh 才找得到这个不带扩展名的 wrapper。
+      - name: 让 gradlew 在 Linux 上可用
+        run: |
+          sed -i -e '1s/^\xEF\xBB\xBF//' -e 's/\r$//' android/gradlew
+          chmod +x android/gradlew
+          echo "$GITHUB_WORKSPACE/android" >> "$GITHUB_PATH"
+
+      - name: 打包 APK
+        run: npm run apk
+
+      - name: 上传 APK（每次运行的 Actions 页面都能下载）
+        uses: actions/upload-artifact@v4
+        with:
+          name: jishiben-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: 建 Release 并把 APK 挂上去
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          tag="v${version}-build.${{ github.run_number }}"
+          asset="jishiben-${tag}.apk"
+          cp android/app/build/outputs/apk/debug/app-debug.apk "$asset"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            # 同一个 run 重跑时 tag 已存在，直接覆盖附件
+            gh release upload "$tag" "$asset" --clobber
+          else
+            gh release create "$tag" "$asset" \
+              --title "记食本 ${tag}" \
+              --notes "GitHub Actions 自动打包（debug 签名，可直接安装）。对应提交：${{ github.sha }}" \
+              --latest
+          fi

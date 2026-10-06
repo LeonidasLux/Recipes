@@ -7,6 +7,7 @@ import { TabBar } from '../components/TabBar';
 import { LiveSyncPill } from '../components/LiveSyncPill';
 import { Icon } from '../components/Icons';
 import { maskToken, normalizeToken, tokenShapeError } from '../lib/github';
+import { aiKeyShapeError, maskAiKey, normalizeAiKey, verifyAiKey } from '../lib/ai';
 import { preserveTypedValue } from '../lib/inputs';
 import { nicknameOf, partnerOf, PERSON_KEYS } from '../data/helpers';
 import type { PersonKey } from '../data/types';
@@ -27,6 +28,18 @@ export default function SyncScreen() {
   const cfg = db.config;
   const me: PersonKey = cfg?.me === 'b' ? 'b' : 'a';
   const other = partnerOf(me);
+
+  /* ─── AI 识别（DeepSeek）：Key 与本机设置，读写同 GitHub token ─── */
+  const aiKey = cfg?.aiKey ?? '';
+  const aiOn = cfg?.aiOn ?? true;
+  const [editAi, setEditAi] = useState(false);
+  const [aiDraft, setAiDraft] = useState('');
+  const [aiInvalid, setAiInvalid] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiMsg, setAiMsg] = useState<{ err: boolean; text: string } | null>(null);
+  /* 要先测就用刚输入的草稿，省得「先保存再测试」来回点 */
+  const aiTestKey = normalizeAiKey(aiDraft) || aiKey;
+  const aiTestable = aiKeyShapeError(aiTestKey) === null;
 
   /* ─── 同步日志：全量保留，默认折叠 + 滚动懒加载（每次 20 条）─── */
   const LOG_PAGE = 20;
@@ -70,6 +83,48 @@ export default function SyncScreen() {
     disconnect();
     setConfirmDisconnect(false);
     toast('已断开，本地缓存已清除');
+  }
+
+  function saveAiKey() {
+    const v = normalizeAiKey(aiDraft);
+    if (!v) {
+      setEditAi(false);
+      return;
+    }
+    if (aiKeyShapeError(v) !== null) {
+      setAiInvalid(true);
+      return;
+    }
+    patchConfig({ aiKey: v, aiKeyMask: maskAiKey(v), aiOn: true });
+    setEditAi(false);
+    setAiDraft('');
+    setAiInvalid(false);
+    setAiMsg(null);
+    toast('DeepSeek Key 已保存（仍只存本机）');
+  }
+
+  function clearAiKey() {
+    patchConfig({ aiKey: '', aiKeyMask: '', aiOn: false });
+    setAiMsg(null);
+    setEditAi(false);
+    setAiDraft('');
+    toast('已清除 DeepSeek Key，识别回到本地解析');
+  }
+
+  async function testAi() {
+    setAiBusy(true);
+    setAiMsg(null);
+    const ctrl = new AbortController();
+    const timer = window.setTimeout(() => ctrl.abort(), 15000);
+    try {
+      await verifyAiKey(aiTestKey, ctrl.signal);
+      setAiMsg({ err: false, text: '连接正常，AI 识别可以用。' });
+    } catch (e) {
+      setAiMsg({ err: true, text: e instanceof Error ? e.message : '测试失败，检查网络后重试。' });
+    } finally {
+      window.clearTimeout(timer);
+      setAiBusy(false);
+    }
   }
 
   function openNameEdit() {
@@ -210,6 +265,100 @@ export default function SyncScreen() {
                 <span className="track" />
                 <span className="thumb" />
               </label>
+            </div>
+          </section>
+
+          {/* ─── AI 识别（DeepSeek）：Key 只存本机，识别时才会用到 ─── */}
+          <section className="card sticker" style={{ padding: '2px 16px' }}>
+            <div className="kvrow">
+              <span className="k">AI 识别（DeepSeek）</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span className="v">{aiKey ? cfg?.aiKeyMask || maskAiKey(aiKey) : '未设置'}</span>
+                <button id="editAiKeyBtn" className="inlinebtn" onClick={() => setEditAi((v) => !v)}>
+                  修改
+                </button>
+              </span>
+            </div>
+
+            <div className="kvrow" style={{ alignItems: 'center' }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13, color: 'var(--muted)' }}>识别时使用 AI</div>
+                <div className="meta" style={{ fontSize: 11, marginTop: 1 }}>
+                  {!aiKey
+                    ? '填了 Key 才能开'
+                    : aiOn
+                      ? '开：识别走 DeepSeek，做法也能拆'
+                      : '关：只用本地解析文案'}
+                </div>
+              </div>
+              <label className="switch">
+                <input
+                  id="aiOnSwitch"
+                  type="checkbox"
+                  checked={Boolean(aiKey) && aiOn}
+                  disabled={!aiKey}
+                  onChange={(e) => {
+                    patchConfig({ aiOn: e.target.checked });
+                    toast(e.target.checked ? '识别将使用 AI' : '识别改为只用本地解析');
+                  }}
+                />
+                <span className="track" />
+                <span className="thumb" />
+              </label>
+            </div>
+
+            <div className={`editrow${editAi ? ' show' : ''}`}>
+              <div className={`field${aiInvalid ? ' invalid' : ''}`}>
+                <label htmlFor="aiKeyInput">DeepSeek API Key</label>
+                <input
+                  id="aiKeyInput"
+                  type="password"
+                  autoComplete="off"
+                  spellCheck={false}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  placeholder="sk-…"
+                  value={aiDraft}
+                  onChange={(e) => {
+                    setAiDraft(normalizeAiKey(e.target.value));
+                    setAiInvalid(false);
+                    setAiMsg(null);
+                  }}
+                  {...preserveTypedValue(
+                    (v) => {
+                      setAiDraft(normalizeAiKey(v));
+                      setAiInvalid(false);
+                    },
+                    (v) => {
+                      const n = normalizeAiKey(v);
+                      setAiInvalid(n.length > 0 && aiKeyShapeError(n) !== null);
+                    },
+                  )}
+                />
+                <span className="err">Key 格式不对（应以 sk- 开头）</span>
+                <span className="hint">
+                  去 platform.deepseek.com 生成。只存本机，永不写进仓库，也不会发给 api.deepseek.com 以外的地方。
+                </span>
+              </div>
+              <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
+                {aiKey && (
+                  <button id="clearAiKeyBtn" className="btn-sticker" onClick={clearAiKey}>
+                    清除
+                  </button>
+                )}
+                <button
+                  id="testAiKeyBtn"
+                  className="btn-sticker"
+                  disabled={aiBusy || !aiTestable}
+                  onClick={() => void testAi()}
+                >
+                  {aiBusy ? '测试中…' : '测试连接'}
+                </button>
+                <button id="saveAiKeyBtn" className="btn-sticker primary" onClick={saveAiKey}>
+                  保存
+                </button>
+              </div>
+              <p className={`aimsg${aiMsg?.err ? ' err' : ''}`}>{aiMsg?.text ?? ''}</p>
             </div>
           </section>
 

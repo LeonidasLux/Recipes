@@ -31,6 +31,7 @@ install('HTMLInputElement', dom.window.HTMLInputElement);
 install('HTMLTextAreaElement', dom.window.HTMLTextAreaElement);
 install('Element', dom.window.Element);
 install('Node', dom.window.Node);
+install('DOMParser', dom.window.DOMParser);
 install('Event', dom.window.Event);
 install('InputEvent', dom.window.InputEvent);
 install('MouseEvent', dom.window.MouseEvent);

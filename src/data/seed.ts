@@ -1,4 +1,4 @@
-import type { DB, Order, PersonKey, Profile, Profiles, SyncConfig } from './types';
+import type { DB, Order, PersonKey, Profile, Profiles, Recipe, SyncConfig } from './types';
 
 export const SCHEMA = 3;
 export const DB_KEY = 'jishiben-db-v1';
@@ -22,6 +22,9 @@ export function seed(): DB {
       branch: 'main',
       token: '',
       tokenMask: '',
+      aiKey: '',
+      aiKeyMask: '',
+      aiOn: true,
       me: 'a',
       view: 'order',
       autoPull: true,
@@ -40,6 +43,8 @@ export function seed(): DB {
         author: '爱做饭的阿珍',
         art: 'tomato-beef.svg',
         note: '高压锅 40 分钟更省事；八角可放可不放，不放汤色更清。',
+        steps: '1. 牛腩冷水下锅焯水，撇沫捞出。\n2. 番茄去皮切块，一半先炒出沙，一半后放。\n3. 加热水没过牛腩，小火炖 40 分钟。\n4. 收汁前调味，撒葱花。',
+        createdAt: '8月20日',
         updatedAt: '昨天',
       },
       {
@@ -50,6 +55,8 @@ export function seed(): DB {
         author: '深夜食堂阿伟',
         art: 'scallion-noodle.svg',
         note: '葱油一次多熬一点，密封冷藏能存两周。',
+        steps: '1. 葱切段，冷油小火熬到葱变焦黄，滤出葱油。\n2. 水开下面，煮 2 分钟捞出过冰水。\n3. 鸡蛋煮 6 分半，冰水泡过再剥壳。\n4. 面拌葱油、生抽和一点糖，摆上溏心蛋。',
+        createdAt: '8月19日',
         updatedAt: '周三',
       },
       {
@@ -60,6 +67,8 @@ export function seed(): DB {
         author: '海南小厨娘',
         art: 'coconut-chicken.svg',
         note: '两只椰青取水打底，不用再加一滴清水。',
+        steps: '1. 两只椰青取水，椰肉挖成条。\n2. 鸡块冷水下锅焯水后洗净。\n3. 椰水加等量清水煮开，下鸡块煮 8 分钟。\n4. 先喝汤，再涮菜。',
+        createdAt: '8月15日',
         updatedAt: '周二',
       },
       {
@@ -70,6 +79,8 @@ export function seed(): DB {
         author: '丸子的烘焙日记',
         art: 'basque-cake.svg',
         note: '奶油奶酪要室温软化，面糊过筛两遍更细腻。',
+        steps: '1. 奶油奶酪室温软化，加糖打顺滑。\n2. 分次加蛋液拌匀，再加淡奶油。\n3. 筛入面粉，面糊过筛两遍。\n4. 220℃ 烤 25 分钟，表面焦黑即可，冷藏一夜更好吃。',
+        createdAt: '8月12日',
         updatedAt: '8月30日',
       },
       {
@@ -80,6 +91,8 @@ export function seed(): DB {
         author: '台味阿宏',
         art: 'three-cup-chicken.svg',
         note: '九层塔要关火再放，香气差很多。',
+        steps: '1. 鸡腿切块，用米酒抓一下。\n2. 麻油小火煸姜片到卷边，下蒜瓣。\n3. 下鸡块煎上色，加酱油、米酒、糖。\n4. 收汁后关火，拌入九层塔。',
+        createdAt: '8月9日',
         updatedAt: '8月26日',
       },
       {
@@ -90,6 +103,8 @@ export function seed(): DB {
         author: '曼谷的夏天',
         art: 'mango-sticky-rice.svg',
         note: '椰浆里加一小撮盐再淋，甜而不腻。',
+        steps: '1. 糯米提前泡 4 小时，上锅蒸 25 分钟。\n2. 椰浆加糖和一小撮盐，小火煮化。\n3. 趁热把椰浆拌进糯米，盖上焖 15 分钟。\n4. 配芒果片，淋剩下的椰浆。',
+        createdAt: '8月5日',
         updatedAt: '8月21日',
       },
     ],
@@ -169,6 +184,24 @@ export function normalizeProfiles(raw: unknown): Profiles {
   return { a: at('a', 'orderer'), b: at('b', 'cook') };
 }
 
+/**
+ * 把任意来源的菜谱规整成当前 schema。补全项只有两个：
+ *   · `createdAt`：老缓存 / 老仓库（写于加这个字段之前）没有，用 `updatedAt` 顶上；
+ *   · `steps`（做法）：同样可能缺，补空串。
+ * 其余字段仍然不做补全 —— 缺了只是显示为空，不会崩。
+ */
+export function normalizeRecipes(raw: unknown): Recipe[] {
+  const recipes = Array.isArray(raw) ? (raw as Recipe[]) : [];
+  recipes.forEach((r) => {
+    if (!r || typeof r !== 'object') return;
+    if (typeof r.createdAt !== 'string' || !r.createdAt) {
+      r.createdAt = typeof r.updatedAt === 'string' && r.updatedAt ? r.updatedAt : '—';
+    }
+    if (typeof r.steps !== 'string') r.steps = '';
+  });
+  return recipes;
+}
+
 /** 把任意来源的订单规整成 v2+ 的多菜形状（一单一道菜的旧结构补 items[]） */
 export function normalizeOrders(raw: unknown): Order[] {
   const orders = Array.isArray(raw) ? (raw as Order[]) : [];
@@ -197,6 +230,7 @@ export function migrate(db: DB): DB {
 
   /* 形状规整每次都要做，而不是只看 schema 版本号：老仓库里存量的 profiles.json
      可能是角色形状，也可能缺格 —— 这类数据不等同于「版本旧」，等不到下一次升级 */
+  db.recipes = normalizeRecipes(db.recipes);
   db.orders = normalizeOrders(db.orders);
   db.profiles = normalizeProfiles(db.profiles);
 
@@ -227,6 +261,13 @@ export function migrate(db: DB): DB {
 
   /* 本机角色缺省（老缓存 / 被手改过的配置）：一律补「点单」 */
   if (db.config && db.config.view !== 'cook') db.config.view = 'order';
+
+  /* AI 识别的本机设置（写于加这两个字段之前的老缓存没有）：补齐，别让设置页读到 undefined */
+  if (db.config) {
+    if (typeof (db.config as Partial<SyncConfig>).aiKey !== 'string') db.config.aiKey = '';
+    if (typeof (db.config as Partial<SyncConfig>).aiKeyMask !== 'string') db.config.aiKeyMask = '';
+    if (typeof (db.config as Partial<SyncConfig>).aiOn !== 'boolean') db.config.aiOn = true;
+  }
 
   if (!Array.isArray(db.logs)) db.logs = [];
   return db;

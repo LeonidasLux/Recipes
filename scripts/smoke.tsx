@@ -8,10 +8,28 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
+import { readFileSync } from 'node:fs';
 import { AppShell } from '../src/App';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
-import { DB_KEY, emptyProfiles, migrate, normalizeOrders, normalizeProfiles, SCHEMA, seed } from '../src/data/seed';
-import { detectSource, extractUrl, guessArt, parseShare } from '../src/lib/share';
+import { DB_KEY, emptyProfiles, migrate, normalizeOrders, normalizeProfiles, normalizeRecipes, SCHEMA, seed } from '../src/data/seed';
+import { detectSource, extractUrl, guessArt, parseShare, searchKeyword, toDishName } from '../src/lib/share';
+import {
+  aiKeyShapeError,
+  buildAiMessages,
+  DeepseekError,
+  maskAiKey,
+  normalizeAiKey,
+  normalizeAiRecipe,
+  parseJsonLoose,
+  recognizeRecipe,
+  verifyAiKey,
+} from '../src/lib/ai';
+import {
+  compactPage,
+  isFetchableUrl,
+  ReaderError,
+  readPageHtml,
+} from '../src/lib/reader';
 import {
   GithubError,
   getJson,
@@ -258,6 +276,9 @@ function useDb(mutate?: (db: DB) => void) {
     branch: 'main',
     token: 'ghp_example_token_value',
     tokenMask: 'ghp_••••••••alue',
+    aiKey: '',
+    aiKeyMask: '',
+    aiOn: true,
     me: 'a',
     view: 'order',
     autoPull: true,
@@ -420,6 +441,22 @@ async function githubErrOf(fn: () => Promise<unknown>): Promise<GithubError | nu
 const XHS_SHARE =
   '西红柿炒鸡蛋，你就像我这样做，真的很下饭！ http://xhslink.com/a/tomato-egg 复制本条信息，打开【小红书】App查看精彩内容！';
 const BILI_SHARE = '【电饭煲卤鸡腿，脱骨那种】 https://b23.tv/xyz789';
+/** AI 识别用例：占位 Key（形状合法即可，绝不填真实 Key） */
+const AI_KEY = 'sk-0123456789abcdef0123456789abcdef';
+const AI_SHARE =
+  '番茄牛腩巨好吃！食材：牛腩500g、番茄3个。做法：1 焯水 2 炖40分钟。 http://xhslink.com/a/ai-test 复制本条信息，打开【小红书】App查看精彩内容！';
+/** 假的小红书笔记页：作者名一处写在 meta、一处写在内嵌 JSON、一处写在作者块 */
+const PAGE_HTML = `<html><head><title>番茄牛腩 - 小红书</title>
+<meta property="og:description" content="酸甜开胃，一锅搞定">
+<meta name="author" content="爱做饭的阿珍">
+<script>window.__INITIAL_STATE__={"user":{"nickname":"阿珍的厨房"}};</script>
+</head><body>
+<div class="author-name">爱做饭的阿珍</div>
+<p>牛腩冷水下锅焯水，番茄去皮炒出沙，加热水小火炖 40 分钟。</p>
+</body></html>`;
+/** 只贴一条 B站搜索链接（用户实际反馈的那种输入） */
+const BILI_SEARCH =
+  'https://search.bilibili.com/all?vt=04531052&keyword=%E6%9D%91%E9%A9%B4&from_source=web_search&spm_id_from=333.1007&search_source=5';
 
 /** 从记录的调用里取出被 PUT 过的文件路径（去重、排序） */
 function putPaths(calls: string[]): string[] {
@@ -528,6 +565,7 @@ async function renderChecks() {
     '把「分享 → 复制链接」那一整段粘进来',
     '保存并同步到仓库',
     '识别',
+    'DeepSeek',
   ]);
   await expectIn('5 点单（未选菜 → 发送键禁用）', '/order', [
     '点一顿饭',
@@ -543,6 +581,7 @@ async function renderChecks() {
   await expectIn('6 同步与仓库', '/sync', [
     '同步与仓库',
     '我是谁',
+    'AI 识别（DeepSeek）',
     'xiaoman/family-recipes',
     '最近同步',
     '小红',
@@ -631,6 +670,10 @@ async function interactionChecks() {
     if (m.$$('.sel').length !== 2) fail('手动加菜', `剩余 ${m.$$('.sel').length} 颗`);
     else ok('手动输入也能加进这顿');
 
+    /* 给掌勺的话 */
+    check(m.$('.ordernote')?.getAttribute('placeholder') === '给掌勺的话（可不填）', '组合器里有「给掌勺的话」输入框');
+    await m.type('.ordernote', '  少放辣，米饭少一点  ');
+
     /* 发送 */
     await m.click('.sendbtn');
     await m.wait(900);
@@ -645,8 +688,10 @@ async function interactionChecks() {
     } else {
       ok('发送 → 落库为一单两菜、状态待接、含临时菜');
     }
+    check(created.note === '少放辣，米饭少一点', '★ 备注随单落库（首尾空格去掉）', `实际「${created.note}」`);
     if (m.$$('.sel').length !== 0) fail('发送后清空组合器', `还剩 ${m.$$('.sel').length} 颗`);
     else ok('发送后组合器清空');
+    check(m.value('.ordernote') === '', '发送后备注框也清空', `实际「${m.value('.ordernote')}」`);
 
     /* 展开订单详情 */
     await m.click('.ocard .osum');
@@ -692,7 +737,7 @@ async function interactionChecks() {
   {
     const m = await mount('/recipe/r5');
     await m.click('#editRecipeBtn');
-    await m.type('.editrow textarea', '九层塔换成罗勒也行，但香气差一点。');
+    await m.type('#editNote', '九层塔换成罗勒也行，但香气差一点。');
     await m.click('.editrow .btn-sticker.primary');
     await m.wait(200);
     const r5 = readDb().recipes.find((r) => r.id === 'r5')!;
@@ -711,8 +756,8 @@ async function interactionChecks() {
 
     check(m.html().includes('西红柿炒鸡蛋'), '粘贴分享文案 → 拆出标题');
     check(
-      m.value('#mTitle') === '西红柿炒鸡蛋，你就像我这样做，真的很下饭！',
-      '★ 标题预填进输入框（可改，不是写死的样本）',
+      m.value('#mTitle') === '西红柿炒鸡蛋',
+      '★ 标题只留菜名（去掉了后面那串描述），且可改',
       `实际「${m.value('#mTitle')}」`,
     );
     check(
@@ -725,8 +770,8 @@ async function interactionChecks() {
     await m.wait(1000);
     const added = readDb().recipes[0];
     check(
-      added?.title === '西红柿炒鸡蛋，你就像我这样做，真的很下饭！' && added.source === 'red',
-      '保存 → 新菜谱进库（标题/来源正确）',
+      added?.title === '西红柿炒鸡蛋' && added.source === 'red',
+      '保存 → 新菜谱进库（菜名 / 来源正确）',
       JSON.stringify(added),
     );
     check(added?.art === 'tomato-beef.svg', '按标题配了张封面插画', `实际「${added?.art}」`);
@@ -754,7 +799,7 @@ async function interactionChecks() {
   {
     const m = await mount('/recipe/r2');
     await m.click('#editRecipeBtn');
-    await m.type('.editrow textarea', '葱油分两次淋，第一次拌面第二次提香。');
+    await m.type('#editNote', '葱油分两次淋，第一次拌面第二次提香。');
     await m.click('.editrow .btn-sticker.primary');
     await m.wait(200);
     const r2 = readDb().recipes.find((r) => r.id === 'r2')!;
@@ -774,14 +819,352 @@ async function interactionChecks() {
     await m.type('#shareInput', BILI_SHARE);
     await m.click('#recognizeBtn');
     await m.wait(100);
-    check(m.value('#mTitle') === '电饭煲卤鸡腿，脱骨那种', 'B站文案解析正常', `实际「${m.value('#mTitle')}」`);
+    check(m.value('#mTitle') === '电饭煲卤鸡腿', 'B站文案解析正常（也只留菜名）', `实际「${m.value('#mTitle')}」`);
 
     await m.click('.actionbar .btn-primary');
     await m.wait(1000);
     const added = readDb().recipes[0];
-    check(added?.title === '电饭煲卤鸡腿，脱骨那种' && added.source === 'bili', '★ 保存成功，新菜谱进库');
+    check(added?.title === '电饭煲卤鸡腿' && added.source === 'bili', '★ 保存成功，新菜谱进库');
     check(readDb().recipes.length === 7, '菜谱数 +1', `实际 ${readDb().recipes.length}`);
     await m.close();
+  }
+
+  console.log('\n[交互 · 手动添加菜谱（可无来源）]');
+  useDb();
+  {
+    const m = await mount('/add');
+    /* jsdom 不加载 CSS，判断「显示与否」要看类名：.manual 要 .show 才展开 */
+    check(!(m.$('.manual')?.className ?? '').includes('show'), '没点之前手填区是收起的');
+    await m.click('#manualBtn');
+    check((m.$('.manual')?.className ?? '').includes('show'), '★ 手动添加 → 直接展开手填区');
+    check(m.$('#mTitle') !== null && m.$('#mSteps') !== null, '手填区里有标题和做法');
+    check(m.value('#mSource') === 'manual', '来源默认就是「手动添加（无来源）」', m.value('#mSource'));
+
+    await m.type('#mTitle', '外婆的梅干菜扣肉');
+    await m.type('#mSteps', '1. 梅干菜泡软\n2. 五花肉焯水\n3. 上锅蒸 1 小时');
+    await m.type('#noteArea', '蒸久一点更糯');
+    await m.click('.actionbar .btn-primary');
+    await m.wait(1000);
+    const added = readDb().recipes[0];
+    check(added?.title === '外婆的梅干菜扣肉', '★ 手动添加保存成功');
+    check(added?.source === 'manual', '★ 没有平台来源，记为「手动」', `实际 ${added?.source}`);
+    check(added?.steps === '1. 梅干菜泡软\n2. 五花肉焯水\n3. 上锅蒸 1 小时', '★ 做法落库', JSON.stringify(added?.steps));
+    check(added?.note === '蒸久一点更糯', '备注落库');
+    check(added?.url === '' && added?.author !== '', '没填链接就是空串，作者走兜底', `url=${added?.url} author=${added?.author}`);
+    await m.close();
+  }
+  {
+    /* 手动加的菜同样能从列表筛出来 */
+    useDb((db) => {
+      db.recipes.unshift({
+        id: 'r9',
+        title: '外婆的梅干菜扣肉',
+        source: 'manual',
+        url: '',
+        author: '来自剪藏',
+        art: '',
+        steps: '上锅蒸 1 小时',
+        note: '',
+        createdAt: '刚刚',
+        updatedAt: '刚刚',
+      });
+    });
+    const m = await mount('/library');
+    await m.clickByText('.chip', '手动');
+    check(m.$$('.dishrow').length === 1, '★ 按「手动」筛选只剩手写的那条', `实际 ${m.$$('.dishrow').length}`);
+    check(m.html().includes('外婆的梅干菜扣肉'), '筛出来的就是它');
+    await m.close();
+  }
+
+  console.log('\n[交互 · 设置页填 DeepSeek Key]');
+  useDb();
+  {
+    const m = await mount('/sync');
+    check(m.html().includes('AI 识别（DeepSeek）'), '设置页有 AI 识别配置区');
+    check(m.html().includes('未设置'), '还没填 Key 时显示「未设置」');
+    check((m.$('#aiOnSwitch') as HTMLInputElement).disabled, '没 Key 时「识别时使用 AI」开关是禁用的');
+
+    await m.click('#editAiKeyBtn');
+    await m.type('#aiKeyInput', AI_KEY);
+    await m.click('#saveAiKeyBtn');
+    await m.wait(100);
+
+    const cfg = readDb().config!;
+    check(cfg.aiKey === AI_KEY, '★ Key 落库（只存本机 config，不进仓库）', `实际「${cfg.aiKey}」`);
+    check(cfg.aiKeyMask === maskAiKey(AI_KEY), '★ 只存掩码供展示', `实际「${cfg.aiKeyMask}」`);
+    check(cfg.aiOn === true, '保存后自动开启 AI 识别');
+    check(m.html().includes(maskAiKey(AI_KEY)), '设置页显示的是掩码');
+    check(!m.html().includes(AI_KEY), '★ 明文 Key 不出现在页面上（输入框已清空）');
+    check(!(m.$('#aiOnSwitch') as HTMLInputElement).disabled, '有 Key 后开关可用');
+    check(!m.html().includes('识别时读取原链接'), '★ 设置页里没有「读原链接」这一块');
+    check(m.$('#linkOnSwitch') === null, '也没有它的开关（读链接默认就用，不可关）');
+
+    await m.click('#aiOnSwitch');
+    await m.wait(50);
+    check(readDb().config!.aiOn === false, '开关能关掉「识别时使用 AI」');
+    await m.click('#aiOnSwitch');
+    await m.wait(50);
+    check(readDb().config!.aiOn === true, '开关能再打开');
+
+    await m.click('#clearAiKeyBtn');
+    await m.wait(50);
+    check(readDb().config!.aiKey === '' && readDb().config!.aiOn === false, '★ 清除 Key 并退回本地解析');
+    await m.close();
+  }
+
+  console.log('\n[交互 · AI 识别（DeepSeek）]');
+  useDb((db) => {
+    db.config!.aiKey = AI_KEY;
+    db.config!.aiKeyMask = maskAiKey(AI_KEY);
+    db.config!.aiOn = true;
+  });
+  {
+    const ds = stubFetch([
+      { match: /^https:\/\/r\.jina\.ai\//, reply: () => new Response(PAGE_HTML) },
+      {
+        match: /api\.deepseek\.com\/chat\/completions/,
+        method: 'POST',
+        reply: () =>
+          jsonRes({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    title: '番茄牛腩',
+                    author: '爱做饭的阿珍',
+                    steps: '1. 牛腩冷水下锅焯水\n2. 小火炖 40 分钟',
+                    note: '八角可放可不放',
+                  }),
+                },
+              },
+            ],
+          }),
+      },
+    ]);
+
+    const m = await mount('/add');
+    check(m.text('#recognizeBtn') === 'AI 识别', '配了 Key → 按钮变成「AI 识别」', m.text('#recognizeBtn'));
+    check(m.html().includes('AI 识别已开启'), '页面提示 AI 已开启');
+
+    await m.type('#shareInput', AI_SHARE);
+    await m.click('#recognizeBtn');
+    await m.wait(300);
+
+    const chatCalls = ds.calls.filter((c) => c.url.includes('chat/completions'));
+    check(chatCalls.length === 1, '★ 真的调了一次 DeepSeek chat/completions', `实际 ${chatCalls.length} 次`);
+    check(chatCalls[0].headers.Authorization === `Bearer ${AI_KEY}`, '请求带上了 Bearer Key');
+    check(
+      (chatCalls[0].body as { model?: string; response_format?: { type?: string } })?.model === 'deepseek-chat',
+      '用的是 deepseek-chat 模型',
+    );
+
+    check(m.value('#mTitle') === '番茄牛腩', '★ AI 的菜名填进输入框', `实际「${m.value('#mTitle')}」`);
+    check(
+      m.value('#mSteps') === '1. 牛腩冷水下锅焯水\n2. 小火炖 40 分钟',
+      '★ AI 把做法也拆出来填进「做法」',
+      JSON.stringify(m.value('#mSteps')),
+    );
+    check(m.value('#mAuthor') === '爱做饭的阿珍', 'AI 的作者填进去', `实际「${m.value('#mAuthor')}」`);
+    check(m.value('#noteArea') === '八角可放可不放', 'AI 的小贴士填进备注');
+    check(m.value('#mUrl') === 'http://xhslink.com/a/ai-test', '链接仍以本地解析为准（AI 不改 URL）');
+    check(m.value('#mSource') === 'red', '来源按域名判断，不受 AI 影响');
+
+    /* AI 拆出来的做法落库后能在详情页看到 */
+    await m.click('.actionbar .btn-primary');
+    await m.wait(1000);
+    const added = readDb().recipes[0];
+    check(
+      added?.title === '番茄牛腩' && added?.steps === '1. 牛腩冷水下锅焯水\n2. 小火炖 40 分钟',
+      '★ AI 识别结果能一路存进仓库',
+      JSON.stringify({ title: added?.title, steps: added?.steps }),
+    );
+    await m.close();
+    ds.restore();
+  }
+
+  {
+    /* Key 失效：把 DeepSeek 的原始原因告诉用户，同时回退到本地解析，别让识别整个失败 */
+    const ds = stubFetch([
+      {
+        match: /api\.deepseek\.com\/chat\/completions/,
+        method: 'POST',
+        reply: () => jsonRes({ error: { message: 'Authentication Fails' } }, 401),
+      },
+    ]);
+    const m = await mount('/add');
+    await m.type('#shareInput', XHS_SHARE);
+    await m.click('#recognizeBtn');
+    await m.wait(300);
+    check(
+      m.value('#mTitle') === '西红柿炒鸡蛋',
+      '★ AI 失败 → 回退到本地解析的标题',
+      `实际「${m.value('#mTitle')}」`,
+    );
+    check(m.html().includes('API Key 无效'), '★ 把 Key 失效的原因告诉用户');
+    await m.close();
+    ds.restore();
+  }
+
+  {
+    /* 关掉 AI：连 DeepSeek 都不该碰 */
+    useDb((db) => {
+      db.config!.aiKey = AI_KEY;
+      db.config!.aiOn = false;
+    });
+    const ds = stubFetch([]);
+    const m = await mount('/add');
+    check(m.text('#recognizeBtn') === '识别', 'AI 关掉后按钮回到「识别」');
+    await m.type('#shareInput', XHS_SHARE);
+    await m.click('#recognizeBtn');
+    await m.wait(200);
+    check(ds.calls.length === 0, '★ 关掉 AI 后一个请求都不发（也不读原链接）', `实际 ${ds.calls.length} 次`);
+    check(m.value('#mTitle') === '西红柿炒鸡蛋', '本地解析照常工作');
+    await m.close();
+    ds.restore();
+  }
+
+  console.log('\n[交互 · 识别时读取原链接]');
+  useDb((db) => {
+    db.config!.aiKey = AI_KEY;
+    db.config!.aiKeyMask = maskAiKey(AI_KEY);
+    db.config!.aiOn = true;
+  });
+  {
+    const ds = stubFetch([
+      { match: /^https:\/\/r\.jina\.ai\//, reply: () => new Response(PAGE_HTML, { status: 200, headers: { 'content-type': 'text/html' } }) },
+      {
+        match: /chat\/completions/,
+        method: 'POST',
+        reply: () => jsonRes({ choices: [{ message: { content: '{"title":"番茄牛腩","author":"阿珍的厨房","steps":"1. 焯水"}' } }] }),
+      },
+    ]);
+
+    const m = await mount('/add');
+    check(m.html().includes('会先打开原链接补作者'), '页面提示会读原链接');
+    await m.type('#shareInput', AI_SHARE);
+    await m.click('#recognizeBtn');
+    await m.wait(500);
+
+    const readerCall = ds.calls.find((c) => c.url.startsWith('https://r.jina.ai/'));
+    check(readerCall !== undefined, '★ 真的经 r.jina.ai 去读了原链接');
+    check(
+      readerCall?.url === 'https://r.jina.ai/http://xhslink.com/a/ai-test',
+      '读的就是文案里那个链接',
+      readerCall?.url,
+    );
+    check(readerCall?.headers['x-respond-with'] === 'html', '要的是整页 HTML（作者名在里面）');
+
+    const aiCall = ds.calls.find((c) => c.method === 'POST' && c.url.includes('chat/completions'));
+    check(aiCall !== undefined, '读完链接照常走 AI');
+    check(
+      JSON.stringify(aiCall?.body).includes('阿珍的厨房'),
+      '★ 页面线索（含作者）被带进了给 AI 的提示词',
+    );
+    check(m.value('#mAuthor') === '阿珍的厨房', '★ 作者填进输入框', `实际「${m.value('#mAuthor')}」`);
+    await m.close();
+    ds.restore();
+  }
+  {
+    /* 抓不到页面（反爬 / 登录墙）：不报错，照着文案识别 */
+    const ds = stubFetch([
+      { match: /^https:\/\/r\.jina\.ai\//, reply: () => jsonRes({ message: 'blocked' }, 403) },
+      {
+        match: /chat\/completions/,
+        method: 'POST',
+        reply: () => jsonRes({ choices: [{ message: { content: '{"title":"番茄牛腩","author":"文案里的作者"}' } }] }),
+      },
+    ]);
+    const m = await mount('/add');
+    await m.type('#shareInput', AI_SHARE);
+    await m.click('#recognizeBtn');
+    await m.wait(500);
+    check(ds.calls.some((c) => c.url.includes('chat/completions')), '★ 读链接失败也照样走 AI');
+    check(m.value('#mAuthor') === '文案里的作者', '作者就用 AI 从文案里抽到的');
+    check(m.value('#mTitle') === '番茄牛腩', '识别照常完成');
+    await m.close();
+    ds.restore();
+  }
+  {
+    /* 文案里没有链接：没东西可读，就不该去碰 r.jina.ai */
+    useDb((db) => {
+      db.config!.aiKey = AI_KEY;
+      db.config!.aiOn = true;
+    });
+    const ds = stubFetch([
+      { match: /^https:\/\/r\.jina\.ai\//, reply: () => new Response(PAGE_HTML) },
+      { match: /chat\/completions/, method: 'POST', reply: () => jsonRes({ choices: [{ message: { content: '{"title":"番茄牛腩"}' } }] }) },
+    ]);
+    const m = await mount('/add');
+    await m.type('#shareInput', '番茄牛腩 做法看这里，先焯水再炖 40 分钟');
+    await m.click('#recognizeBtn');
+    await m.wait(400);
+    check(!ds.calls.some((c) => c.url.includes('r.jina.ai')), '★ 文案里没有链接就不去读页面');
+    check(ds.calls.some((c) => c.url.includes('chat/completions')), '照样走 AI');
+    await m.close();
+    ds.restore();
+  }
+
+  console.log('\n[交互 · 只贴一条搜索链接]');
+  useDb();
+  {
+    const m = await mount('/add');
+    await m.type('#shareInput', BILI_SEARCH);
+    await m.click('#recognizeBtn');
+    await m.wait(100);
+    check(m.value('#mTitle') === '村驴', '★ 搜索链接 → 用搜索词当菜名', `实际「${m.value('#mTitle')}」`);
+    check(m.value('#mSource') === 'bili', '来源认成 B站', m.value('#mSource'));
+    check(!(m.$('.actionbar .btn-primary') as HTMLButtonElement).disabled, '有标题了，保存键可用');
+    await m.close();
+  }
+  useDb((db) => {
+    db.config!.aiKey = AI_KEY;
+    db.config!.aiKeyMask = maskAiKey(AI_KEY);
+    db.config!.aiOn = true;
+  });
+  {
+    const ds = stubFetch([
+      { match: /^https:\/\/r\.jina\.ai\//, reply: () => new Response('<html><head><title>村驴-哔哩哔哩_bilibili</title></head><body>村驴</body></html>') },
+      {
+        match: /chat\/completions/,
+        method: 'POST',
+        reply: () =>
+          jsonRes({
+            choices: [{ message: { content: '{"title":"酸甜爽脆的腌萝卜保姆级教程来了‼️","author":"村驴"}' } }],
+          }),
+      },
+    ]);
+    const m = await mount('/add');
+    await m.type('#shareInput', BILI_SEARCH);
+    await m.click('#recognizeBtn');
+    await m.wait(500);
+    const aiCall = ds.calls.find((c) => c.method === 'POST' && c.url.includes('chat/completions'));
+    check(aiCall !== undefined, '搜索链接照样走 AI');
+    check(JSON.stringify(aiCall?.body).includes('页面线索'), '把页面线索交给了 AI');
+    check(
+      m.value('#mTitle') === '酸甜爽脆的腌萝卜',
+      '★ 模型给的是整句视频标题（带「保姆级教程来了」）→ 最终只留菜品名',
+      `实际「${m.value('#mTitle')}」`,
+    );
+    await m.close();
+    ds.restore();
+  }
+  {
+    /* 模型抽不出菜名（返回空）→ 兜底的搜索词顶上 */
+    const ds = stubFetch([
+      { match: /^https:\/\/r\.jina\.ai\//, reply: () => new Response('<html><head><title>村驴</title></head><body>村驴</body></html>') },
+      {
+        match: /chat\/completions/,
+        method: 'POST',
+        reply: () => jsonRes({ choices: [{ message: { content: '{"title":"","author":"村驴"}' } }] }),
+      },
+    ]);
+    const m = await mount('/add');
+    await m.type('#shareInput', BILI_SEARCH);
+    await m.click('#recognizeBtn');
+    await m.wait(500);
+    check(m.value('#mTitle') === '村驴', '★ AI 抽不出菜名时，用搜索引擎词兜底', `实际「${m.value('#mTitle')}」`);
+    await m.close();
+    ds.restore();
   }
 
   console.log('\n[交互 · 搜索与筛选]');
@@ -1027,6 +1410,9 @@ async function interactionChecks() {
     await m.ime('.manualrow input', '红烧排骨');
     await m.blur('.manualrow input');
     check(m.value('.manualrow input') === '红烧排骨', '点单手动加菜输入框不丢字');
+    await m.ime('.ordernote', '少放辣');
+    await m.blur('.ordernote');
+    check(m.value('.ordernote') === '少放辣', '★ 点单备注框同样不丢字');
     await m.clickByText('.manualrow button', '加进这顿');
     check(m.html().includes('红烧排骨'), '★ 手动加的菜真的进了这顿');
     await m.close();
@@ -1037,25 +1423,26 @@ async function interactionChecks() {
     await m.click('#recognizeBtn');
     await m.wait(100);
     check(
-      m.value('#mTitle') === '电饭煲卤鸡腿，脱骨那种',
+      m.value('#mTitle') === '电饭煲卤鸡腿',
       '★ 添加菜谱：粘贴的分享文案没丢（识别出标题）',
       `实际「${m.value('#mTitle')}」`,
     );
 
     await m.ime('#mTitle', '可乐鸡翅');
+    await m.ime('#mSteps', '1. 焯水\n2. 煎到两面金黄\n3. 加可乐焖 20 分钟');
     await m.ime('#noteArea', '收汁时开盖');
     await m.blur('#noteArea');
     check(
-      m.value('#mTitle') === '可乐鸡翅' && m.value('#noteArea') === '收汁时开盖',
-      '标题 / 备注输入框不丢字',
+      m.value('#mTitle') === '可乐鸡翅' && m.value('#noteArea') === '收汁时开盖' && m.value('#mSteps').includes('焖 20 分钟'),
+      '标题 / 做法 / 备注输入框不丢字',
     );
 
     await m.click('.actionbar .btn-primary');
     await m.wait(1000);
     const added = readDb().recipes[0];
     check(
-      added?.title === '可乐鸡翅' && added?.note === '收汁时开盖',
-      '★ 靠输入法填进去的标题与备注真的存进库',
+      added?.title === '可乐鸡翅' && added?.note === '收汁时开盖' && added?.steps === '1. 焯水\n2. 煎到两面金黄\n3. 加可乐焖 20 分钟',
+      '★ 靠输入法填进去的标题、做法与备注真的存进库',
       JSON.stringify(added),
     );
     await m.close();
@@ -1064,8 +1451,8 @@ async function interactionChecks() {
   {
     const m = await mount('/recipe/r5');
     await m.click('#editRecipeBtn');
-    await m.ime('.editrow textarea', '九层塔最后放，关火再拌');
-    await m.blur('.editrow textarea');
+    await m.ime('#editNote', '九层塔最后放，关火再拌');
+    await m.blur('#editNote');
     await m.click('.editrow .btn-sticker.primary');
     await m.wait(200);
     check(
@@ -1085,12 +1472,12 @@ function parseChecks() {
     {
       name: '小红书（标题在链接前）',
       text: '西红柿炒鸡蛋，你就像我这样做，真的很下饭！ http://xhslink.com/a/tomato-egg 复制本条信息，打开【小红书】App查看精彩内容！',
-      want: { source: 'red', url: 'http://xhslink.com/a/tomato-egg', title: '西红柿炒鸡蛋，你就像我这样做，真的很下饭！' },
+      want: { source: 'red', url: 'http://xhslink.com/a/tomato-egg', title: '西红柿炒鸡蛋' },
     },
     {
       name: '小红书（你给的短链 + 带话题和表情）',
       text: '蒜香黄油虾仁🦐 新手也不会翻车 #家常菜# #快手菜# https://xhslink.cn/o/7cNiFbAw2if 复制本条信息，打开【小红书】App查看精彩内容！',
-      want: { source: 'red', url: 'https://xhslink.cn/o/7cNiFbAw2if', title: '蒜香黄油虾仁 新手也不会翻车' },
+      want: { source: 'red', url: 'https://xhslink.cn/o/7cNiFbAw2if', title: '蒜香黄油虾仁' },
     },
     {
       name: '抖音（顺手拆出作者）',
@@ -1100,7 +1487,7 @@ function parseChecks() {
     {
       name: 'B站（标题裹在【】里）',
       text: '【电饭煲卤鸡腿，脱骨那种】 https://b23.tv/xyz789',
-      want: { source: 'bili', url: 'https://b23.tv/xyz789', title: '电饭煲卤鸡腿，脱骨那种' },
+      want: { source: 'bili', url: 'https://b23.tv/xyz789', title: '电饭煲卤鸡腿' },
     },
     {
       name: '只贴一个链接 → 不编造标题',
@@ -1110,7 +1497,22 @@ function parseChecks() {
     {
       name: '不认识的站点',
       text: '奶奶的梅干菜扣肉做法 https://example.com/recipe/42',
-      want: { source: 'generic', url: 'https://example.com/recipe/42', title: '奶奶的梅干菜扣肉做法' },
+      want: { source: 'generic', url: 'https://example.com/recipe/42', title: '奶奶的梅干菜扣肉' },
+    },
+    {
+      name: '只贴一条 B站搜索链接 → 用搜索词当标题',
+      text: 'https://search.bilibili.com/all?vt=04531052&keyword=%E6%9D%91%E9%A9%B4&from_source=web_search',
+      want: { source: 'bili', title: '村驴', fromSearch: true },
+    },
+    {
+      name: '只贴一条百度搜索链接 → 用 wd 当标题',
+      text: 'https://www.baidu.com/s?wd=%E7%95%AA%E8%8C%84%E7%89%9B%E8%85%A9',
+      want: { source: 'generic', title: '番茄牛腩', fromSearch: true },
+    },
+    {
+      name: '搜索链接后面还带文案 → 用文案的标题，不是搜索词',
+      text: '村驴的腌萝卜 https://search.bilibili.com/all?keyword=%E8%85%8C%E8%90%9D%E5%8D%9C',
+      want: { title: '村驴的腌萝卜', fromSearch: false },
     },
   ];
 
@@ -1135,6 +1537,25 @@ function parseChecks() {
   check(detectSource('https://v.douyin.com/abc/') === 'douyin', 'douyin → 抖音');
   check(detectSource('https://example.com/recipe') === 'generic', '其它站点 → 网页');
   check(detectSource('这不是一个链接') === null, '不是链接 → null');
+
+  console.log('\n[链接里的搜索词]');
+  check(
+    searchKeyword('https://search.bilibili.com/all?vt=1&keyword=%E6%9D%91%E9%A9%B4&from_source=x') === '村驴',
+    'B站 keyword 解出中文搜索词',
+  );
+  check(searchKeyword('https://www.youtube.com/results?search_query=ramen') === 'ramen', 'YouTube search_query');
+  check(searchKeyword('https://www.baidu.com/s?wd=%E7%95%AA%E8%8C%84') === '番茄', '百度 wd');
+  check(searchKeyword('https://www.bilibili.com/video/BV1xx') === '', '普通链接没有搜索词');
+  check(searchKeyword('不是链接') === '', '不是链接 → 空串');
+  check(toDishName('村驴，真的会做菜') === '村驴', 'toDishName 只留菜名');
+  check(
+    toDishName('酸甜爽脆的腌萝卜保姆级教程来了‼️') === '酸甜爽脆的腌萝卜',
+    '★ toDishName 剥掉「保姆级教程来了」这类营销尾巴',
+    toDishName('酸甜爽脆的腌萝卜保姆级教程来了‼️'),
+  );
+  check(toDishName('【牛肉辣椒酱 保姆级教程来了！】') === '牛肉辣椒酱', 'B站【】+ 空格说明也一起收掉');
+  check(toDishName('蒜香黄油虾仁') === '蒜香黄油虾仁', '本来就干净的菜名不动它');
+  check(toDishName('台式三杯鸡') === '台式三杯鸡', '带「台式」前缀的菜名不会被误剥');
 
   /* 封面猜测只是示意，别猜错得太离谱就行 */
   const art = [
@@ -1324,6 +1745,225 @@ async function githubChecks() {
 }
 
 /* ═══════════ helpers / seed 纯函数 ═══════════ */
+
+/* ═══════════ ai.ts（DeepSeek 识别层）═══════════ */
+
+async function aiChecks() {
+  console.log('\n[AI · Key 工具]');
+  check(maskAiKey(AI_KEY) === 'sk-012••••••••cdef', 'maskAiKey 保留前缀与后四位', `实际「${maskAiKey(AI_KEY)}」`);
+  check(maskAiKey('sk-1') === '••••', 'Key 太短时整体打码');
+  check(normalizeAiKey(' sk-abc\n def ') === 'sk-abcdef', 'normalizeAiKey 去掉所有空白');
+  check(aiKeyShapeError(AI_KEY) === null, '规范的 sk- Key 通过校验');
+  check((aiKeyShapeError('') ?? '').includes('请填写'), '空 Key 报错');
+  check((aiKeyShapeError('ghp_0123456789abcdef0123') ?? '').includes('sk-'), '不是 sk- 开头 → 提示前缀');
+  check((aiKeyShapeError('sk-short') ?? '').includes('没复制全'), '位数不足 → 提示没复制全');
+
+  console.log('\n[AI · 提示词与解析]');
+  {
+    const msgs = buildAiMessages('一段文案');
+    check(msgs[0].role === 'system' && msgs[1].role === 'user', '消息是 system + user 两条');
+    check(/json/i.test(msgs[0].content) && /json/i.test(msgs[1].content), '提示词里带 json（json_object 模式的要求）');
+    check(msgs[1].content.includes('一段文案'), '用户消息里带上了原文');
+    check(/不要编造|绝对不要编造/.test(msgs[0].content), '明确要求不编造');
+    check(/只填菜名/.test(msgs[0].content), '提示词要求标题只填菜名');
+    check(/西红柿炒鸡蛋/.test(msgs[0].content), '提示词给了「只留菜名」的例子');
+    const withPage = buildAiMessages('一段文案', '作者候选: 阿珍');
+    check(withPage[1].content.includes('阿珍') && withPage[1].content.includes('页面线索'), '给了页面线索就一并带上');
+    check(/保姆级/.test(msgs[0].content), '提示词点名要去掉「保姆级 / 教程」这类营销词');
+    check(/酸甜爽脆的腌萝卜保姆级教程来了/.test(msgs[0].content), '提示词给了「只留菜品名」的具体例子');
+    check(/第一条结果/.test(msgs[0].content), '提示词约定：搜索结果页取第一条结果的菜名');
+    check(buildAiMessages('')[1].content.includes('只给了一个链接'), '只给链接（没文案）时提示词也读得通');
+  }
+  check(JSON.stringify(parseJsonLoose('{"title":"a"}')) === '{"title":"a"}', 'parseJsonLoose 直接解析');
+  check(
+    (parseJsonLoose('```json\n{"title":"a"}\n```') as { title: string }).title === 'a',
+    '解析 ```json 代码块',
+  );
+  check(
+    (parseJsonLoose('好的，结果如下：{"title":"a"} 完毕') as { title: string }).title === 'a',
+    '从解释文字里捞出 JSON',
+  );
+  check(parseJsonLoose('完全不是 JSON') === null, '不是 JSON → null');
+  {
+    const r = normalizeAiRecipe({ 菜名: '【番茄牛腩】', 作者: ' 阿珍 ', 做法: '1. 焯水', 小贴士: '少放盐' });
+    check(
+      r.title === '番茄牛腩' && r.author === '阿珍' && r.steps === '1. 焯水' && r.note === '少放盐',
+      '中文字段名 / 书名号也能规整',
+      JSON.stringify(r),
+    );
+    check(normalizeAiRecipe({}).title === '' && normalizeAiRecipe(null).steps === '', '缺字段补空串，不编造');
+    check(normalizeAiRecipe({ title: 'x'.repeat(80) }).title.length === 20, '菜名裁到 20 字');
+    check(
+      normalizeAiRecipe({ title: '酸甜爽脆的腌萝卜保姆级教程来了‼️' }).title === '酸甜爽脆的腌萝卜',
+      '★ 模型丢来整句视频标题 → 收成菜品名',
+      normalizeAiRecipe({ title: '酸甜爽脆的腌萝卜保姆级教程来了‼️' }).title,
+    );
+  }
+
+  console.log('\n[AI · recognizeRecipe]');
+  {
+    const ds = stubFetch([
+      {
+        match: /api\.deepseek\.com\/chat\/completions/,
+        method: 'POST',
+        reply: () => jsonRes({ choices: [{ message: { content: '{"title":"番茄牛腩","steps":"1. 焯水"}' } }] }),
+      },
+    ]);
+    const r = await recognizeRecipe(AI_KEY, '文案');
+    check(r.title === '番茄牛腩' && r.steps === '1. 焯水', '成功路径：解析出菜名与做法');
+    check(ds.calls[0].headers.Authorization === `Bearer ${AI_KEY}`, '带上 Bearer Key');
+    check(
+      (ds.calls[0].body as { response_format?: { type?: string } }).response_format?.type === 'json_object',
+      '要求 JSON 输出',
+    );
+    check(ds.calls[0].url === 'https://api.deepseek.com/chat/completions', '打到 chat/completions 端点', ds.calls[0].url);
+    ds.restore();
+  }
+  {
+    const ds = stubFetch([
+      { match: /.*/, method: 'POST', reply: () => jsonRes({ choices: [{ message: { content: '' } }] }) },
+    ]);
+    const e = await aiErrOf(() => recognizeRecipe(AI_KEY, '文案'));
+    check(e?.kind === 'format' && e.message.includes('没有返回内容'), '空内容 → format 错误');
+    ds.restore();
+  }
+  {
+    const ds = stubFetch([
+      { match: /.*/, method: 'POST', reply: () => jsonRes({ choices: [{ message: { content: '不是 JSON' } }] }) },
+    ]);
+    const e = await aiErrOf(() => recognizeRecipe(AI_KEY, '文案'));
+    check(e?.kind === 'format', '返回不是 JSON → format 错误');
+    ds.restore();
+  }
+  {
+    const ds = stubFetch([{ match: /.*/, method: 'POST', reply: () => { throw new Error('boom'); } }]);
+    const e = await aiErrOf(() => recognizeRecipe(AI_KEY, '文案'));
+    check(e?.kind === 'network' && e.message.includes('连不上 DeepSeek'), '网络异常 → network 错误');
+    ds.restore();
+  }
+
+  console.log('\n[AI · 错误分类]');
+  const statusCases: Array<{ status: number; kind: DeepseekError['kind']; hint: string }> = [
+    { status: 401, kind: 'auth', hint: 'API Key 无效' },
+    { status: 402, kind: 'balance', hint: '余额不足' },
+    { status: 429, kind: 'ratelimit', hint: '太频繁' },
+    { status: 400, kind: 'badrequest', hint: '拒绝' },
+    { status: 500, kind: 'server', hint: '服务端' },
+  ];
+  for (const c of statusCases) {
+    const ds = stubFetch([{ match: /.*/, method: 'POST', reply: () => jsonRes({}, c.status) }]);
+    const e = await aiErrOf(() => recognizeRecipe(AI_KEY, '文案'));
+    check(
+      e?.kind === c.kind && (e?.message ?? '').includes(c.hint),
+      `${c.status} → kind=${c.kind}（${c.hint}）`,
+      `实际 kind=${e?.kind} message=${e?.message}`,
+    );
+    ds.restore();
+  }
+  {
+    /* 400 会把 DeepSeek 原话带给用户，比我们自己编的笼统文案更有用 */
+    const ds = stubFetch([
+      { match: /.*/, method: 'POST', reply: () => jsonRes({ error: { message: 'content is too long' } }, 400) },
+    ]);
+    const e = await aiErrOf(() => recognizeRecipe(AI_KEY, '文案'));
+    check(e?.kind === 'badrequest' && (e?.message ?? '').includes('content is too long'), '400 带上 DeepSeek 的原始说明', e?.message);
+    ds.restore();
+  }
+
+  console.log('\n[AI · verifyAiKey]');
+  {
+    const ds = stubFetch([{ match: /api\.deepseek\.com\/models/, reply: () => jsonRes({ object: 'list', data: [] }) }]);
+    const e = await aiErrOf(() => verifyAiKey(AI_KEY));
+    check(e === null, 'Key 有效 → 测试通过');
+    check(ds.calls[0].url === 'https://api.deepseek.com/models' && ds.calls[0].method === 'GET', '测试打的是 /models（不消耗对话额度）');
+    ds.restore();
+  }
+  {
+    const ds = stubFetch([{ match: /.*/, reply: () => jsonRes({ error: { message: 'Authentication Fails' } }, 401) }]);
+    const e = await aiErrOf(() => verifyAiKey(AI_KEY));
+    check(e?.kind === 'auth', 'Key 失效 → auth 错误');
+    ds.restore();
+  }
+}
+
+/** 跑一个必然抛错的 AI 调用，取回 DeepseekError（不是则记为 null） */
+async function aiErrOf(fn: () => Promise<unknown>): Promise<DeepseekError | null> {
+  try {
+    await fn();
+    return null;
+  } catch (e) {
+    return e instanceof DeepseekError ? e : null;
+  }
+}
+
+/* ═══════════ reader.ts（读原链接）═══════════ */
+
+async function readerChecks() {
+  console.log('\n[读链接 · URL 与请求]');
+  check(isFetchableUrl('https://xhslink.com/a/x'), 'http(s) 链接可读');
+  check(isFetchableUrl('  http://b23.tv/xyz  '), '首尾空白不影响判断');
+  check(!isFetchableUrl('javascript:alert(1)'), 'javascript: 协议拒绝');
+  check(!isFetchableUrl('这不是链接'), '不是链接就拒绝');
+
+  {
+    /* 非法链接根本不该发请求 */
+    const rd = stubFetch([]);
+    const e = await readerErrOf(() => readPageHtml('javascript:alert(1)'));
+    check(e?.kind === 'badurl', '非法链接 → badurl，且不发请求');
+    check(rd.calls.length === 0, '没发任何请求');
+    rd.restore();
+  }
+  {
+    const rd = stubFetch([
+      { match: /^https:\/\/r\.jina\.ai\//, reply: () => new Response('<html><body>hi</body></html>') },
+    ]);
+    const html = await readPageHtml('https://xhslink.com/a/x');
+    check(html.includes('hi'), '成功路径：返回页面 HTML');
+    check(rd.calls[0].url === 'https://r.jina.ai/https://xhslink.com/a/x', '拼到 r.jina.ai 后面', rd.calls[0].url);
+    check(rd.calls[0].headers['x-respond-with'] === 'html', '要 HTML（作者名在里面）');
+    rd.restore();
+  }
+  {
+    const rd = stubFetch([{ match: /.*/, reply: () => jsonRes({ message: 'blocked' }, 403) }]);
+    const e = await readerErrOf(() => readPageHtml('https://xhslink.com/a/x'));
+    check(e?.kind === 'http' && (e?.message ?? '').includes('403'), '抓取被拒 → http 错误（带状态码）');
+    rd.restore();
+  }
+  {
+    const rd = stubFetch([{ match: /.*/, reply: () => { throw new Error('boom'); } }]);
+    const e = await readerErrOf(() => readPageHtml('https://xhslink.com/a/x'));
+    check(e?.kind === 'network', '网络异常 → network 错误');
+    rd.restore();
+  }
+
+  console.log('\n[读链接 · 页面线索压缩]');
+  {
+    const clues = compactPage(PAGE_HTML, 'https://xhslink.com/a/x');
+    check(clues.includes('番茄牛腩 - 小红书'), '抽出页面标题');
+    check(clues.includes('酸甜开胃'), '抽出 og:description');
+    check(clues.includes('爱做饭的阿珍'), 'meta 作者 / 作者块进了候选');
+    check(clues.includes('阿珍的厨房'), '★ 内嵌 JSON 里的昵称也捞得到');
+    check(clues.includes('牛腩冷水下锅'), '带上了正文摘录（做法线索）');
+    check(clues.includes('链接: https://xhslink.com/a/x'), '带上原链接');
+  }
+  {
+    const clues = compactPage(
+      '<html><head></head><body><div class="author-name">登录</div><div class="nickname">关注</div><p>正文</p></body></html>',
+    );
+    check(!clues.includes('作者候选'), '「登录 / 关注」这类噪音不会被当成作者', clues);
+  }
+  check(compactPage('<html><body></body></html>') === '', '空页面 → 空线索（不编造）');
+}
+
+/** 跑一个必然抛错的读取，取回 ReaderError（不是则记为 null） */
+async function readerErrOf(fn: () => Promise<unknown>): Promise<ReaderError | null> {
+  try {
+    await fn();
+    return null;
+  } catch (e) {
+    return e instanceof ReaderError ? e : null;
+  }
+}
 
 function helperChecks() {
   console.log('\n[辅助函数 · 称呼与身份]');
@@ -1804,7 +2444,7 @@ async function syncChecks() {
     const m = await mount('/recipe/r5');
     for (let i = 1; i <= 9; i++) {
       await m.click('#editRecipeBtn');
-      await m.type('.editrow textarea', `第 ${i} 次备注`);
+      await m.type('#editNote', `第 ${i} 次备注`);
       await m.click('.editrow .btn-sticker.primary');
     }
     await m.wait(50);
@@ -2173,6 +2813,60 @@ async function edgeChecks() {
     await m.close();
   }
 
+  console.log('\n[边界 · 时间只在详情页显示]');
+  localStorage.clear();
+  {
+    useDb();
+    const m = await mount('/library');
+    const row = m.$$('.cardlist .dishrow')[4]; /* r5 台式三杯鸡 */
+    check(m.$('.dishrow .when') === null, '★ 列表行里没有时间栏');
+    check(!(row?.textContent ?? '').includes('8月26日'), '★ 列表不显示更新时间', row?.textContent ?? '');
+    check(!m.html().includes('8月26日'), '整页都找不到更新时间');
+    await m.close();
+  }
+  {
+    useDb();
+    const m = await mount('/recipe/r5');
+    check(m.html().includes('收藏于 8月9日'), '★ 详情页显示收藏时间');
+    check(m.html().includes('更新于 8月26日'), '★ 详情页显示更新时间');
+    check(m.html().includes('做法') && m.html().includes('麻油小火煸姜片到卷边'), '★ 详情页展示做法');
+    await m.close();
+  }
+  {
+    /* 改完菜谱：更新时间变成「刚刚」，收藏时间不动 */
+    useDb();
+    const m = await mount('/recipe/r5');
+    await m.click('#editRecipeBtn');
+    await m.type('#editNote', '改一下备注');
+    await m.click('.editrow .btn-sticker.primary');
+    await m.wait(200);
+    check(m.html().includes('收藏于 8月9日'), '★ 改完收藏时间不变');
+    check(m.html().includes('更新于 刚刚'), '★ 改完更新时间变「刚刚」');
+    await m.close();
+  }
+  {
+    /* 老缓存 / 老仓库里的菜谱没有 createdAt → 规整时拿 updatedAt 顶上 */
+    const legacy = {
+      id: 'r9',
+      title: '老菜谱',
+      source: 'red',
+      url: 'https://example.com/old',
+      author: '旧版本',
+      art: '',
+      note: '',
+      updatedAt: '上周',
+    } as unknown as Recipe;
+    check(normalizeRecipes([legacy])[0].createdAt === '上周', '★ 缺 createdAt 的老菜谱用 updatedAt 顶上');
+    check(normalizeRecipes([legacy])[0].steps === '', '缺做法的老菜谱补空串');
+    useDb((db) => {
+      db.recipes = [legacy];
+    });
+    const m = await mount('/recipe/r9');
+    check(m.html().includes('收藏于 上周'), '老数据能正常显示收藏时间');
+    check(!m.html().includes('undefined'), '页面里不会冒出 undefined');
+    await m.close();
+  }
+
   console.log('\n[边界 · 详情页改菜名 / 原文出处 / 备注]');
   localStorage.clear();
   {
@@ -2281,6 +2975,7 @@ async function edgeChecks() {
         repo: 'owner/repo',
         branch: 'dev',
         intervalSec: 600,
+        aiKey: AI_KEY,
       }),
     );
     await m.clickByText('details.adv .btn-sticker.solid', '导入并填充');
@@ -2288,6 +2983,7 @@ async function edgeChecks() {
     check(m.value('#fNickname') === '小辉' && m.value('#fPartnerNickname') === '小红', '导入填充两个昵称');
     check(m.value('#fRepo') === 'owner/repo' && m.value('#fBranch') === 'dev', '导入填充仓库与分支');
     check(m.value('#fInterval') === '600', '导入填充拉取间隔', m.value('#fInterval'));
+    check(m.value('#fAiKey') === AI_KEY, '导入也填充 DeepSeek Key（可选字段）');
     check(m.html().includes('配置已导入'), '给出导入成功提示');
     await m.close();
   }
@@ -2305,6 +3001,17 @@ async function edgeChecks() {
     check(m.html().includes('配置缺少'), '缺字段 → 报缺少哪些字段');
     await m.close();
   }
+  {
+    /* aiKey 是可选的，但给了就得是合法形状 */
+    const m = await mount('/setup');
+    await m.type(
+      '#importJson',
+      JSON.stringify({ nickname: '小辉', token: FAKE_CFG.token, repo: 'owner/repo', aiKey: 'ghp_wrong' }),
+    );
+    await m.clickByText('details.adv .btn-sticker.solid', '导入并填充');
+    check(m.html().includes('aiKey 格式不对'), '导入里 aiKey 形状不对 → 报错');
+    await m.close();
+  }
 
   console.log('\n[边界 · 首次设置：本地模式]');
   localStorage.clear();
@@ -2320,6 +3027,75 @@ async function edgeChecks() {
     check(db.configured === true && db.config?.repo === '' && db.config?.token === '', '本地模式：configured 但未连仓库');
     check(db.profiles.a.nickname === '小辉', '本地模式：昵称落库到本座');
     check(!m.html().includes('让菜谱跟着仓库走'), '进入菜谱库（离开向导）');
+    await m.close();
+  }
+  {
+    /* 本地模式下也能先填好 Key（之后接上仓库就能直接用 AI） */
+    const m = await mount('/setup');
+    await m.type('#fNickname', '小辉');
+    await m.type('#fAiKey', AI_KEY);
+    await m.clickByText('.btn-ghost', '稍后再说（本地模式）');
+    await m.wait(250);
+    const db = readDb();
+    check(db.config?.aiKey === AI_KEY && db.config?.repo === '', '★ 本地模式也能把 Key 记下来（不连仓库）');
+    await m.close();
+  }
+
+  console.log('\n[边界 · 首次设置：可选填 DeepSeek Key]');
+  localStorage.clear();
+  {
+    const gh = installFakeGithub({});
+    const m = await mount('/setup');
+    const field = m.$('#fAiKey');
+    check(field !== null, '高级设置里有 DeepSeek Key 输入框');
+    check(field?.closest('details.adv') !== null, '★ 它就在「高级设置」折叠区里');
+    check(field?.getAttribute('type') === 'password', 'Key 用密码框');
+    check(
+      field?.getAttribute('autocapitalize') === 'none' && field?.getAttribute('autocorrect') === 'off',
+      '关掉手机键盘自动大写 / 自动更正',
+    );
+    check(m.html().includes('可留空'), '标注了「可留空」');
+
+    await m.type('#fNickname', '小辉');
+    await m.type('#fToken', FAKE_CFG.token);
+    await m.type('#fRepo', FAKE_CFG.repo);
+    await m.type('#fAiKey', AI_KEY);
+    await m.click('button[type="submit"]');
+    await m.wait(1500);
+    const cfg = readDb().config!;
+    check(cfg.aiKey === AI_KEY, '★ 首次设置填的 Key 落到 config（仅本机）', cfg.aiKey);
+    check(cfg.aiKeyMask === maskAiKey(AI_KEY), '只存掩码供展示', cfg.aiKeyMask);
+    check(cfg.aiOn === true, 'AI 开关默认是开的');
+    check(readDb().configured === true && cfg.repo === FAKE_CFG.repo, '连接照常成功');
+    await m.close();
+    gh.restore();
+  }
+  {
+    /* 可选字段：不填照样能连 */
+    const gh = installFakeGithub({});
+    const m = await mount('/setup');
+    await m.type('#fNickname', '小辉');
+    await m.type('#fToken', FAKE_CFG.token);
+    await m.type('#fRepo', FAKE_CFG.repo);
+    await m.click('button[type="submit"]');
+    await m.wait(1500);
+    check(readDb().config!.aiKey === '' && readDb().config!.aiKeyMask === '', '★ Key 留空不影响连接');
+    check(readDb().configured === true, '照样连上仓库');
+    await m.close();
+    gh.restore();
+  }
+  {
+    /* 填了就得合法；清空又回到「可选」 */
+    const m = await mount('/setup');
+    await m.type('#fNickname', '小辉');
+    await m.type('#fAiKey', 'ghp_0123456789abcdef012345');
+    await m.blur('#fAiKey');
+    check(m.html().includes('以 sk- 开头'), '形状不对 → 给出针对性提示', m.html().slice(0, 200));
+    check((m.$('#fAiKey')?.closest('.field')?.className ?? '').includes('invalid'), '字段标红');
+
+    await m.type('#fAiKey', '');
+    await m.blur('#fAiKey');
+    check(!(m.$('#fAiKey')?.closest('.field')?.className ?? '').includes('invalid'), '★ 清空后不再报错（本来就是可选）');
     await m.close();
   }
 }
@@ -2366,6 +3142,31 @@ async function boundaryChecks() {
   }
 }
 
+/* ═══════════ 八、仓库结构（GitHub Actions 自动打包）═══════════ */
+
+/** 工作流本身要 GitHub 的 runner 才跑得起来，这里退一步做静态断言：
+    关键步骤（触发分支 / 打包命令 / 产物 / 建 Release / 权限）缺一个就报错，
+    免得哪天把自动打包改坏了也没人发现。 */
+function workflowChecks() {
+  console.log('\n[仓库 · GitHub Actions 自动打包]');
+  let yml = '';
+  try {
+    yml = readFileSync('.github/workflows/android-apk.yml', 'utf8');
+  } catch (e) {
+    fail('自动打包工作流在仓库里', e instanceof Error ? e.message : String(e));
+    return;
+  }
+  check(yml.includes('branches: [main]'), '★ push 到 main 就触发');
+  check(yml.includes('npm run apk'), '★ 跑的就是 npm run apk');
+  check(
+    yml.includes('android/app/build/outputs/apk/debug/app-debug.apk'),
+    '上传 app-debug.apk 作为构建产物',
+  );
+  check(yml.includes('gh release create') && yml.includes('--latest'), '★ 建 Release 并标 latest');
+  check(yml.includes('contents: write'), '给了建 Release 需要的 contents: write');
+  check(yml.includes("java-version: '17'"), 'JDK 17（AGP 8.2.1 要求）');
+}
+
 /* ═══════════ 跑 ═══════════ */
 
 /* 铺一层底：整个套件期间 api.github.com 一律被拦截。
@@ -2379,10 +3180,13 @@ await interactionChecks();
 await parseChecks();
 helperChecks();
 await githubChecks();
+await aiChecks();
+await readerChecks();
 await migrationChecks();
 await connectChecks();
 await syncChecks();
 await edgeChecks();
+workflowChecks();
 
 netGuard.restore();
 
