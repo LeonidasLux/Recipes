@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">
+  <rect x="6" y="6" width="84" height="84" rx="26" fill="#FFF4E4"/>
+  <ellipse cx="48" cy="64" rx="31" ry="9" fill="#FFE9C7" stroke="#3A2A1E" stroke-width="3"/>
+  <ellipse cx="48" cy="61" rx="23" ry="6" fill="#EFE0C2"/>
+  <!-- 黄油汁 -->
+  <ellipse cx="46" cy="60" rx="14" ry="4" fill="#FFC24D" opacity=".8"/>
+  <!-- 三只虾 -->
+  <path d="M34 58c-2-6 3-12 9-12 6 0 11 6 9 12" fill="#F2B16B" stroke="#3A2A1E" stroke-width="2.6" stroke-linejoin="round"/>
+  <path d="M38 46c-3 1-5 4-5 8" fill="none" stroke="#D98A4B" stroke-width="2.6" stroke-linecap="round"/>
+  <path d="M42 46c-3 1-5 4-5 8" fill="none" stroke="#D98A4B" stroke-width="2.6" stroke-linecap="round"/>
+  <path d="M46 46c-3 1-5 4-5 8" fill="none" stroke="#D98A4B" stroke-width="2.6" stroke-linecap="round"/>
+  <path d="M34 52c3 1 5 1 8 0M41 54c3 1 6 1 9 0" fill="none" stroke="#3A2A1E" stroke-width="1.6" opacity=".7"/>
+  <!-- 蒜末与香草 -->
+  <circle cx="30" cy="62" r="1.7" fill="#F3D48A"/>
+  <circle cx="63" cy="61" r="1.7" fill="#F3D48A"/>
+  <path d="M56 50c1-3 4-4 6-3" fill="none" stroke="#4FA46A" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="20" cy="24" r="3.5" fill="#FFB52E"/>
+</svg>

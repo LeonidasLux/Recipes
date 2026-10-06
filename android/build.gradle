@@ -1,0 +1,40 @@
+// Top-level build file where you can add configuration options common to all sub-projects/modules.
+
+// 国内镜像优先。
+// 本机直连 repo.maven.apache.org 时，JVM 的 TLS 握手会被中间人拦掉
+// （解析到 180.178.40.218，证书 SAN 对不上），Gradle 直接构建失败。
+// 阿里云镜像代理了 central / google / gradle-plugin 三处，放在最前面即可全部命中；
+// 后面的 google() / mavenCentral() 保留作为兜底，正常不会走到。
+
+buildscript {
+    repositories {
+        maven { url = uri('https://maven.aliyun.com/repository/public') }
+        maven { url = uri('https://maven.aliyun.com/repository/google') }
+        maven { url = uri('https://maven.aliyun.com/repository/gradle-plugin') }
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.2.1'
+        classpath 'com.google.gms:google-services:4.4.0'
+
+        // NOTE: Do not place your application dependencies here; they belong
+        // in the individual module build.gradle files
+    }
+}
+
+apply from: "variables.gradle"
+
+allprojects {
+    repositories {
+        maven { url = uri('https://maven.aliyun.com/repository/public') }
+        maven { url = uri('https://maven.aliyun.com/repository/google') }
+        maven { url = uri('https://maven.aliyun.com/repository/gradle-plugin') }
+        google()
+        mavenCentral()
+    }
+}
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}

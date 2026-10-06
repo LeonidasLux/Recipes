@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">
+  <rect x="6" y="6" width="84" height="84" rx="26" fill="#F6ECDC"/>
+  <!-- 砂锅 -->
+  <path d="M22 50c2 10 11 16 26 16s24-6 26-16h-7c-2 6-10 10-19 10s-17-4-19-10Z" fill="#C98659" stroke="#3A2A1E" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M30 52c2 5 10 8 18 8s16-3 18-8" fill="none" stroke="#3A2A1E" stroke-width="2.6"/>
+  <!-- 锅沿 -->
+  <path d="M25 50c4-5 14-7 23-7s19 2 23 7h-6c-3-3-10-4-17-4s-14 1-17 4Z" fill="#B36B42" stroke="#3A2A1E" stroke-width="2.6" stroke-linejoin="round"/>
+  <!-- 鸡块与酱色 -->
+  <path d="M38 42c-1-5 4-9 9-8 6 1 9 6 7 10-2 3-6 3-9 3-4 0-6-2-7-5Z" fill="#E7A65E" stroke="#3A2A1E" stroke-width="2.4" stroke-linejoin="round"/>
+  <path d="M47 34v8M50 38h-6" stroke="#C98659" stroke-width="2" stroke-linecap="round"/>
+  <!-- 酱色光泽 -->
+  <path d="M40 46c2 2 7 2 9 0" fill="none" stroke="#8C4A1E" stroke-width="2.6" stroke-linecap="round" opacity=".65"/>
+  <!-- 九层塔 -->
+  <path d="M62 40c-2-4 1-8 5-8 4 0 6 4 3 7-1 1-3 1-5 0Z" fill="#5BA866" stroke="#3A2A1E" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M63 44c1-3 4-4 6-3" fill="none" stroke="#4FA46A" stroke-width="2" stroke-linecap="round"/>
+  <!-- 干辣椒 -->
+  <path d="M30 36c1-3 4-3 5-1 1 2-1 4-4 4-1 0-1-2-1-3Z" fill="#E24B3C" stroke="#3A2A1E" stroke-width="2"/>
+  <circle cx="22" cy="24" r="3.4" fill="#FFB52E"/>
+  <path d="M44 24c-2 3 2 4 0 7" fill="none" stroke="#3A2A1E" stroke-width="2.4" stroke-linecap="round" opacity=".6"/>
+</svg>
