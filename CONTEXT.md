@@ -20,14 +20,15 @@
 
 - `SourceKey`：`red`（小红书）/ `bili`（B站）/ `douyin`（抖音）/ `generic`（其它网页）/ `manual`（**手动添加，没有来源平台**）。
 - `PersonKey`：`a` / `b`（两个人；角色随订单方向而定，不再有 orderer / cook 两个固定身份）；`OrderStatus`：`pending` / `accepted` / `done`；`Meal`：`lunch` / `dinner`；`SyncStatus`：`off` / `idle` / `busy` / `ok` / `err`；`ViewRole`：`order` / `cook`（本机当前角色，只决定底部第二格与默认屏，不改变数据归属）。
-- `Recipe`：`id, title, source, url, author, art, steps, note, createdAt, updatedAt`。`art` 为本地插画文件名（如 `tomato-beef.svg`），空串则用标题首字占位。`steps` 是**做法**（多行文本，详情页按换行原样展示），手动添加的菜谱主要就靠它；剪藏来的可以留空。`createdAt` 是收藏时间、`updatedAt` 是最后编辑时间，都用统一时间戳（新增 / 编辑时写当前时刻）；两个时间都只在菜谱详情页显示。
+- `Recipe`：`id, title, source, url, author, art, steps, note, createdAt, updatedAt, orderCount`。`art` 为本地插画文件名（如 `tomato-beef.svg`），空串则用标题首字占位。`steps` 是**做法**（多行文本，详情页按换行原样展示），手动添加的菜谱主要就靠它；剪藏来的可以留空。`createdAt` 是收藏时间、`updatedAt` 是最后编辑时间，都用统一时间戳（新增 / 编辑时写当前时刻）；两个时间都只在菜谱详情页显示。`orderCount` 是**点单次数**（默认 0，老数据规整时补 0）：下一次含这道菜的单就 +1，删掉那张单再 −1（不低于 0）；临时手输的菜没有菜谱，不计。
 - `OrderItem`：`recipeId: string | null, dishName`。`recipeId` 为 `null` 表示**临时手动输入的菜**。
 - `Order`：`id, meal, status, items[], note, createdAt, updatedAt, placedBy`（一单多菜；`placedBy` 是下单那个人，做饭的是另一个人）。`createdAt` / `updatedAt` 是统一时间戳（下单、改状态时写当前时刻）。
 - `Profile`：`nickname, updatedAt`；`Profiles`：`{ a, b }`（昵称绑人、不绑角色，所以换角色不会串位）。`updatedAt` 是统一时间戳（改名时写当前时刻）；还没设过名字时是占位符 `—`。**两格一定都在**：任何来源的 profiles 都先过 `normalizeProfiles`（缺格补空、角色形状对号入座），因为调用方（`joinAs` / `setProfiles` / 同步页）都直接取 `profiles[人].nickname`。
-- `SyncConfig`：`repo, branch, token, tokenMask, aiKey, aiKeyMask, aiOn, me, view, autoPull, intervalSec(0 | 60 | 600), lastPulledAt, lastPushedAt, lastSyncError?`。其中 `token`、`aiKey`/`aiKeyMask`（DeepSeek API Key 及其掩码）、`me`（本机这个人是谁）与 `view`（本机当前角色）**仅存本机，永不入库**；`aiOn` 是「识别时是否走 AI」的本机开关（默认 `true`，没填 Key 时不起作用）。`lastPulledAt` / `lastPushedAt` 是统一时间戳。老缓存缺这几个字段由 `migrate()` 补齐。
+- `SyncConfig`：`repo, branch, token, tokenMask, aiKey, aiKeyMask, aiOn, me, view, autoPull, intervalSec(0 | 60 | 600), lastPulledAt, lastPushedAt, lastSyncError?`。其中 `token`、`aiKey`/`aiKeyMask`（DeepSeek API Key 及其掩码）、`me`（本机这个人是谁）与 `view`（本机当前角色）**仅存本机，永不入库**；`aiOn` 是「识别时是否走 AI」的本机开关（默认 `true`，没填 Key 时不起作用）。`lastPulledAt` / `lastPushedAt` 是**精确到秒**的时间戳（`2026-10-07 09:40:12`，见下条时间格式）。老缓存缺这几个字段由 `migrate()` 补齐。
 - `DB`：`schema(=3), configured, updatedAt, config, profiles, recipes[], orders[], logs[]`。`updatedAt` 是统一时间戳。`logs` **全量保留**（只存本机，不进仓库），每条 `LogEntry.t` 也是统一时间戳；设置页默认折叠，展开后滚动懒加载，每次 20 条。
 - 仓库文件形状：`RemoteRecipes { schema, updatedAt, recipes[] }`、`RemoteOrders { schema, updatedAt, orders[] }`、`RemoteProfiles { schema, updatedAt, profiles }`。
-- **时间字段统一格式**：所有**记录下来的时间字段**（菜谱收藏 / 更新时间、订单下单 / 更新时间、昵称更新时间、同步日志时间、同步 / 数据库时间戳）一律写成 `YYYY-MM-DD HH:MM`（如 `2026-10-07 09:40`），由 `helpers.ts` 的 `nowStamp()` / `stamp()` 产出，**必须带年月日**，不能只剩下小时和分钟。`dateKey(d)` 给出 `YYYY-MM-DD`，供「是不是今天」这类比较用。占位符 `—` 表示「还没有这个时间」（如未设昵称的档案）。
+- **时间字段统一格式**：所有**记录下来的时间字段**（菜谱收藏 / 更新时间、订单下单 / 更新时间、昵称更新时间、同步日志时间、数据库时间戳）一律写成 `YYYY-MM-DD HH:MM`（如 `2026-10-07 09:40`），由 `helpers.ts` 的 `nowStamp()` / `stamp()` 产出，**必须带年月日**，不能只剩下小时和分钟。`dateKey(d)` 给出 `YYYY-MM-DD`，供「是不是今天」这类比较用。占位符 `—` 表示「还没有这个时间」（如未设昵称的档案）。
+- **同步时间多一位秒**：`lastPulledAt` / `lastPushedAt` / 同步状态里的 `lastAt` 用 `nowStampSec()` 写成 `YYYY-MM-DD HH:MM:SS`（如 `2026-10-07 09:40:12`）—— 设置页那行「已同步 · …」得看得出确实又同步过一次，分钟精度常常看不出变化。其余记录时间仍到分钟。
 
 ## 3. 本地状态容器（`src/data/store.tsx`）
 
@@ -35,7 +36,7 @@
 - `rev` 计数器：**本地内容改动 +1**；拉取远端不 +1。同步引擎据 `rev !== pushedRev` 判断「有本地改动待推送」。
 - 两个提交助手：`commit`（`bumpRev=true`，内容改动 → 会触发推送）与 `commitSilent`（`bumpRev=false`，本机设置：我是谁 / 当前角色 / token / 开关 / 时间戳 / `applyRemote`）。
 - 持久化到 `localStorage`，key = `jishiben-db-v1`；启动时 `loadDb()` → `migrate()`（v1 单菜订单 → v2 `items[]`；v2 角色槽 → v3 两个人：`orderer`/`cook` 映射为 `a`/`b`、`config.role` → `config.me`、旧订单补 `placedBy`；旧的 `config.nickname` 迁入 `profiles`；补齐字段）。**形状规整（`normalizeOrders` / `normalizeProfiles`）每次都会跑，不看 `schema` 版本号** —— 仓库里存量的老结构不等于「缓存版本旧」，只按版本号判断会漏掉。
-- 对外 API：`addRecipe`、`updateRecipe`（改菜名 / 原文出处 / 备注）、`deleteRecipe`（删菜谱；订单里存的是菜名快照，不受影响）、`addOrder`（自动带 `placedBy = me`，可带 `note`）、`deleteOrder`（删整张单；内容改动，会触发推送）、`setOrderStatus`、`setProfiles`（按人槽改昵称）、`setMe`（切「我是谁」）、`setView`（切「当前角色」→ 底部第二格在点单 / 掌勺之间换）、`joinAs`（首次设置：按名字把本机认领到 `a`/`b` 一格并落昵称）、`setConfig`、`patchConfig`、`disconnect`、`applyRemote`、`setSyncState`。
+- 对外 API：`addRecipe`（新菜谱 `orderCount = 0`）、`updateRecipe`（改菜名 / 原文出处 / 备注）、`deleteRecipe`（删菜谱；订单里存的是菜名快照，不受影响）、`addOrder`（自动带 `placedBy = me`，可带 `note`；单里每道有菜谱的菜 `orderCount + 1`）、`deleteOrder`（删整张单；内容改动，会触发推送；单里每道有菜谱的菜 `orderCount − 1`，不低于 0）、`setOrderStatus`、`setProfiles`（按人槽改昵称）、`setMe`（切「我是谁」）、`setView`（切「当前角色」→ 底部第二格在点单 / 掌勺之间换）、`joinAs`（首次设置：按名字把本机认领到 `a`/`b` 一格并落昵称）、`setConfig`、`patchConfig`、`disconnect`、`applyRemote`、`setSyncState`。
 - 派生状态：`needsSetup = !configured`；`connected = 有 repo 且 有 token`；`me`（本机这个人）；`view`（本机当前角色，缺省 `order`）。
 - 业务副作用（写日志、改 `updatedAt`）在对应 action 内完成，例如加菜谱 / 下单 / 改状态 / 改昵称都会 `pushLog(..., 'ok', ...)`。
 - `applyRemote` 只在远端**确实给了**某一块时才替换该块，避免拉取冲掉本地并发的配置 / 改动；替换前先用 `normalizeOrders` / `normalizeProfiles` 把老仓库里的旧结构（角色形状的 profiles、单菜订单）规整成当前 schema，否则按 `a` / `b` 取值的地方会在渲染期抛错、整页白屏。
@@ -60,7 +61,8 @@ GitHub Contents API：
 - **推送 `doPush`**：逐份比对 `lastPushed`，**只推内容真变了的那一份**（改昵称不会重写菜谱/订单）。遇到 `conflict` 自动 `refreshShas` 后重试一次。
 - **提交即同步**：`connected` 且 `rev !== pushedRev` 时，700ms 防抖自动推送。
 - **后台轮询**：`autoPull` 且 `intervalSec > 0` 时定时拉取；有未推改动或正在忙则跳过本次。
-- **`syncNow`**：有本地改动先推，否则拉；拉到 `empty` 则推；全程更新五态并 toast。
+- **`syncNow(options?)`**：有本地改动先推，否则拉；拉到 `empty` 则推；全程更新五态。默认成功弹「同步完成」，传 `{ toast: false }` 则成功不弹（失败照旧弹）—— 给「切屏顺手同步一次」用，那种场景的反馈是底部设置格图标的闪烁。**点底部第二格（点单 / 掌勺）、以及切点单 / 掌勺角色**都会调它顺手同步一次（未连接时什么都不做，不会弹「还没连接仓库」）。
+- 普通拉取**不动 `config`**（config 是本机设置、仓库里没有；`storeRef` 可能比当前 state 旧，比如刚切完角色就同步，拿旧 cfg 覆盖会把刚改的 `view` / `me` 抹回去）。只有 `connect()` 才把刚填的配置一起落库（`doPull(cfg, { applyConfig: true })`）。
 - **`connect(cfg)`**：`verifyRepo` → `setConfig`（`configured=true`）→ `doPull`；空仓库则把本机内容作为初始内容推送，返回 `{ seeded }`。连接期间 `suppressAutoPush` 挂起自动推送，结束后把 `pushedRev` 对账到当前 `rev`。
 - **`pull`**：只拉取。
 - **`disconnect`**：清 `config`、`configured=false`，同步状态置 `off`。
@@ -104,8 +106,8 @@ GitHub Contents API：
   - 二级页 = `/recipe/:id`、`/add`。「页内返回栈」按路由 push / pop / replace 记台账：**二级页必须靠 push 进入**，所以它们上面按返回都回上一屏而不是退出应用。
   - 二级页的「返回」按钮与「保存 / 删除」后的收尾走 `usePageBack(兜底路由)`（`src/lib/back.tsx`），与物理返回键同一套判断，也保证返回键不会退回到一张已经交掉的表单。
   - 网页端（PWA）不接管：`Capacitor.isNativePlatform()` 为 false 时返回键交给浏览器自己。
-- **底部导航 4 格**：`[菜谱库] [点单 / 掌勺] [＋添加] [设置]`（第四格路由仍是 `/sync`，只是入口叫「设置」）。第二格跟着**本机当前角色**（`config.view`）走：角色是点单 → 第二格「点单」（`/order`）；角色是掌勺 → 第二格「掌勺」（`/cook`）。角色**不绑在人身上**，只决定这格指向哪块屏；切角色的入口就贴在第二格那块屏（点单 / 掌勺）的**右上角**（`RoleSwitch`，紧凑的「点单 | 掌勺」贴纸开关），切完顺手跳到对应那屏；是本地设置、不触发推送。**掌勺那边还有没做完的单时**（对方点的、状态不是 `done`），开关右上角挂一枚数字红点（数字就是单数，超过 99 显示 `99+`），停在哪块屏都看得见。四格之间换屏走 `replace`（中间那格「＋添加」是二级页，仍走 push），理由见下条。
-- **「设置」格的图标就是同步指示灯**：已同步（`ok` / `idle`）→ 图标绿色；同步失败（`err`）→ 图标红色；未连接（`off`）与同步中（`busy`）保持默认色。同步状态只在**设置页**和这枚图标上体现，其他屏（菜谱库 / 点单 / 掌勺）不再挂顶栏 pill。
+- **底部导航 4 格**：`[菜谱库] [点单 / 掌勺] [＋添加] [设置]`（第四格路由仍是 `/sync`，只是入口叫「设置」）。第二格跟着**本机当前角色**（`config.view`）走：角色是点单 → 第二格「点单」（`/order`）；角色是掌勺 → 第二格「掌勺」（`/cook`）。**点这第二格会顺手 `syncNow({ toast: false })` 同步一次** —— 进到点单 / 掌勺时看到的单子应该是最新的，不必等下一次轮询。角色**不绑在人身上**，只决定这格指向哪块屏；切角色的入口就贴在第二格那块屏（点单 / 掌勺）的**右上角**（`RoleSwitch`，紧凑的「点单 | 掌勺」贴纸开关），切完顺手跳到对应那屏，**并同样顺手同步一次**；角色本身是本地设置、不触发推送（同步那一趟只拉，不写仓库）。**掌勺那边还有没做完的单时**（对方点的、状态不是 `done`），开关右上角挂一枚数字红点（数字就是单数，超过 99 显示 `99+`），停在哪块屏都看得见。四格之间换屏走 `replace`（中间那格「＋添加」是二级页，仍走 push），理由见下条。
+- **「设置」格的图标就是同步指示灯**：已同步（`ok` / `idle`）→ 图标绿色；同步失败（`err`）→ 图标红色；**同步中（`busy`）→ 图标高亮成 accent 色、整体一闪一闪（`syncblink`）、图标自己转圈（`odspin`）**，同步结束就回到绿；未连接（`off`）保持默认色。同步状态只在这枚图标和**设置页的五态面板**上体现，其他屏（菜谱库 / 点单 / 掌勺）不挂任何顶栏 pill；设置页顶栏也**不再挂「已同步」标签**（跟下面的面板重复）。系统开了「减少动态效果」时不做闪 / 转（见样式表里的 `prefers-reduced-motion`）。
 - 角色与「我是谁」各管一摊：`config.view` 决定底部第二格；`config.me` 决定每块屏上「我 / 对方」是谁。两台设备可以一个选点单、一个选掌勺，数据仍共用同一份（`placedBy` 方向才是真相）。
 - 屏的「谁在说话」由**本机这个人**（`config.me`）决定：点单屏是「我」下单、对方掌勺；今日菜单是「对方」点的单、我来做（见 `src/data/useNames.ts`）。
 - 昵称显示规则：`nicknameOf(profiles, person)`，没设过退回中性称呼「我 / 对方」，不显示空白。
@@ -118,6 +120,12 @@ GitHub Contents API：
 - 为什么需要：手机浏览器 / Android WebView 上，输入框的最终内容未必会补一次 `input` 事件 —— 中文输入法提交候选词时可能只发 `compositionend`，键盘的自动更正 / 自动填充也可能直接把值落进 DOM。React 的受控 `value` 因此拿不到刚打进去的字，失焦时还会把 DOM 回写成 state 里的旧值：表现为「刚填完，一失焦内容就没了」，或界面看着有字但点保存写回去的是旧值。
 - **全应用所有文本输入框都挂着它**：菜谱库搜索、点单手动加菜、添加菜谱（分享文案 / 标题 / 作者 / 链接 / 备注）、详情页备注、首次设置的配置 JSON 与全部字段、同步页的 token 与昵称。`apply` 与该框 `onChange` 的写法保持一致（`trimStart` / `normalizeToken` 等一并带上），`onBlurExtra` 用来保留原有的失焦校验（如昵称 1–12 字、token 形状校验），不会把输入框自己的校验顶掉。
 - 新增文本输入框时**必须**带上它，否则该框在手机输入法下会丢字（见 §12）。
+
+**长按与选中（`src/styles/app.css` + `src/lib/gestures.ts`）**
+- **整页默认不许选中文字**：`app.css` 顶部对 `*` 关掉 `user-select`（含 iOS 的 `-webkit-touch-callout`，长按不弹「拷贝 / 查找」气泡），`img` 关掉 `-webkit-user-drag`。因为这个 App 在手机上用，长按是「删除」手势（见 §7 菜谱库 / 点单 / 掌勺），不是选字。
+- **输入框例外**：`input` / `textarea` / `[contenteditable='true']` 重新允许选中，选词、移动光标、粘贴都不受影响。
+- **长按的系统菜单也拦掉**：`gestures.ts` 的 `installLongPressGuard()`（`AppShell` 挂载时装一次，见 §6）拦下整页的 `contextmenu` —— 不然在 Android WebView 里长按一条菜谱（`<a>` 行）会先冒出系统的链接菜单，挡着我们的删除气泡。`keepsNativeLongPress(target)` 是纯函数：落在输入框 / 可编辑区里的放行，其余一律拦。
+- 新增可长按的条目时不用再做别的，全局那层已经盖住；但如果将来加了 `contenteditable` 区域，记得它会绕过上面这套（属有意放行）。
 
 **Setup 首次设置**
 - 四步说明（建空仓库 → 填你和另一半的昵称 → 生成 contents 读写 token → 填 token + 仓库连接）。
@@ -133,8 +141,9 @@ GitHub Contents API：
 - 顶栏：日期问候 + 「我的菜谱库」。**同步状态不在这屏显示**（只在设置页与底部「设置」格图标上体现，见 §3 / §7）。
 - 搜索框（标题 / 备注 / 作者，子串匹配），有词时显示「找到 N 道」与清除按钮。
 - 来源筛选 chips（全部 / 小红书 / B站 / 抖音 / 手动），带计数；数量为 0 的来源不显示。
+- **排序条**（有菜谱时才出现）：`排序 [默认] [点单次数] [更新时间]` + 一个方向按钮（`升序` / `降序`，切字段时保留当前方向；选「默认」时不可点）。「默认」= 收藏先后（新加的在前，即 `db.recipes` 的原顺序）；「点单次数」按 `orderCount` 数值排；「更新时间」按 `updatedAt` 的字符串排 —— 时间戳统一是 `YYYY-MM-DD HH:MM`，按字符串比就是按时序比。两种排序都支持升序与降序。
 - 进场 520ms 骨架屏。
-- 五态：加载 / 错态（`?state=error` 或同步失败且无数据）/ 空态（无菜谱）/ 无搜索结果 / 列表。列表行为缩略图（插画或首字）、标题、来源徽章、备注 —— **不显示任何时间**（收藏 / 更新时间只在详情页看）。
+- 五态：加载 / 错态（`?state=error` 或同步失败且无数据）/ 空态（无菜谱）/ 无搜索结果 / 列表。列表行为缩略图（插画或首字）、标题、来源徽章 + **「点过 N 次」**（该菜的点单次数，没点过显示 0 次）、备注 —— **不显示时间**（收藏 / 更新时间只在详情页看）。
 - **长按一条菜谱 → 弹出删除气泡**：气泡贴在**条目的右上角**（右对齐、浮在条目上方），左下角伸出一个尖角指向条目；上方放不下时翻到条目下方、尖角跟着朝上。里面是带删除图标的「删除」按钮，点一下直接删（同时 toast + 写同步日志）；点别处 / 滚动列表收起。长按后紧接着的那次 click 会被吞掉，不会顺带跳进详情页；普通点按仍然是进详情。手机返回键也先收起这个提示，而不是退出应用（见 §6）。菜谱库 / 今日点单 / 今日菜单三处共用同一个气泡组件 `src/components/DeleteTip.tsx`。
 
 **RecipeDetail 菜谱详情**
@@ -154,6 +163,7 @@ GitHub Contents API：
 - **识别时会先读一次原链接**（只要走 AI、且文案里有链接）：先经 `r.jina.ai` 抓页面、压成「页面线索」，再连同文案一起交给 AI —— 作者 / 账号主要靠这一步补；抓不到就静默退回只按文案识别，不打断。按钮下方那行会说明「会先打开原链接补作者 / 账号」。
 - 解析只是预填：标题 / 做法 / 作者（可留空，默认「来自剪藏」）/ 来源下拉 / 链接 都可改。
 - **做法**（可选，多行）；**备注**（可选）；「保存并同步到仓库」需标题非空，保存中显示 spinner，成功后离开这一页（回上一屏，回不去时落到菜谱库）—— 存完的添加页不留在返回栈里，按返回不会退回一张已经交掉的表单。顶栏返回按钮（`aria-label=返回上一屏`）与手机返回键同一套判断（`usePageBack`，见 §6）。
+- **备注用和「编辑这道菜」里那栏同一套字段样式**：`.field` 包一个 `<label for="noteArea">备注（可选）</label>` + `<textarea id="noteArea">`，样式（小标题字号 / 颜色、圆角输入框、`min-height: 92px`、聚焦描边）全部来自共用的 `.field` 规则，不要再写内联样式硬撑高度 —— 两边改一处就一起变。
 - 手动添加时链接可以留空 —— 那就只存标题 / 做法 / 备注，来源徽章显示「手动」。
 
 **Order 点单**
@@ -175,9 +185,9 @@ GitHub Contents API：
 - 空态：今天还没人点单。
 
 **Sync 同步与仓库**（底部入口名「设置」）
-- 五态状态面板：未连接 / busy（同步中）/ err（失败，含重试 + 重新填写 token）/ ok（已同步 + 文件条数）。面板状态下有「立即同步」。
+- 五态状态面板：未连接 / busy（同步中）/ err（失败，含重试 + 重新填写 token）/ ok（标题行「已同步 · <精确到秒的时间>」+ 文件条数）。面板状态下有「立即同步」。
 - 「当前角色」切换**不在这一页**：它贴在点单屏 / 掌勺屏的右上角（见 §3 底部导航）。只改本机 `config.view`，底部第二格随之在「点单 / 掌勺」之间换、并顺手跳到对应那屏；本地设置、不触发推送。两台设备各选各的。
-- 仓库信息：当前仓库、分支、Token（掩码 + 修改，含形状校验）。
+- 仓库信息：**当前仓库与分支在同一行**（仓库名 `owner/repo`，太长就省略号截断；分支做成右边一枚小标签，永远露出来）、Token（掩码 + 修改，含形状校验）。
 - **AI 识别（DeepSeek）**：Key（掩码 + 修改，含 `sk-` 形状校验）、「识别时使用 AI」开关（没 Key 时禁用；保存 Key 后自动打开）、「测试连接」（走 `GET /models`，成功 / 失败各给一行结果）。Key 只存本机 `localStorage`（同 token 语义，不进仓库、不外发）；「清除」会把 Key 清空并把开关关回本地解析。
 - 后台自动拉取开关（读 `autoPull` / `intervalSec`）。
 - 昵称编辑：我 / 另一半两个名字都能改，保存后随仓库同步；清空表示未设置。输入框同样走 `preserveTypedValue`（见「通用输入行为」）。
@@ -188,12 +198,13 @@ GitHub Contents API：
 ## 8. 组件与样式（`src/components/`、`src/styles/`）
 
 - `Icons.tsx`：内联 SVG path 图标库（逐条转写设计原型）。
-- `Bits.tsx`：`SkeletonRows`、`SourceBadge`、`SourceDot`、`StatusChip`、`Thumb`、`StateCard`、`SyncPill`。
+- `Bits.tsx`：`SkeletonRows`、`SourceBadge`、`SourceDot`、`StatusChip`、`Thumb`、`StateCard`。
 - `Toast.tsx`：Toast 容器（约 1.7s 显示，最多同时 3 条）；`ErrorBoundary.tsx`：渲染期异常的兜底页（见 §6）。
 - `DeleteTip.tsx`：长按条目弹出的删除气泡（`anchorDeleteTip()` 算位置、`DeleteTip` 出界面）。贴在条目右上角、左下角尖角指向条目，上方放不下就翻到下方；菜谱库 / 今日点单 / 今日菜单共用。
-- `LiveSyncPill.tsx`：同步状态 pill，直接反映真实状态机（未连接显示「本地模式」）。**只在设置页顶栏出现**；其他屏的同步状态由底部「设置」格图标的颜色承担（见 §3）。
+- 顶栏同步 pill（`LiveSyncPill.tsx` / `Bits.SyncPill`）**已移除**：设置页顶栏只留标题，同步状态由顶栏下面的五态面板 + 底部「设置」格图标承担（见 §6）。
 - `TabBar.tsx`：底部导航（`[菜谱库][点单 / 掌勺][＋添加][设置]`，第二格读 `config.view`）+ `usePreviewState`。`RoleSwitch.tsx`：贴在点单 / 掌勺屏右上角的角色开关。原 `DaySwitch.tsx` 的页内切换已移除 —— 角色切换现在就在第二格那块屏上。
 - `src/lib/back.tsx`：手机返回键的接管层。`BackGuard`（包住 `Routes`，见 §6）负责接线与决策，`backAction()` / `trackHistory()` / `isRootPath()`（配 `ROOT_PATHS`，一级页名单）是纯函数，`useBackClose(open, close)` 给遮罩层登记「返回键先关我」，`usePageBack(fallback)` 给二级页的返回按钮 / 保存、删除收尾用，`pressBack()` 是统一入口（真机由 `@capacitor/app` 的 `backButton` 事件触发，冒烟测试直接调它）。
+- `src/lib/gestures.ts`：长按手势的统一处理（不让长按选中文字 / 弹系统菜单），`keepsNativeLongPress()` 是纯函数、`installLongPressGuard()` 在 `AppShell` 里装一次（见 §7「长按与选中」）。
 - 样式：`src/styles/app.css`（设计系统 token + 卡通组件，移植自原型 `shared/app.css`）+ `src/styles/screens.css`（按 `.s-xxx` 作用域）。`npm run classes` 对账 TSX 用到的 class 在样式表里都有定义。**布局约束**：`.app` 是固定高度（`100dvh`）的纵向 flex，只让 `.scroll` 伸缩；顶栏、搜索框、筛选 chips、底部导航这些固定区域都要写 `flex: 0 0 auto`，否则内容一长（比如菜谱变多、列表溢出视口）它们会被一起压扁，间距跟着数据量变。
 - 刻意保留：`.h3` **故意未定义**（原型如此，用于维持观感）。
 
@@ -222,11 +233,13 @@ GitHub Contents API：
 
 测试防护是强制约束（见 `AGENTS.md` §5）：**每个功能都要有对应测试，功能变更必须同步新增 / 调整测试**。冒烟测试（`scripts/smoke.tsx`）分九段（编号一～八，外加一段手机返回键）：
 
-- 渲染层：路由重定向、各屏内容断言、底部导航 4 格（第二格随 `config.view` 在点单 / 掌勺之间变）、详情 CTA 常驻 / 禁用态、空态 / 错态（`?state=error`）/ 本地模式、老缓存 v1→v2 与 v2→v3 迁移、schema 已最新但 profiles 缺格的脏缓存。
-- 交互层：点单组合器（多选 / 手动 / 去重 / 随机 / 长度上限）、点单备注（随单落库、去掉首尾空格、发送后清空）、掌勺状态回传、菜谱编辑（菜名 / 原文出处 / 做法 / 备注一起落库、菜名必填）、时间显示（列表无时间、详情显示收藏 / 更新、改完只动更新时间、缺 `createdAt` 的老数据用 `updatedAt` 顶上；**记录时间都必须带年月日**——`nowStamp()` / `dateKey()` 的格式、示例数据里每条记录时间、新下单与新改昵称的时间戳都断言含 `YYYY-MM-DD`）、添加菜谱（粘贴识别：小红书 / B站 / 只贴链接，**标题只留菜名**；**手动添加：无来源、标题 + 做法 + 备注**，做法落库并在详情页展示、列表能按「手动」筛）、**AI 识别（配 Key → 按钮变「AI 识别」、真的只调一次 DeepSeek 且带 Bearer、AI 的菜名 / 作者 / 做法 / 小贴士填进表单、链接与来源仍走本地解析、结果能一路存库；Key 失效 → toast 原因并回退本地解析；AI 关掉 → 完全不请求 DeepSeek；设置页填 / 存 / 清除 Key 与 AI 开关）**、**读原链接（只要走 AI 且有链接，就真的经 r.jina.ai 抓 `x-respond-with: html`、页面线索里的作者进了给 AI 的提示词并填进作者框；抓取失败照样走 AI；文案里没有链接就不去读；只贴一条 B站搜索链接时标题取搜索词；模型把整句视频标题丢回来时会被收成菜品名）**、搜索筛选、昵称联动、token 形状校验、输入框以 DOM 为准（中文输入法 `compositionend` 之后不补 `input`）—— 每个文本输入框都断言「输入不丢字」且「值真的被用上」。
+- 渲染层：路由重定向、各屏内容断言、底部导航 4 格（第二格随 `config.view` 在点单 / 掌勺之间变）、详情 CTA 常驻 / 禁用态、空态 / 错态（`?state=error`）/ 本地模式、老缓存 v1→v2 与 v2→v3 迁移、schema 已最新但 profiles 缺格的脏缓存、添加页备注与详情编辑备注都挂在 `.field` 里（label + textarea、不带内联样式），保证两处表单样式一致；同步中图标的 `sync-busy` 闪 / 转是静态读 `src/styles/app.css` 断言的（冒烟里样式表是空的），连 `prefers-reduced-motion` 里关掉动效那条一起钉住。
+- 点单次数与菜谱库排序：下单后单里每道菜 +1（没点的不动、临时菜不计）、删掉那张单退回且不为负；菜谱库有排序条、列表行显示「点过 N 次」、默认保持收藏先后、点单次数升 / 降序、更新时间升 / 降序、方向按钮文案跟着变；`normalizeRecipes` 给缺字段 / 负数补 0；种子菜谱的次数与种子订单对得上。
+- 长按不选字：`keepsNativeLongPress()` 对输入框 / `contenteditable` 放行、普通元素与拿不到目标时拦下；真实挂载后派发 `contextmenu`，菜谱条目上被 `preventDefault`、搜索框里不被拦；再静态读 `src/styles/app.css` 断言「整页 `user-select: none`、输入框 `user-select: text`、带 `-webkit-touch-callout: none`」没被删掉（冒烟里样式表是空的，CSS 只能读文件验）。
+- 交互层：点单组合器（多选 / 手动 / 去重 / 随机 / 长度上限）、点单备注（随单落库、去掉首尾空格、发送后清空）、掌勺状态回传、菜谱编辑（菜名 / 原文出处 / 做法 / 备注一起落库、菜名必填）、时间显示（列表无时间、详情显示收藏 / 更新、改完只动更新时间、缺 `createdAt` 的老数据用 `updatedAt` 顶上；**记录时间都必须带年月日**——`nowStamp()` / `dateKey()` 的格式、示例数据里每条记录时间、新下单与新改昵称的时间戳都断言含 `YYYY-MM-DD`；**同步时间精确到秒**——`config.lastPulledAt` / `lastPushedAt` 断言是 `YYYY-MM-DD HH:MM:SS`）、添加菜谱（粘贴识别：小红书 / B站 / 只贴链接，**标题只留菜名**；**手动添加：无来源、标题 + 做法 + 备注**，做法落库并在详情页展示、列表能按「手动」筛）、**AI 识别（配 Key → 按钮变「AI 识别」、真的只调一次 DeepSeek 且带 Bearer、AI 的菜名 / 作者 / 做法 / 小贴士填进表单、链接与来源仍走本地解析、结果能一路存库；Key 失效 → toast 原因并回退本地解析；AI 关掉 → 完全不请求 DeepSeek；设置页填 / 存 / 清除 Key 与 AI 开关）**、**读原链接（只要走 AI 且有链接，就真的经 r.jina.ai 抓 `x-respond-with: html`、页面线索里的作者进了给 AI 的提示词并填进作者框；抓取失败照样走 AI；文案里没有链接就不去读；只贴一条 B站搜索链接时标题取搜索词；模型把整句视频标题丢回来时会被收成菜品名）**、搜索筛选、昵称联动、token 形状校验、输入框以 DOM 为准（中文输入法 `compositionend` 之后不补 `input`）—— 每个文本输入框都断言「输入不丢字」且「值真的被用上」。
 - 纯函数：`share.ts`（解析 / **标题只留菜名** / **搜索链接取搜索词当标题（`searchKeyword`）** / **营销尾巴剥离（`toDishName`）** / 链接提取 / 来源识别 / 插画猜测）、`ai.ts`（`maskAiKey` / `normalizeAiKey` / `aiKeyShapeError` / 提示词与 JSON 宽容解析 / `normalizeAiRecipe` / `recognizeRecipe` / `verifyAiKey` 及全部错误分类）、`reader.ts`（`isFetchableUrl` / `readPageHtml` 的成功与错误分支 / `compactPage` 的标题·描述·作者候选·内嵌 JSON 昵称·噪音过滤）、`github.ts`（`maskToken` / `normalizeToken` / `tokenShapeError` / `withTimeout` / `getJson` / `putJson` / `verifyRepo` 及全部错误分类 / UTF-8 base64）、`helpers.ts`（称呼 / 摘要 / 状态 / 在单检测）、`seed` / `migrate` 数据契约。
-- 同步引擎（stub `fetch`）：首次连接（空仓库 / 已有数据 / 失败分支 / **仓库里是老结构**）、立即同步拉取、本地改动自动推送且只推变化的那一份、空仓库先拉后推、409 自动重试一次、断开二次确认、「我是谁」静默切换、日志全量保留。
-- 组件与界面边界：详情占位卡、Toast 最多同时 3 条、「设置」格图标随同步状态变绿 / 变红（未连接不染色）、菜谱库 / 点单 / 掌勺顶栏不再出现同步状态（设置页仍显示）、点单 / 掌勺屏右上角切角色（落库 `config.view`、底部第二格立刻变、顺手跳到对应那屏、不触发推送、设置页已无角色区、掌勺有没做完的单时开关右上角挂数字红点、全做完则不挂）、掌勺点一道菜弹出菜品详情（带备注与原文链接；× / 遮罩 / Esc 都能关；临时菜只给说明不给外链）、菜谱库长按删除（短按不弹、长按弹 tooltip、点删除真删、长按后不误跳详情）、**今日点单与今日菜单长按删除**（短按仍展开 / 不弹、长按弹 tooltip、点删除真删并写日志、删完回到空态、长按后不误展开那张单）、详情页删除需二次确认、设置页同步日志（默认折叠、展开先 20 条、滚到底每次再 20 条、到底提示已全部加载）、点单页「历史点单」与掌勺页「已做完」默认折叠只露数量、导入配置 JSON、本地模式进入、**首次设置高级设置里的可选 DeepSeek Key（在折叠区内、密码框、可留空连接、填了就落 config、形状不对标红、本地模式也能带上）**、错误边界兜底页（渲染期抛错不白屏）。
+- 同步引擎（stub `fetch`）：首次连接（空仓库 / 已有数据 / 失败分支 / **仓库里是老结构**）、立即同步拉取、本地改动自动推送且只推变化的那一份、空仓库先拉后推、409 自动重试一次、断开二次确认、「我是谁」静默切换、日志全量保留、**点第二格 / 切角色会顺手同步一次**（真的发三份 GET、成功不弹「同步完成」、不额外写仓库，且不会拿旧 config 把刚切的角色冲掉；同步中设置格图标带 `sync-busy`，结束回 `sync-ok`）。
+- 组件与界面边界：详情占位卡、Toast 最多同时 3 条、「设置」格图标随同步状态变绿 / 变红（未连接不染色，同步中带 `sync-busy`）、菜谱库 / 点单 / 掌勺顶栏不再出现同步状态、**设置页顶栏也不再挂「已同步」标签**（同步状态只在下面的五态面板里，标题行「已同步 · <时间>」精确到秒）、**设置页的当前仓库与分支在同一行**（同一个 `.kvrow` 里同时含仓库名与分支标签，不再有单独「分支」那一行）、点单 / 掌勺屏右上角切角色（落库 `config.view`、底部第二格立刻变、顺手跳到对应那屏、不触发推送、设置页已无角色区、掌勺有没做完的单时开关右上角挂数字红点、全做完则不挂）、掌勺点一道菜弹出菜品详情（带备注与原文链接；× / 遮罩 / Esc 都能关；临时菜只给说明不给外链）、菜谱库长按删除（短按不弹、长按弹 tooltip、点删除真删、长按后不误跳详情）、**今日点单与今日菜单长按删除**（短按仍展开 / 不弹、长按弹 tooltip、点删除真删并写日志、删完回到空态、长按后不误展开那张单）、详情页删除需二次确认、设置页同步日志（默认折叠、展开先 20 条、滚到底每次再 20 条、到底提示已全部加载）、点单页「历史点单」与掌勺页「已做完」默认折叠只露数量、导入配置 JSON、本地模式进入、**首次设置高级设置里的可选 DeepSeek Key（在折叠区内、密码框、可留空连接、填了就落 config、形状不对标红、本地模式也能带上）**、错误边界兜底页（渲染期抛错不白屏）。
 - 仓库结构：直接读 `.github/workflows/android-apk.yml`、`android/app/build.gradle` 与 `scripts/set-version.mjs`，断言「`push` 到 `main` 触发、跑的就是 `npm run apk`、带上 `JISHIBEN_BUILD=<run_number>`、上传 `app-debug.apk`、用 `gh release create` 出 Release、声明 `contents: write`」没被删掉；版本号计算（本机 = package.json 的 version、CI = `<version>-build.<n>` 且 `versionCode` 递增、build 号非数字时退回基准值）与「debug 构建显式用仓库里的 `android/app/debug.keystore`、该文件确实在仓库里」也一并钉住（静态断言 + 纯函数，不涉及网络与界面）。
 - 手机返回键：`backAction()` 决策表（有遮罩关遮罩 / **一级页直接退出应用，哪怕历史里还压着别的格** / 二级页有来路就回上一屏 / 深链进二级页没来路落到菜谱库 / 网页端不接管）、`isRootPath()` 一级页名单（四格 + 首次设置 + `/`）与 `trackHistory()` 台账（首个条目落栈、push 加深、replace 换顶、pop 变浅、根屏 pop 不掏空栈）；真实挂载后调 `pressBack()`（和真机 `backButton` 事件同一个入口）验证：菜谱库点进详情按返回回菜谱库、再按一次才交给系统退出、添加页按返回回菜谱库、从点单页进的添加页存完回点单页且返回键不会退回那张已交掉的表单、菜谱库 / 今日点单的长按删除提示与掌勺菜品详情都被返回键优先关掉、**一级页之间不互相回退**（设置页按返回不回菜谱库，从详情跳去的点单页按返回不回详情）、做完的首次向导不留在返回栈里。
 
@@ -263,10 +276,11 @@ GitHub Contents API：
 - 同步冲突处理是 **last-write-wins**，没有字段级合并；推送撞车只自动重试一次。
 - Token 存在 `localStorage`（仅本机语义）；要更强保护需走原生凭据库（未实现）。
 - 订单的 `createdAt` / `updatedAt` 是**统一时间戳展示串**（`2026-10-07 09:40`），不是独立的数字时间字段。点单页的「今日点单 / 历史点单」按 `createdAt` 的**日期部分是不是今天**来分（`isTodayOrder` 比 `dateKey()`），所以跨天会自动滚动：昨天下的单第二天就落到「历史点单」。老缓存 / 老仓库里遗留的 `今天 09:40` 这类相对旧串仍按「今天」认，避免老单被突然挪进历史。
-- 拉取和启动时都过 `normalizeRecipes` / `normalizeOrders` / `normalizeProfiles` 规整形状。`recipes` 只补两个字段：`createdAt`（老缓存 / 老仓库没有它，用 `updatedAt` 顶上，免得详情页显示成 undefined）和 `steps`（缺了补空串）；其余字段仍不做补全（缺了只是显示为空，不会崩）。
+- 拉取和启动时都过 `normalizeRecipes` / `normalizeOrders` / `normalizeProfiles` 规整形状。`recipes` 只补三个字段：`createdAt`（老缓存 / 老仓库没有它，用 `updatedAt` 顶上，免得详情页显示成 undefined）、`steps`（缺了补空串）和 `orderCount`（缺了 / 不是合法非负数补 0，所以老菜谱一律从「点过 0 次」起算）；其余字段仍不做补全（缺了只是显示为空，不会崩）。
 - 输入框的 DOM 兜底（`src/lib/inputs.ts`）靠 `onCompositionEnd` / `onBlur` 补同步；若某个浏览器既不补 `input`、也不在这两个时机把值落进 DOM，仍会丢字（暂未遇到）。
 - `.gitignore` 忽略 `.env*` 本地凭证、`dist/`、`.tmp/`、`node_modules/` 等，凭据绝不入库。
 - `maskAiKey` / `normalizeAiKey`（去空白）/ `aiKeyShapeError`（`sk-` 前缀、长度、不可见字符）与 GitHub token 那套同思路；`verifyAiKey` 走 `GET /models` 只校验 Key、不消耗对话额度（设置页「测试连接」用）。
+- **点单次数跟着订单走，不是历史累计**：`orderCount` 只反映「当前还在订单列表里的单里点过它几次」——删掉一张单，单里菜谱的次数会退回去（不低于 0）；老缓存 / 老仓库的菜谱没有这个字段，规整时一律补 0，所以它们都从「点过 0 次」起算（历史点单次数无法追溯补算）。这也是为了别让「删了单但次数还在」这种对不上的状态出现。
 
 **读原链接（`src/lib/reader.ts`）**
 - **直接 fetch 平台页面是不行的**：小红书 / B站 / 抖音都不返回 CORS 头（实测 B站开放接口 `api.bilibili.com/x/web-interface/view` 也没有 `access-control-allow-origin`），浏览器读不到内容 —— 这正是当初「识别只解析文案」的原因。

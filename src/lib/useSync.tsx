@@ -10,7 +10,7 @@ import {
 import { useStore } from '../data/store';
 import { useToast } from '../components/Toast';
 import { SCHEMA, normalizeOrders, normalizeProfiles, normalizeRecipes } from '../data/seed';
-import { nowStamp } from '../data/helpers';
+import { nowStampSec } from '../data/helpers';
 import type { RemoteOrders, RemoteProfiles, RemoteRecipes, SyncStatus, SyncConfig } from '../data/types';
 import {
   GithubError,
@@ -28,8 +28,12 @@ interface SyncValue {
   status: SyncStatus;
   error: string | null;
   lastAt: string;
-  /** 立即同步：有本地改动就先推，否则拉 */
-  syncNow(): Promise<void>;
+  /**
+   * 立即同步：有本地改动就先推，否则拉。
+   * 传 `{ toast: false }` 时成功不弹提示（失败照旧弹）—— 给「切屏顺手同步一次」用，
+   * 那种场景的反馈是底部设置格图标的闪烁，不该每切一次屏都弹一句「同步完成」。
+   */
+  syncNow(options?: { toast?: boolean }): Promise<void>;
   /** 首次设置：校验凭证并接管仓库（空仓库则把本机数据作为初始内容推上去） */
   connect(cfg: SyncConfig): Promise<{ seeded: boolean }>;
   /** 只拉取 */
@@ -60,7 +64,10 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   /* cfgOverride：connect() 里刚填的配置不能靠 storeRef 读 ——
      setConfig 是 React 的异步状态更新，storeRef 要等下一次渲染才更新，
      紧接着读会拿到旧配置（repo 为空 → 误判「还没有连接仓库」）。 */
-  const doPull = useCallback(async (cfgOverride?: SyncConfig | null): Promise<'ok' | 'empty'> => {
+  const doPull = useCallback(async (
+    cfgOverride?: SyncConfig | null,
+    opts?: { applyConfig?: boolean },
+  ): Promise<'ok' | 'empty'> => {
     const cfg = cfgOverride ?? storeRef.current.db.config;
     if (!cfg?.repo || !cfg.token) throw new GithubError('auth', '还没有连接仓库。');
 
@@ -89,9 +96,11 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       if (!rf && !of && !pf) return 'empty';
 
       /* 只交出「远端给了什么」，合并交给 reducer —— 它拿到的才是当前 db。
-         显式带上 cfg：connect() 里刚写的配置此时可能还没进 storeRef。 */
+         connect() 显式带上 cfg（那份是刚填的，此时可能还没进 storeRef）；
+         普通拉取不碰 config —— 它是本机设置、仓库里也没有，而 storeRef 可能比当前
+         state 旧（比如刚切完角色就同步），拿旧 cfg 覆盖会把刚改的 view / me 抹回去。 */
       storeRef.current.applyRemote({
-        config: cfg,
+        config: opts?.applyConfig ? cfg : undefined,
         recipes: pulledRecipes,
         orders: pulledOrders,
         profiles: pulledProfiles,
@@ -197,8 +206,8 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       storeRef.current.setSyncState('busy');
       doPush()
         .then(() => {
-          storeRef.current.setSyncState('ok', null, nowStamp());
-          storeRef.current.patchConfig({ lastPushedAt: nowStamp(), lastSyncError: undefined });
+          storeRef.current.setSyncState('ok', null, nowStampSec());
+          storeRef.current.patchConfig({ lastPushedAt: nowStampSec(), lastSyncError: undefined });
         })
         .catch((e: unknown) => {
           fail(e);
@@ -226,8 +235,8 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       void doPull()
         .then((r) => {
           if (r === 'ok') {
-            storeRef.current.setSyncState('ok', null, nowStamp());
-            storeRef.current.patchConfig({ lastPulledAt: nowStamp() });
+            storeRef.current.setSyncState('ok', null, nowStampSec());
+            storeRef.current.patchConfig({ lastPulledAt: nowStampSec() });
           }
         })
         .catch(() => {
@@ -239,7 +248,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   }, [store.connected, autoPull, intervalSec, doPull]);
 
   const value = useMemo<SyncValue>(() => {
-    async function syncNow() {
+    async function syncNow(options?: { toast?: boolean }) {
       const s = storeRef.current;
       if (!s.connected) {
         s.setSyncState('off');
@@ -252,18 +261,18 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       try {
         if (s.rev !== pushedRev.current) {
           await doPush();
-          s.patchConfig({ lastPushedAt: nowStamp() });
+          s.patchConfig({ lastPushedAt: nowStampSec() });
         } else {
           const r = await doPull();
           if (r === 'empty') {
             await doPush();
           } else {
-            s.patchConfig({ lastPulledAt: nowStamp() });
+            s.patchConfig({ lastPulledAt: nowStampSec() });
           }
         }
-        s.setSyncState('ok', null, nowStamp());
+        s.setSyncState('ok', null, nowStampSec());
         s.patchConfig({ lastSyncError: undefined });
-        toast('同步完成');
+        if (options?.toast !== false) toast('同步完成');
       } catch (e) {
         const msg = fail(e);
         toast(msg, false);
@@ -288,15 +297,15 @@ export function SyncProvider({ children }: { children: ReactNode }) {
         /* 显式把 cfg 传下去：不能靠 storeRef 读 —— setConfig 的 dispatch 是异步的，
            下一行读 storeRef 拿到的还是旧配置 */
         let seeded = false;
-        const r = await doPull(cfg);
+        const r = await doPull(cfg, { applyConfig: true });
         if (r === 'empty') {
           /* 仓库还是空的：把本机内容作为初始内容推上去 */
           await doPush(0, cfg);
           seeded = true;
         }
 
-        s.patchConfig({ lastPulledAt: nowStamp(), lastPushedAt: nowStamp(), lastSyncError: undefined });
-        s.setSyncState('ok', null, nowStamp());
+        s.patchConfig({ lastPulledAt: nowStampSec(), lastPushedAt: nowStampSec(), lastSyncError: undefined });
+        s.setSyncState('ok', null, nowStampSec());
         return { seeded };
       } catch (e) {
         done();
@@ -316,8 +325,8 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       s.setSyncState('busy');
       try {
         await doPull();
-        s.patchConfig({ lastPulledAt: nowStamp() });
-        s.setSyncState('ok', null, nowStamp());
+        s.patchConfig({ lastPulledAt: nowStampSec() });
+        s.setSyncState('ok', null, nowStampSec());
       } catch (e) {
         fail(e);
       }

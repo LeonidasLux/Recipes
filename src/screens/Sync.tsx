@@ -4,7 +4,6 @@ import { useStore } from '../data/store';
 import { useSync } from '../lib/useSync';
 import { useToast } from '../components/Toast';
 import { TabBar } from '../components/TabBar';
-import { LiveSyncPill } from '../components/LiveSyncPill';
 import { Icon } from '../components/Icons';
 import { maskToken, normalizeToken, tokenShapeError } from '../lib/github';
 import { aiKeyShapeError, maskAiKey, normalizeAiKey, verifyAiKey } from '../lib/ai';
@@ -148,11 +147,10 @@ export default function SyncScreen() {
     <div className="app s-sync">
       <header className="topbar">
         <p className="greeting">数据在你自己的仓库里</p>
-        <div className="navrow" style={{ alignItems: 'flex-end' }}>
+        <div className="navrow">
           <h1 className="ptitle" style={{ margin: 0 }}>
             同步与仓库
           </h1>
-          <LiveSyncPill />
         </div>
       </header>
 
@@ -181,13 +179,17 @@ export default function SyncScreen() {
           <section className="card sticker" style={{ padding: '2px 16px' }}>
             <div className="kvrow">
               <span className="k">当前仓库</span>
-              <span className="v ellip" title={cfg?.repo || ''}>
-                {cfg?.repo || '未连接'}
+              {/* 仓库与分支同一行：仓库名太长会被省略号截断，分支做成小标签挂在右边 */}
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                <span className="v ellip" title={cfg?.repo || ''}>
+                  {cfg?.repo || '未连接'}
+                </span>
+                {cfg?.repo && (
+                  <span className="pill" style={{ fontSize: 11 }}>
+                    {cfg.branch}
+                  </span>
+                )}
               </span>
-            </div>
-            <div className="kvrow">
-              <span className="k">分支</span>
-              <span className="v">{cfg?.branch || '—'}</span>
             </div>
             <div className="kvrow">
               <span className="k">Token（仅存本机）</span>

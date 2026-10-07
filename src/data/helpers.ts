@@ -39,6 +39,18 @@ export function nowStamp(): string {
   return stamp();
 }
 
+/**
+ * 精确到秒的时间戳：`2026-10-07 09:40:12`。
+ *
+ * 只给**同步时间**用（`lastPulledAt` / `lastPushedAt` / 同步状态里的 `lastAt`）：
+ * 点一次「立即同步」得看得出确实又同步过了，分钟精度常常看不出变化。
+ * 菜谱 / 订单那些记录时间仍用 `nowStamp()`，到分钟就够。
+ */
+export function nowStampSec(): string {
+  const d = new Date();
+  return `${stamp(d)}:${pad(d.getSeconds())}`;
+}
+
 /* ─── 来源徽章 ───────────────────────────────── */
 
 export interface SrcMeta {

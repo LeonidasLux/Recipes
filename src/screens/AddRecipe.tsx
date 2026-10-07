@@ -325,18 +325,18 @@ export default function AddRecipe() {
             </div>
           </section>
 
-          <section className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <label htmlFor="noteArea" style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)' }}>
-              备注 <span className="meta" style={{ fontWeight: 400 }}>（可选）</span>
-            </label>
-            <textarea
-              id="noteArea"
-              placeholder="例如：少辣、替换食材、准备时间…"
-              style={{ minHeight: 74 }}
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              {...preserveTypedValue(setNote)}
-            />
+          {/* 备注用和「编辑这道菜」里那栏同一套字段样式（.field：小标题 + 圆角输入框） */}
+          <section className="card">
+            <div className="field">
+              <label htmlFor="noteArea">备注（可选）</label>
+              <textarea
+                id="noteArea"
+                placeholder="例如：少辣、替换食材、准备时间…"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                {...preserveTypedValue(setNote)}
+              />
+            </div>
           </section>
         </div>
       </main>

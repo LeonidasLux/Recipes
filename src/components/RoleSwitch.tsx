@@ -1,6 +1,7 @@
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from '../data/store';
 import { useToast } from './Toast';
+import { useSync } from '../lib/useSync';
 import type { ViewRole } from '../data/types';
 
 /**
@@ -11,7 +12,8 @@ import type { ViewRole } from '../data/types';
  * 只改本机的 `config.view`，是本地设置，不触发推送。
  */
 export function RoleSwitch() {
-  const { db, me, view, setView } = useStore();
+  const { db, me, view, connected, setView } = useStore();
+  const { syncNow } = useSync();
   const { toast } = useToast();
   const navigate = useNavigate();
   const { search } = useLocation();
@@ -26,6 +28,8 @@ export function RoleSwitch() {
     toast(next === 'cook' ? '已切到「掌勺」· 底部第二格换成掌勺' : '已切到「点单」· 底部第二格换成点单');
     /* 点单 / 掌勺同属一级页：换屏用 replace，不叠历史（返回键不该在一级页之间来回，见 src/lib/back.tsx） */
     navigate(`${next === 'cook' ? '/cook' : '/order'}${search}`, { replace: true });
+    /* 换过去那屏顺手同步一次：对方刚点的单 / 刚做完的菜不该等下一次轮询才看见 */
+    if (connected) void syncNow({ toast: false });
   }
 
   const seg = (key: ViewRole, label: string) => (

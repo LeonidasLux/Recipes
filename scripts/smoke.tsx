@@ -49,6 +49,7 @@ import {
   meOf,
   nicknameOf,
   nowStamp,
+  nowStampSec,
   orderSummary,
   partnerOf,
   recipeInOpenOrder,
@@ -56,10 +57,13 @@ import {
   statusMeta,
 } from '../src/data/helpers';
 import { backAction, isRootPath, pressBack, trackHistory } from '../src/lib/back';
+import { keepsNativeLongPress } from '../src/lib/gestures';
 import type { DB, Order, Profiles, Recipe } from '../src/data/types';
 
 /** 记录时间统一格式：`2026-10-07 09:40` —— 必须带年月日 */
 const DATE_TIME_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
+/** 同步时间精确到秒：`2026-10-07 09:40:12` */
+const SYNC_TIME_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 
 const root = document.getElementById('root') as HTMLElement;
 
@@ -290,8 +294,9 @@ function useDb(mutate?: (db: DB) => void) {
     view: 'order',
     autoPull: true,
     intervalSec: 60,
-    lastPulledAt: nowStamp(),
-    lastPushedAt: nowStamp(),
+    /* 同步时间到秒，跟真实写入保持一致 */
+    lastPulledAt: nowStampSec(),
+    lastPushedAt: nowStampSec(),
   };
   mutate?.(db);
   localStorage.clear();
@@ -1204,6 +1209,78 @@ async function interactionChecks() {
     await m.close();
   }
 
+  console.log('\n[交互 · 点单次数与菜谱库排序]');
+  localStorage.clear();
+  {
+    /* 下单：单里每道菜的点单次数 +1，没点的不动 */
+    useDb();
+    const before = readDb().recipes.map((r) => [r.id, r.orderCount] as const);
+    const beforeOf = (id: string) => before.find(([rid]) => rid === id)![1];
+    const m = await mount('/order');
+    await m.click('.dishgrid .pick:nth-child(1)'); // 番茄炖牛腩
+    await m.click('.dishgrid .pick:nth-child(3)'); // 椰子鸡火锅
+    await m.click('.sendbtn');
+    await m.wait(900);
+    const countOf = (id: string) => readDb().recipes.find((r) => r.id === id)!.orderCount;
+    check(countOf('r1') === beforeOf('r1') + 1, '★ 下单后点过的菜 +1', `${beforeOf('r1')} → ${countOf('r1')}`);
+    check(countOf('r3') === beforeOf('r3') + 1, '★ 同一单里的第二道菜也 +1', `${beforeOf('r3')} → ${countOf('r3')}`);
+    check(countOf('r2') === beforeOf('r2'), '没点过的菜次数不变');
+    await m.close();
+  }
+  {
+    /* 删掉一张单：这张单给菜谱记的次数退回去 */
+    useDb();
+    const before = readDb().recipes.find((r) => r.id === 'r1')!.orderCount;
+    const m = await mount('/order');
+    await m.longPress('.osum'); /* 今天那张单里有 r1 */
+    await m.click('.tip-del');
+    const after = readDb().recipes.find((r) => r.id === 'r1')!.orderCount;
+    check(after === before - 1, '★ 删掉那张单，点单次数退回', `${before} → ${after}`);
+    check(after >= 0, '次数不会掉到负数', String(after));
+    await m.close();
+  }
+  {
+    /* 排序：点单次数 / 更新时间，各支持升序与降序 */
+    useDb((db) => {
+      const set = (id: string, orderCount: number, updatedAt: string) => {
+        const r = db.recipes.find((x) => x.id === id)!;
+        r.orderCount = orderCount;
+        r.updatedAt = updatedAt;
+      };
+      set('r1', 3, '2026-01-01 09:00');
+      set('r2', 1, '2026-03-01 09:00');
+      set('r3', 5, '2026-02-01 09:00');
+      set('r4', 2, '2026-05-01 09:00');
+      set('r5', 0, '2026-04-01 09:00');
+      set('r6', 4, '2026-01-15 09:00');
+    });
+    const m = await mount('/library');
+    const titles = () => m.$$('.dishrow .title').map((e) => (e.textContent ?? '').trim());
+    const rowOf = (t: string) => m.$$('.dishrow').find((r) => (r.textContent ?? '').includes(t))!;
+
+    check(m.$('.sortbar') !== null, '★ 菜谱库有排序条');
+    check(rowOf('番茄炖牛腩').querySelector('.cnt')?.textContent?.trim() === '点过 3 次', '★ 列表里显示点单次数');
+    check(titles()[0] === '番茄炖牛腩', '默认保持收藏先后', titles().join(' / '));
+
+    const dirLabel = () => (m.$('.sortbar .dir')?.textContent ?? '').trim();
+    await m.clickByText('.sortbar .schip', '点单次数');
+    check(
+      titles().join(' / ') === '椰子鸡火锅 / 芒果糯米饭 / 番茄炖牛腩 / 巴斯克芝士蛋糕 / 溏心蛋葱油拌面 / 台式三杯鸡',
+      '★ 点单次数降序',
+      titles().join(' / '),
+    );
+    check(dirLabel() === '降序', '方向按钮显示当前是降序', dirLabel());
+    await m.click('.sortbar .dir'); /* 切到升序 */
+    check(dirLabel() === '升序', '点方向按钮 → 变升序', dirLabel());
+    check(titles()[0] === '台式三杯鸡' && titles()[5] === '椰子鸡火锅', '★ 点单次数升序', titles().join(' / '));
+
+    await m.clickByText('.sortbar .schip', '更新时间');
+    check(titles()[0] === '番茄炖牛腩' && titles()[5] === '巴斯克芝士蛋糕', '★ 更新时间升序', titles().join(' / '));
+    await m.click('.sortbar .dir');
+    check(titles()[0] === '巴斯克芝士蛋糕' && titles()[5] === '番茄炖牛腩', '★ 更新时间降序', titles().join(' / '));
+    await m.close();
+  }
+
   console.log('\n[交互 · token 形状校验]');
   localStorage.clear();
   {
@@ -2042,6 +2119,19 @@ function helperChecks() {
   const ep = emptyProfiles();
   check(ep.a.nickname === '' && ep.b.nickname === '', '空档案两栏都为空串');
 
+  /* 点单次数：示例里每道菜都记着，且跟种子订单对得上 */
+  const countedFromOrders = new Map<string, number>();
+  s.orders.forEach((o) =>
+    o.items.forEach((it) => {
+      if (it.recipeId) countedFromOrders.set(it.recipeId, (countedFromOrders.get(it.recipeId) ?? 0) + 1);
+    }),
+  );
+  check(
+    s.recipes.every((r) => r.orderCount === (countedFromOrders.get(r.id) ?? 0)),
+    '★ 种子菜谱的点单次数与实际订单一致',
+    s.recipes.map((r) => `${r.id}=${r.orderCount}/${countedFromOrders.get(r.id) ?? 0}`).join(' '),
+  );
+
   /* v1 单菜订单 → v2 items[]（老缓存不炸） */
   const v1 = seed() as unknown as Record<string, unknown>;
   v1.schema = 1;
@@ -2080,6 +2170,16 @@ function helperChecks() {
       '单菜订单规整成 items[]',
     );
     check(normalizeOrders('不是数组').length === 0 && normalizeOrders([1, null]).length === 2, '订单不是数组时兜底为空');
+
+    /* 老缓存 / 老仓库的菜谱没有点单次数（或不是合法数字）→ 一律补 0 */
+    const noCount = normalizeRecipes([
+      { id: 'r', title: '老菜谱', source: 'red', url: '', author: '', art: '', steps: '', note: '', createdAt: 'x', updatedAt: 'x' },
+      { id: 'r2', orderCount: -3 },
+      { id: 'r3', orderCount: 2 },
+    ]);
+    check(noCount[0].orderCount === 0, '★ 缺 orderCount 的老菜谱补 0', String(noCount[0].orderCount));
+    check(noCount[1].orderCount === 0, '★ 负数次数规整成 0', String(noCount[1].orderCount));
+    check(noCount[2].orderCount === 2, '已经是合法次数的原样保留', String(noCount[2].orderCount));
 
     /* 版本号已是最新、但缓存里缺 profiles 的脏数据 —— 只看 schema 会漏 */
     const noProfiles = seed() as unknown as Record<string, unknown>;
@@ -2711,6 +2811,22 @@ async function edgeChecks() {
     await m.close();
   }
 
+  console.log('\n[边界 · 设置页仓库与分支同一行]');
+  localStorage.clear();
+  {
+    useDb();
+    const m = await mount('/sync');
+    const rows = m.$$('.kvrow').map((r) => (r.textContent ?? '').replace(/\s+/g, ' ').trim());
+    const repoRow = rows.find((t) => t.includes('当前仓库'));
+    check(
+      repoRow !== undefined && repoRow.includes('xiaoman/family-recipes') && repoRow.includes('main'),
+      '★ 当前仓库与分支显示在同一行',
+      repoRow,
+    );
+    check(!rows.some((t) => t.startsWith('分支')), '分支不再单独占一行');
+    await m.close();
+  }
+
   console.log('\n[边界 · 设置格图标反映同步状态]');
   useDb();
   {
@@ -2739,7 +2855,9 @@ async function edgeChecks() {
     globalThis.fetch = (async () =>
       new Response(JSON.stringify({ message: 'boom' }), { status: 500 })) as typeof fetch;
     const m = await mount('/sync');
-    check(m.$('.pill.synced') !== null, '设置页仍然显示同步状态');
+    check(m.$('.topbar .pill') === null, '★ 设置页顶栏不再挂「已同步」标签');
+    const pt = (m.$('.panel.ok .pt')?.textContent ?? '').trim();
+    check(SYNC_TIME_RE.test(pt.replace('已同步 · ', '')), '★ 状态面板里的已同步时间精确到秒', pt);
     await m.click('.btn-primary'); /* 立即同步 */
     await m.wait(600);
     check(m.$('.tabbar .tab.sync-err') !== null, '★ 同步失败 → 设置格图标变红');
@@ -2752,6 +2870,68 @@ async function edgeChecks() {
     check(m.$('.tabbar .tab.sync-ok') !== null, '点单屏：图标照样带状态色');
     check(m.$('.pill') === null, '★ 点单屏顶栏也没有同步状态');
     await m.close();
+  }
+
+  console.log('\n[边界 · 点第二格会顺手同步一次]');
+  localStorage.clear();
+  {
+    useDb();
+    const local = readDb();
+    const gh = installFakeGithub({
+      recipes: { schema: 3, updatedAt: 'x', recipes: local.recipes },
+      orders: { schema: 3, updatedAt: 'x', orders: local.orders },
+      profiles: { schema: 3, updatedAt: 'x', profiles: local.profiles },
+    });
+    const m = await mount('/library');
+    await m.wait(900); /* 挂载后的自动推送先落定，再看点第二格会不会额外拉一次 */
+    const before = gh.calls.length;
+    await m.clickByText('.tabbar .tab', '点单');
+    await m.wait(900);
+    const gets = gh.calls.slice(before).filter((c) => c.startsWith('GET'));
+    check(gets.length >= 3, '★ 点第二格 → 真的拉了一次仓库（三份文件）', `实际 GET ${gets.length} 次`);
+    check(!m.html().includes('同步完成'), '顺手同步不弹「同步完成」提示');
+    await m.close();
+    gh.restore();
+  }
+  {
+    /* 慢响应把「同步中」这一瞬拉长，才断言得到图标状态 */
+    useDb();
+    const local = readDb();
+    const prevFetch = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo | URL) =>
+      new Promise<Response>((resolve) => {
+        const url = String(input);
+        const data = url.includes('recipes.json')
+          ? { schema: 3, updatedAt: 'x', recipes: local.recipes }
+          : url.includes('orders.json')
+            ? { schema: 3, updatedAt: 'x', orders: local.orders }
+            : { schema: 3, updatedAt: 'x', profiles: local.profiles };
+        window.setTimeout(
+          () =>
+            resolve(
+              new Response(JSON.stringify({ sha: 's', content: utf8b64(JSON.stringify(data)) }), { status: 200 }),
+            ),
+          400,
+        );
+      })) as typeof fetch;
+
+    const m = await mount('/library');
+    await m.wait(900);
+    await m.clickByText('.tabbar .tab', '点单'); /* 触发同步，不等它结束 */
+    check(m.$('.tabbar .tab.sync-busy') !== null, '★ 同步中 → 设置格图标高亮闪烁旋转');
+    check(m.$('.tabbar .tab.sync-busy svg') !== null, '转的就是那枚图标');
+    await m.wait(1200);
+    check(m.$('.tabbar .tab.sync-busy') === null, '同步结束 → 不再闪');
+    check(m.$('.tabbar .tab.sync-ok') !== null, '同步结束 → 回到「已同步」的绿');
+    await m.close();
+    globalThis.fetch = prevFetch;
+  }
+  {
+    /* CSS 那半边（冒烟里样式表是空的，只能读文件验） */
+    const css = readFileSync('src/styles/app.css', 'utf8');
+    check(/\.tab\.sync-busy\s*\{[^}]*syncblink/.test(css), '★ 同步中的图标在闪');
+    check(/\.tab\.sync-busy svg\s*\{[^}]*odspin/.test(css), '★ 同步中的图标在转');
+    check(/prefers-reduced-motion[^{]*\{[^}]*\.tab\.sync-busy/.test(css), '系统关了动效时不再闪 / 转');
   }
 
   console.log('\n[边界 · 角色切换贴在第二格屏右上角]');
@@ -2780,6 +2960,9 @@ async function edgeChecks() {
     check(m.html().includes('今日菜单'), '★ 在点单屏切角色 → 直接落到掌勺屏');
     const puts = gh.calls.slice(before).filter((c) => c.startsWith('PUT'));
     check(puts.length === 0, '★ 切角色是本地设置，不触发推送', `实际 PUT：${puts.join(',') || '（无）'}`);
+    const gets = gh.calls.slice(before).filter((c) => c.startsWith('GET'));
+    check(gets.length >= 3, '★ 切角色会顺手同步一次（拉三份文件）', `实际 GET ${gets.length} 次`);
+    check(readDb().config?.view === 'cook', '顺手同步不会拿旧配置把刚切的角色冲掉');
     await m.close();
 
     useDb((db) => {
@@ -2899,14 +3082,16 @@ async function edgeChecks() {
     const s = seed();
     const rows: Array<[string, string]> = [
       ['db.updatedAt', s.updatedAt],
-      ['config.lastPulledAt', s.config!.lastPulledAt],
-      ['config.lastPushedAt', s.config!.lastPushedAt],
     ];
     s.recipes.forEach((r) => rows.push([`${r.id}.createdAt`, r.createdAt], [`${r.id}.updatedAt`, r.updatedAt]));
     s.orders.forEach((o) => rows.push([`${o.id}.createdAt`, o.createdAt], [`${o.id}.updatedAt`, o.updatedAt]));
     s.logs.forEach((l, i) => rows.push([`logs[${i}].t`, l.t]));
     const bad = rows.filter(([, v]) => !DATE_TIME_RE.test(v));
     check(bad.length === 0, '★ 示例数据里每条记录时间都带年月日', bad.map(([k, v]) => `${k}=${v}`).join('; '));
+
+    /* 同步时间比记录时间更细一档：要精确到秒，设置页那行「已同步 · …」才看得出又同步过 */
+    check(SYNC_TIME_RE.test(s.config!.lastPulledAt), '★ 同步时间精确到秒（lastPulledAt）', s.config!.lastPulledAt);
+    check(SYNC_TIME_RE.test(s.config!.lastPushedAt), '★ 同步时间精确到秒（lastPushedAt）', s.config!.lastPushedAt);
 
     /* 新加的菜谱同样带年月日 */
     useDb();
@@ -3060,6 +3245,69 @@ async function edgeChecks() {
     check(m.$$('.cookcard').length === 0, '删完卡片消失');
     check(m.html().includes('今天清清闲闲'), '★ 删完今日菜单回到空态');
     await m.close();
+  }
+
+  console.log('\n[边界 · 添加页备注与详情编辑备注同一套样式]');
+  localStorage.clear();
+  {
+    /* 两处都该是「.field 里一个 label + 一个 textarea」，样式才不会各长各的 */
+    useDb();
+    const add = await mount('/add');
+    const note = add.$('#noteArea')!;
+    check(
+      note.tagName === 'TEXTAREA' && note.closest('.field') !== null,
+      '★ 添加页备注 = .field 里的 textarea',
+    );
+    check(
+      note.parentElement?.querySelector('label')?.getAttribute('for') === 'noteArea',
+      '★ 添加页备注有对应的 label',
+    );
+    check((note.getAttribute('style') ?? '') === '', '备注不再靠内联样式硬撑高度', note.getAttribute('style') ?? '');
+    await add.close();
+  }
+  {
+    useDb();
+    const m = await mount('/recipe/r5');
+    await m.click('#editRecipeBtn');
+    const edit = m.$('#editNote')!;
+    check(
+      edit.tagName === 'TEXTAREA' && edit.closest('.field') !== null && (edit.getAttribute('style') ?? '') === '',
+      '详情编辑的备注也是 .field 里的 textarea（两边结构一致）',
+    );
+    await m.close();
+  }
+
+  console.log('\n[边界 · 长按不选字、不弹系统菜单]');
+  localStorage.clear();
+  {
+    /* 纯函数：输入框里放行，其余一律拦下 */
+    const input = document.createElement('input');
+    const area = document.createElement('textarea');
+    const editable = document.createElement('div');
+    editable.setAttribute('contenteditable', 'true');
+    const plain = document.createElement('div');
+    check(keepsNativeLongPress(input), '输入框里的长按放行（要能选词 / 粘贴）');
+    check(keepsNativeLongPress(area), '多行输入框同样放行');
+    check(keepsNativeLongPress(editable), 'contenteditable 也放行');
+    check(!keepsNativeLongPress(plain), '普通元素上的长按要拦下来');
+    check(!keepsNativeLongPress(null), '拿不到目标时按「拦」处理');
+
+    /* 真挂载：页面上的长按菜单被拦，输入框里的不拦 */
+    useDb();
+    const m = await mount('/library');
+    const onRow = new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    m.$$('.dishrow')[0].dispatchEvent(onRow);
+    check(onRow.defaultPrevented, '★ 长按菜谱条目 → 系统菜单被拦下');
+    const onInput = new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    m.$('.searchbar input')!.dispatchEvent(onInput);
+    check(!onInput.defaultPrevented, '★ 长按搜索框 → 放行，仍能粘贴');
+    await m.close();
+
+    /* CSS 兜住「选中文字」那一半（冒烟里样式表是空的，只能读文件断言） */
+    const css = readFileSync('src/styles/app.css', 'utf8');
+    check(/\*\s*\{[^}]*user-select: none/.test(css), '★ 整页默认不许选中文字');
+    check(/input, textarea[^{]*\{[^}]*user-select: text/.test(css), '★ 输入框重新允许选中');
+    check(css.includes('-webkit-touch-callout: none'), 'iOS 的长按气泡也一并关掉');
   }
 
   console.log('\n[边界 · 首次设置：导入配置 JSON]');

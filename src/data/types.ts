@@ -23,6 +23,8 @@ export interface Recipe {
   /** 收藏时间（第一次存进来的时间）；老数据/老仓库没有，规整时用 updatedAt 顶上 */
   createdAt: string;
   updatedAt: string;
+  /** 点单次数：每下一次含这道菜的单就 +1（删掉那张单会 −1）；老数据/老仓库没有，规整时补 0 */
+  orderCount: number;
 }
 
 /** 一单里的一道菜；recipeId 为空表示临时手动输入的菜 */

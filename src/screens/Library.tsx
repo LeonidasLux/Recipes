@@ -20,6 +20,14 @@ const FILTERS: Array<{ key: SourceKey | 'all'; label: string }> = [
   { key: 'manual', label: '手动' },
 ];
 
+/** 排序字段：默认（收藏先后）/ 点单次数 / 更新时间 */
+type SortKey = 'default' | 'count' | 'updated';
+const SORTS: Array<{ key: SortKey; label: string }> = [
+  { key: 'default', label: '默认' },
+  { key: 'count', label: '点单次数' },
+  { key: 'updated', label: '更新时间' },
+];
+
 export default function Library() {
   const { db, deleteRecipe } = useStore();
   const sync = useSync();
@@ -29,7 +37,10 @@ export default function Library() {
   const [active, setActive] = useState<SourceKey | 'all'>('all');
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(true);
-  /* 长按某条菜谱 → 在这条旁边弹一个小 tooltip，里面有删除 */
+  /* 排序：字段 + 方向（升序 / 降序）；默认保持收藏先后，不排序 */
+  const [sortKey, setSortKey] = useState<SortKey>('default');
+  const [asc, setAsc] = useState(false);
+  /* 长按某条菜谱 → 在条目右上角弹删除气泡 */
   const [tip, setTip] = useState<DeleteTipState | null>(null);
   const pressTimer = useRef<number | null>(null);
   const longPressed = useRef(false);
@@ -53,12 +64,20 @@ export default function Library() {
 
   const list = useMemo(() => {
     const lq = q.trim().toLowerCase();
-    return db.recipes.filter((r) => {
+    const filtered = db.recipes.filter((r) => {
       if (active !== 'all' && r.source !== active) return false;
       if (!lq) return true;
       return `${r.title} ${r.note} ${r.author}`.toLowerCase().includes(lq);
     });
-  }, [db.recipes, active, q]);
+    if (sortKey === 'default') return filtered;
+    const dir = asc ? 1 : -1;
+    /* updatedAt 是 `YYYY-MM-DD HH:MM`，按字符串比就是按时序比（老数据的怪串只影响它自己） */
+    return [...filtered].sort((a, b) => {
+      if (sortKey === 'count') return dir * ((a.orderCount ?? 0) - (b.orderCount ?? 0));
+      if (a.updatedAt === b.updatedAt) return 0;
+      return (a.updatedAt < b.updatedAt ? -1 : 1) * dir;
+    });
+  }, [db.recipes, active, q, sortKey, asc]);
 
   const searching = q.trim().length > 0;
 
@@ -149,6 +168,34 @@ export default function Library() {
         })}
       </nav>
 
+      {/* 排序：点单次数 / 更新时间都能升序、降序；默认保持收藏先后 */}
+      {db.recipes.length > 0 && (
+        <nav className="sortbar" aria-label="排序方式">
+          <span className="sortlabel">排序</span>
+          {SORTS.map((s) => (
+            <button
+              key={s.key}
+              type="button"
+              className={`schip${sortKey === s.key ? ' on' : ''}`}
+              aria-pressed={sortKey === s.key}
+              onClick={() => setSortKey(s.key)}
+            >
+              {s.label}
+            </button>
+          ))}
+          <button
+            type="button"
+            className="schip dir"
+            disabled={sortKey === 'default'}
+            aria-label={asc ? '当前升序，点一下改成降序' : '当前降序，点一下改成升序'}
+            onClick={() => setAsc((v) => !v)}
+          >
+            <Icon name={asc ? 'chevronUp' : 'chevronDown'} />
+            {asc ? '升序' : '降序'}
+          </button>
+        </nav>
+      )}
+
       <main className="scroll" onScroll={closeTip}>
         <section className="pad feed">
           {loading ? (
@@ -228,6 +275,7 @@ export default function Library() {
                       <span className="title">{r.title}</span>
                       <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                         <SourceBadge source={r.source} />
+                        <span className="cnt">点过 {r.orderCount ?? 0} 次</span>
                         {r.note && (
                           <span className="note" style={{ flex: 1 }}>
                             {r.note}

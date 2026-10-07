@@ -128,8 +128,9 @@ export interface StoreValue {
   updateRecipe(id: string, patch: { title?: string; url?: string; steps?: string; note?: string }): void;
   /** 删菜谱（内容改动，会触发推送）；订单里的菜名是快照，不受影响 */
   deleteRecipe(id: string): void;
+  /** 下单（内容改动，会触发推送）；单里的菜各记一次「点单次数」 */
   addOrder(input: { meal: Meal; items: OrderItem[]; note?: string }): Order;
-  /** 删订单（内容改动，会触发推送）；点单 / 掌勺两边都会同步消失 */
+  /** 删订单（内容改动，会触发推送）；点单 / 掌勺两边都会同步消失，单里菜谱的点单次数退回 */
   deleteOrder(id: string): void;
   setOrderStatus(id: string, status: OrderStatus): void;
   /** 改昵称：两个人谁都能改，改完随仓库同步（内容改动，会触发推送） */
@@ -211,6 +212,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           note: input.note,
           createdAt: nowStamp(),
           updatedAt: nowStamp(),
+          orderCount: 0,
         };
         commit((db) => {
           db.recipes.unshift(rec);
@@ -258,6 +260,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         };
         commit((db) => {
           db.orders.unshift(order);
+          /* 点单次数：这道菜每被点进一张单就 +1（临时手输的菜没有菜谱，不计） */
+          order.items.forEach((it) => {
+            const r = it.recipeId ? db.recipes.find((x) => x.id === it.recipeId) : null;
+            if (r) r.orderCount = (r.orderCount ?? 0) + 1;
+          });
           pushLog(db, 'ok', `已发 ${input.meal === 'dinner' ? '晚餐' : '午餐'}单：${orderSummary(order)}`);
           return db;
         });
@@ -285,6 +292,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const o = db.orders.find((x) => x.id === id);
           if (!o) return db;
           db.orders = db.orders.filter((x) => x.id !== id);
+          /* 单没了，这单给菜谱记的点单次数要退回去（不低于 0） */
+          o.items.forEach((it) => {
+            const r = it.recipeId ? db.recipes.find((x) => x.id === it.recipeId) : null;
+            if (r) r.orderCount = Math.max(0, (r.orderCount ?? 0) - 1);
+          });
           pushLog(db, 'ok', `已删除点单：${orderSummary(o)}`);
           return db;
         });

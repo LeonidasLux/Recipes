@@ -26,8 +26,8 @@ export function usePreviewState(): 'populated' | 'empty' | 'error' {
 }
 
 /**
- * 「设置」格图标自带同步状态色：已同步（ok / idle）绿、失败（err）红，
- * 其余状态（未连接 / 同步中）保持原色。
+ * 「设置」格图标自带同步状态：已同步（ok / idle）绿、失败（err）红、
+ * 同步中（busy）高亮 + 闪烁 + 转圈，未连接保持原色。
  *
  * 同步状态只在这枚图标和设置页里体现 —— 其他屏不再挂顶栏 pill，
  * 免得点单、掌勺的时候被同步信息分心，但出了问题又能一眼看见。
@@ -35,6 +35,8 @@ export function usePreviewState(): 'populated' | 'empty' | 'error' {
 function syncTone(connected: boolean, status: SyncStatus): string {
   if (!connected) return '';
   if (status === 'err') return ' sync-err';
+  /* 同步中：点第二格 / 切角色会顺手同步一次，靠这枚图标转起来告诉用户「在同步」 */
+  if (status === 'busy') return ' sync-busy';
   if (status === 'ok' || status === 'idle') return ' sync-ok';
   return '';
 }
@@ -48,13 +50,19 @@ function syncTone(connected: boolean, status: SyncStatus): string {
  */
 export function TabBar({ active }: { active: TabKey }) {
   const { view, connected } = useStore();
-  const { status } = useSync();
+  const { status, syncNow } = useSync();
   const second = view === 'cook' ? COOK_TAB : ORDER_TAB;
 
-  const tab = (t: TabDef, extra = '') => (
+  const tab = (t: TabDef, extra = '', onClick?: () => void) => (
     /* 四格之间互相换屏用 replace：一级页不叠历史，否则按返回会退回「上一次用过的一级页」，
        而不是直接回桌面（返回键规则见 src/lib/back.tsx）。中间那个「＋添加」是二级页，仍走 push。 */
-    <Link key={t.key} to={t.to} replace className={`tab${extra}${t.key === active ? ' active' : ''}`}>
+    <Link
+      key={t.key}
+      to={t.to}
+      replace
+      className={`tab${extra}${t.key === active ? ' active' : ''}`}
+      onClick={onClick}
+    >
       <Icon name={t.icon} />
       <span>{t.label}</span>
       <span className="bubble" />
@@ -64,7 +72,10 @@ export function TabBar({ active }: { active: TabKey }) {
   return (
     <nav className="tabbar" style={{ ['--tabs' as string]: '4' }} aria-label="主导航">
       {tab(LIBRARY_TAB)}
-      {tab(second)}
+      {/* 第二格（点单 / 掌勺）点一下顺手同步一次：进来看到的单 / 菜单都该是新的 */}
+      {tab(second, '', () => {
+        if (connected) void syncNow({ toast: false });
+      })}
       <Link to="/add" className="tab add">
         <span className="fab">
           <Icon name="plus" />

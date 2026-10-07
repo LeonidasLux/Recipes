@@ -1,5 +1,5 @@
 import type { DB, Order, PersonKey, Profile, Profiles, Recipe, SyncConfig } from './types';
-import { nowStamp, stamp } from './helpers';
+import { nowStamp, nowStampSec, stamp } from './helpers';
 
 export const SCHEMA = 3;
 export const DB_KEY = 'jishiben-db-v1';
@@ -39,8 +39,9 @@ export function seed(): DB {
       view: 'order',
       autoPull: true,
       intervalSec: 60,
-      lastPulledAt: t,
-      lastPushedAt: t,
+      /* 同步时间到秒：设置页那行「已同步 · …」要看得出确实同步过 */
+      lastPulledAt: nowStampSec(),
+      lastPushedAt: nowStampSec(),
     },
     /* 名字留空：不认识这两个人，界面用「点菜方 / 掌勺方」兜底，首次设置里填 */
     profiles: emptyProfiles(),
@@ -56,6 +57,7 @@ export function seed(): DB {
         steps: '1. 牛腩冷水下锅焯水，撇沫捞出。\n2. 番茄去皮切块，一半先炒出沙，一半后放。\n3. 加热水没过牛腩，小火炖 40 分钟。\n4. 收汁前调味，撒葱花。',
         createdAt: past(48, 10, 12),
         updatedAt: past(1, 20, 30),
+        orderCount: 1, /* 今天的午餐单里点过它 */
       },
       {
         id: 'r2',
@@ -68,6 +70,7 @@ export function seed(): DB {
         steps: '1. 葱切段，冷油小火熬到葱变焦黄，滤出葱油。\n2. 水开下面，煮 2 分钟捞出过冰水。\n3. 鸡蛋煮 6 分半，冰水泡过再剥壳。\n4. 面拌葱油、生抽和一点糖，摆上溏心蛋。',
         createdAt: past(49, 21, 5),
         updatedAt: past(6, 12, 40),
+        orderCount: 1, /* 今天的晚餐单里点过它 */
       },
       {
         id: 'r3',
@@ -80,6 +83,7 @@ export function seed(): DB {
         steps: '1. 两只椰青取水，椰肉挖成条。\n2. 鸡块冷水下锅焯水后洗净。\n3. 椰水加等量清水煮开，下鸡块煮 8 分钟。\n4. 先喝汤，再涮菜。',
         createdAt: past(53, 18, 0),
         updatedAt: past(7, 8, 15),
+        orderCount: 1, /* 昨天那张已做完的午餐单 */
       },
       {
         id: 'r4',
@@ -92,6 +96,7 @@ export function seed(): DB {
         steps: '1. 奶油奶酪室温软化，加糖打顺滑。\n2. 分次加蛋液拌匀，再加淡奶油。\n3. 筛入面粉，面糊过筛两遍。\n4. 220℃ 烤 25 分钟，表面焦黑即可，冷藏一夜更好吃。',
         createdAt: past(56, 15, 30),
         updatedAt: past(8, 21, 9),
+        orderCount: 1, /* 今天的午餐单里点过它 */
       },
       {
         id: 'r5',
@@ -104,6 +109,7 @@ export function seed(): DB {
         steps: '1. 鸡腿切块，用米酒抓一下。\n2. 麻油小火煸姜片到卷边，下蒜瓣。\n3. 下鸡块煎上色，加酱油、米酒、糖。\n4. 收汁后关火，拌入九层塔。',
         createdAt: past(59, 9, 45),
         updatedAt: past(12, 19, 26),
+        orderCount: 0, /* 还没被点过 */
       },
       {
         id: 'r6',
@@ -116,6 +122,7 @@ export function seed(): DB {
         steps: '1. 糯米提前泡 4 小时，上锅蒸 25 分钟。\n2. 椰浆加糖和一小撮盐，小火煮化。\n3. 趁热把椰浆拌进糯米，盖上焖 15 分钟。\n4. 配芒果片，淋剩下的椰浆。',
         createdAt: past(63, 14, 0),
         updatedAt: past(17, 10, 21),
+        orderCount: 1, /* 今天的晚餐单里点过它 */
       },
     ],
     orders: [
@@ -195,9 +202,10 @@ export function normalizeProfiles(raw: unknown): Profiles {
 }
 
 /**
- * 把任意来源的菜谱规整成当前 schema。补全项只有两个：
+ * 把任意来源的菜谱规整成当前 schema。补全项只有三个：
  *   · `createdAt`：老缓存 / 老仓库（写于加这个字段之前）没有，用 `updatedAt` 顶上；
  *   · `steps`（做法）：同样可能缺，补空串。
+ *   · `orderCount`（点单次数）：同样可能缺（或不是数字），补 0。
  * 其余字段仍然不做补全 —— 缺了只是显示为空，不会崩。
  */
 export function normalizeRecipes(raw: unknown): Recipe[] {
@@ -208,6 +216,9 @@ export function normalizeRecipes(raw: unknown): Recipe[] {
       r.createdAt = typeof r.updatedAt === 'string' && r.updatedAt ? r.updatedAt : '—';
     }
     if (typeof r.steps !== 'string') r.steps = '';
+    if (typeof r.orderCount !== 'number' || !Number.isFinite(r.orderCount) || r.orderCount < 0) {
+      r.orderCount = 0;
+    }
   });
   return recipes;
 }

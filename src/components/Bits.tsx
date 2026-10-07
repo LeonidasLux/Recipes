@@ -102,20 +102,3 @@ export function StateCard({ icon, title, desc, children, className }: StateCardP
     </div>
   );
 }
-
-/* ─── 顶栏同步 pill ─────────────────────────── */
-
-export function SyncPill({
-  kind,
-  label,
-}: {
-  kind: 'synced' | 'syncing' | 'syncerr' | 'syncoff';
-  label: string;
-}) {
-  return (
-    <span className={`pill ${kind}`}>
-      <Icon name={kind === 'syncerr' ? 'alert' : kind === 'syncing' ? 'sync' : 'check'} />
-      <span>{label}</span>
-    </span>
-  );
-}

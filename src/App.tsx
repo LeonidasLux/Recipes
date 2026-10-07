@@ -1,9 +1,11 @@
+import { useEffect } from 'react';
 import { HashRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom';
 import { StoreProvider, useStore } from './data/store';
 import { ToastProvider } from './components/Toast';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { SyncProvider } from './lib/useSync';
 import { BackGuard } from './lib/back';
+import { installLongPressGuard } from './lib/gestures';
 
 import Setup from './screens/Setup';
 import Library from './screens/Library';
@@ -22,6 +24,9 @@ function RequireSetup() {
 
 /** 路由表 + 数据/同步上下文（不含具体 Router，便于测试挂载） */
 export function AppShell() {
+  /* 长按是「删除」手势：整页不让选中文字，也拦掉系统的长按菜单（输入框除外） */
+  useEffect(() => installLongPressGuard(), []);
+
   return (
     <StoreProvider>
       <ToastProvider>
