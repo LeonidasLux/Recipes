@@ -42,6 +42,10 @@ interface SyncValue {
 
 const SyncCtx = createContext<SyncValue | null>(null);
 
+/* 撞车（409 / 422）时最多再取一次新 sha 重试几轮。每轮都会重新读一次仓库，
+   所以不是「拿同一份旧 sha 反复撞」；上限留小一点，网络真有问题时别死磕。 */
+const MAX_CONFLICT_RETRIES = 2;
+
 export function SyncProvider({ children }: { children: ReactNode }) {
   const store = useStore();
   const { toast } = useToast();
@@ -112,6 +116,20 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   }, []);
 
   /* ─── 推送 ─────────────────────────────────── */
+  /** 推之前先确保手上有这个文件的 sha：没有 sha 的 PUT 会被 GitHub 判成 422 / 409，
+      等于白白刷一条失败记录（然后才轮到重试去救）。读一次就知道 sha 了。 */
+  const shaFor = useCallback(async (
+    cfg: SyncConfig,
+    key: 'recipes' | 'orders' | 'profiles',
+    path: string,
+    signal: AbortSignal,
+  ): Promise<string | undefined> => {
+    if (shaRef.current[key] !== undefined) return shaRef.current[key];
+    const f = await getJson<unknown>(cfg.repo, path, cfg.branch, cfg.token, signal);
+    shaRef.current[key] = f?.sha;
+    return f?.sha;
+  }, []);
+
   const doPush = useCallback(async (attempt = 0, cfgOverride?: SyncConfig | null): Promise<void> => {
     const cfg = cfgOverride ?? storeRef.current.db.config;
     if (!cfg?.repo || !cfg.token) throw new GithubError('auth', '还没有连接仓库。');
@@ -133,33 +151,39 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       /* 逐份比对，只推真正变了的那一份 —— 否则改个昵称会在仓库里留下
          「菜谱 + 订单 + 昵称」三条提交，历史全是噪音 */
       if (lastPushed.current.recipes !== payload.recipes) {
+        const sha = await shaFor(cfg, 'recipes', RECIPES_PATH, signal);
         shaRef.current.recipes = await putJson(
           cfg.repo, RECIPES_PATH, cfg.branch, cfg.token,
-          recipesDoc, `记食本：更新菜谱库（${db.recipes.length} 条）`, shaRef.current.recipes, signal,
+          recipesDoc, `记食本：更新菜谱库（${db.recipes.length} 条）`, sha, signal,
         );
         lastPushed.current.recipes = payload.recipes;
       }
       if (lastPushed.current.orders !== payload.orders) {
+        const sha = await shaFor(cfg, 'orders', ORDERS_PATH, signal);
         shaRef.current.orders = await putJson(
           cfg.repo, ORDERS_PATH, cfg.branch, cfg.token,
-          ordersDoc, `记食本：更新点单（${db.orders.length} 条）`, shaRef.current.orders, signal,
+          ordersDoc, `记食本：更新点单（${db.orders.length} 条）`, sha, signal,
         );
         lastPushed.current.orders = payload.orders;
       }
       if (lastPushed.current.profiles !== payload.profiles) {
+        const sha = await shaFor(cfg, 'profiles', PROFILES_PATH, signal);
         shaRef.current.profiles = await putJson(
           cfg.repo, PROFILES_PATH, cfg.branch, cfg.token,
-          profilesDoc, '记食本：更新昵称', shaRef.current.profiles, signal,
+          profilesDoc, '记食本：更新昵称', sha, signal,
         );
         lastPushed.current.profiles = payload.profiles;
       }
 
       pushedRev.current = revAtStart;
     } catch (e) {
-      /* 仓库里文件被别处改过 → 取回新 sha 重试一次 */
-      if (e instanceof GithubError && e.kind === 'conflict' && attempt < 1) {
+      /* 仓库里文件被别处改过 → 取回新 sha 再试。
+         取不到新 sha 就直接放弃这一轮：拿同一份旧 sha 再 PUT 一次只会再撞一次 409，
+         白留一条失败记录（控制台里那串 409 就是这么刷出来的）。 */
+      if (e instanceof GithubError && e.kind === 'conflict' && attempt < MAX_CONFLICT_RETRIES) {
         done();
-        await refreshShas();
+        const refreshed = await refreshShas(cfgOverride);
+        if (!refreshed) throw e;
         return doPush(attempt + 1, cfgOverride);
       }
       throw e;
@@ -168,9 +192,11 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const refreshShas = useCallback(async () => {
-    const cfg = storeRef.current.db.config;
-    if (!cfg?.repo || !cfg.token) return;
+  /** 重新读一遍三份文件的 sha。返回「这一轮读到了没有」。 */
+  const refreshShas = useCallback(async (cfgOverride?: SyncConfig | null) => {
+    /* 连接向导里刚填的配置还没进 storeRef，必须认传进来的这份，否则会去读旧仓库 */
+    const cfg = cfgOverride ?? storeRef.current.db.config;
+    if (!cfg?.repo || !cfg.token) return false;
     const { signal, done } = withTimeout();
     try {
       const [rf, of, pf] = await Promise.all([
@@ -181,8 +207,10 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       shaRef.current.recipes = rf?.sha;
       shaRef.current.orders = of?.sha;
       shaRef.current.profiles = pf?.sha;
+      return true;
     } catch {
-      /* 拿不到就下次再说 */
+      /* 网络不通 / 读不到：这一轮没取到新 sha，交给调用方决定要不要再试 */
+      return false;
     } finally {
       done();
     }

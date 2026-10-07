@@ -237,7 +237,11 @@
 .s-order .osum .omt img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .s-order .osum .omt .mono { font-family: var(--font-display); font-size: 20px; color: var(--accent-ink); }
 .s-order .osum .ob { min-width: 0; }
-.s-order .osum .ob .t { font-size: 14.5px; font-weight: 700; line-height: 1.3; }
+/* 单子是剪藏来的话，标题可能是一整句视频标题（「西红柿炒鸡蛋，你就像我这样做…」）。
+   这里按两行截断：既不会溢出卡片压住右边的箭头，也能让用户看清点的是哪道菜。
+   注意不能用 .ellip —— 它只有 text-overflow，挂在 span 这种内联盒上不生效。 */
+.s-order .osum .ob .t { font-size: 14.5px; font-weight: 700; line-height: 1.3; word-break: break-word;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .s-order .osum .ob .m { font-size: 12px; color: var(--muted); margin-top: 3px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .s-order .osum .chev { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: color-mix(in oklch, var(--border) 55%, transparent); }
 .s-order .osum .chev svg { width: 16px; height: 16px; stroke: var(--muted); fill: none; stroke-width: 2.2; transition: transform .18s ease; }

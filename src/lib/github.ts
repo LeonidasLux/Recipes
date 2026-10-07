@@ -13,6 +13,12 @@ export const RECIPES_PATH = 'recipes.json';
 export const ORDERS_PATH = 'orders.json';
 export const PROFILES_PATH = 'profiles.json';
 
+/* 一律绕过浏览器 HTTP 缓存。GitHub 的 contents 接口回的是
+   `Cache-Control: public, max-age=60`，按默认缓存模式读，一分钟内拿到的可能是
+   旧正文和旧 sha —— 拉取会套用过期数据，写入则会拿着过期 sha 撞 409，
+   连「取回新 sha 重试」也跟着读到同一份旧 sha，重试等于白重试。 */
+const NO_CACHE: RequestInit = { cache: 'no-store' };
+
 /** 面向用户的同步错误：message 可直接展示 */
 export class GithubError extends Error {
   readonly kind: 'auth' | 'forbidden' | 'notfound' | 'conflict' | 'network' | 'unknown';
@@ -101,7 +107,7 @@ export async function getJson<T>(
   const url = `${API}/repos/${repo}/contents/${path}?ref=${encodeURIComponent(branch)}`;
   let res: Response;
   try {
-    res = await fetch(url, { headers: authHeaders(token), signal });
+    res = await fetch(url, { ...NO_CACHE, headers: authHeaders(token), signal });
   } catch (e) {
     throw networkError(e);
   }
@@ -143,6 +149,7 @@ export async function putJson(
   let res: Response;
   try {
     res = await fetch(url, {
+      ...NO_CACHE,
       method: 'PUT',
       headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -166,7 +173,7 @@ export async function verifyRepo(
 ): Promise<void> {
   let res: Response;
   try {
-    res = await fetch(`${API}/repos/${repo}`, { headers: authHeaders(token), signal });
+    res = await fetch(`${API}/repos/${repo}`, { ...NO_CACHE, headers: authHeaders(token), signal });
   } catch (e) {
     throw networkError(e);
   }
@@ -175,6 +182,7 @@ export async function verifyRepo(
   let b: Response;
   try {
     b = await fetch(`${API}/repos/${repo}/branches/${encodeURIComponent(branch)}`, {
+      ...NO_CACHE,
       headers: authHeaders(token),
       signal,
     });

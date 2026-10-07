@@ -336,6 +336,10 @@ function readDb(): DB {
  */
 interface FakeGithub {
   calls: string[];
+  /** 每次 PUT 带的 sha —— 用来验证「撞车后重试用的是新读到的 sha，不是旧 sha」 */
+  puts: Array<{ path: string; sha?: string }>;
+  /** 每次 fetch 的 cache 选项 —— 用来验证读仓库绕过了浏览器 HTTP 缓存 */
+  fetches: Array<{ method: string; path: string; cache?: string }>;
   restore(): void;
 }
 
@@ -348,24 +352,62 @@ function installFakeGithub(opts: {
   repoStatus?: number;
   /** 让第一次 PUT 返回这个状态码（用来测 409 冲突自动重试） */
   putFailOnce?: number;
+  /** 撞车的同时「另一台设备」先推了一版：之后 GET 到的是新 sha */
+  shaChangedAfterConflict?: boolean;
+  /** 撞车后连读也读不到（模拟取不回新 sha） */
+  getFailAfterConflict?: boolean;
+  /** 让假 GitHub 像真的一样校验 sha：对不上回 409，没带 sha 回 422 */
+  validateSha?: boolean;
 }): FakeGithub {
   const calls: string[] = [];
+  const puts: Array<{ path: string; sha?: string }> = [];
+  const fetches: Array<{ method: string; path: string; cache?: string }> = [];
   let putCount = 0;
+  let remoteChanged = false;
   const prev = globalThis.fetch;
   const json = (b: unknown, status = 200) =>
     new Response(JSON.stringify(b), { status, headers: { 'content-type': 'application/json' } });
   const b64 = (s: string) => Buffer.from(s, 'utf8').toString('base64');
+  /* 仓库里三份文件当前的 sha；文件不存在时是 undefined（对应 404） */
+  const shaState: Record<string, string | undefined> = {
+    recipes: opts.recipes === undefined ? undefined : 'sha-recipes',
+    orders: opts.orders === undefined ? undefined : 'sha-orders',
+    profiles: opts.profiles === undefined ? undefined : 'sha-profiles',
+  };
+  const blob = { recipes: opts.recipes, orders: opts.orders, profiles: opts.profiles } as Record<string, unknown>;
+  /* GET 的 URL 带 ?ref=main，取名字前先把查询串砍掉 */
+  const nameOf = (url: string) => url.split('/contents/')[1]?.split('?')[0]?.replace('.json', '') ?? '';
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
-    calls.push(`${method} ${url.replace('https://api.github.com', '')}`);
+    const path = url.replace('https://api.github.com', '');
+    calls.push(`${method} ${path}`);
+    fetches.push({ method, path, cache: init?.cache });
 
     if (method === 'PUT') {
       putCount++;
+      const body = JSON.parse(String(init?.body ?? '{}')) as { sha?: string };
+      puts.push({ path, sha: body.sha });
+      const name = nameOf(url);
+      /* 真 GitHub 的行为：没有 sha 或 sha 不是当前这个 → 422 / 409 */
+      if (opts.validateSha) {
+        if (shaState[name] === undefined) {
+          if (body.sha !== undefined) return json({ message: 'conflict' }, 409);
+        } else if (body.sha !== shaState[name]) {
+          return json({ message: 'conflict' }, body.sha === undefined ? 422 : 409);
+        }
+      }
       if (opts.putFailOnce && putCount === 1) {
+        remoteChanged = true;
+        if (opts.shaChangedAfterConflict) {
+          for (const k of ['recipes', 'orders', 'profiles']) {
+            if (shaState[k] !== undefined) shaState[k] = `sha-${k}-v2`;
+          }
+        }
         return json({ message: 'conflict' }, opts.putFailOnce);
       }
+      shaState[name] = `sha-${name}-new`;
     }
 
     if (/\/repos\/[\w.-]+\/[\w.-]+$/.test(url) && method === 'GET') {
@@ -375,34 +417,20 @@ function installFakeGithub(opts: {
     }
     if (url.includes('/branches/')) return json({ name: 'main' });
 
-    if (url.includes('/contents/recipes.json')) {
+    if (url.includes('/contents/')) {
+      const name = nameOf(url);
       if (method === 'GET') {
-        return opts.recipes === undefined
+        if (remoteChanged && opts.getFailAfterConflict) return json({ message: 'Server Error' }, 500);
+        return shaState[name] === undefined
           ? json({ message: 'Not Found' }, 404)
-          : json({ sha: 'sha-recipes', content: b64(JSON.stringify(opts.recipes)) });
+          : json({ sha: shaState[name], content: b64(JSON.stringify(blob[name])) });
       }
-      return json({ content: { sha: 'sha-recipes-new' } });
-    }
-    if (url.includes('/contents/orders.json')) {
-      if (method === 'GET') {
-        return opts.orders === undefined
-          ? json({ message: 'Not Found' }, 404)
-          : json({ sha: 'sha-orders', content: b64(JSON.stringify(opts.orders)) });
-      }
-      return json({ content: { sha: 'sha-orders-new' } });
-    }
-    if (url.includes('/contents/profiles.json')) {
-      if (method === 'GET') {
-        return opts.profiles === undefined
-          ? json({ message: 'Not Found' }, 404)
-          : json({ sha: 'sha-profiles', content: b64(JSON.stringify(opts.profiles)) });
-      }
-      return json({ content: { sha: 'sha-profiles-new' } });
+      return json({ content: { sha: shaState[name] ?? `sha-${name}-new` } });
     }
     return json({ message: 'unexpected call' }, 500);
   }) as typeof fetch;
 
-  return { calls, restore: () => void (globalThis.fetch = prev) };
+  return { calls, puts, fetches, restore: () => void (globalThis.fetch = prev) };
 }
 
 const FAKE_CFG = { repo: 'owner/repo', token: 'ghp_012345678901234567890123456789012345' };
@@ -2576,6 +2604,136 @@ async function syncChecks() {
     gh.restore();
   }
 
+  console.log('\n[同步 · 撞车后取回的是「新」sha，不是拿旧 sha 空撞]');
+  localStorage.clear();
+  {
+    const base = seed();
+    const gh = installFakeGithub({
+      recipes: { schema: 3, updatedAt: 'x', recipes: base.recipes },
+      orders: { schema: 3, updatedAt: 'x', orders: base.orders },
+      profiles: { schema: 3, updatedAt: 'x', profiles: base.profiles },
+      putFailOnce: 409,
+      /** 撞车的同时「另一台设备」先推了一版：仓库里的 sha 已经不是我们手上那个 */
+      shaChangedAfterConflict: true,
+      /** 假 GitHub 也像真的一样校验 sha（不校验的话撞车演不出来） */
+      validateSha: true,
+    });
+    useDb();
+    const m = await mount('/sync');
+    await m.click('.btn-primary');
+    await m.wait(400);
+    const before = gh.puts.length;
+    await m.click('#editNamesBtn');
+    await m.type('#nickPartner', '撞车重试');
+    await m.click('#saveNamesBtn');
+    await m.wait(1400);
+
+    const prof = gh.puts.slice(before).filter((p) => p.path.includes('profiles.json'));
+    check(prof.length === 2, '撞车后重推了一次', `实际 ${prof.length} 次`);
+    check(prof[0]?.sha === 'sha-profiles', '第一次 PUT 用的是手上的 sha', String(prof[0]?.sha));
+    check(
+      prof[1]?.sha === 'sha-profiles-v2',
+      '★ 重试用的是重新读到的新 sha（不是旧 sha）',
+      String(prof[1]?.sha),
+    );
+    check(readDb().profiles.b.nickname === '撞车重试', '重试成功后改动落库');
+    check(m.html().includes('已同步'), '重试成功后状态回到已同步');
+    await m.close();
+    gh.restore();
+  }
+
+  console.log('\n[同步 · 取不回新 sha 时不再拿旧 sha 空撞第二次]');
+  localStorage.clear();
+  {
+    const base = seed();
+    const gh = installFakeGithub({
+      recipes: { schema: 3, updatedAt: 'x', recipes: base.recipes },
+      orders: { schema: 3, updatedAt: 'x', orders: base.orders },
+      profiles: { schema: 3, updatedAt: 'x', profiles: base.profiles },
+      putFailOnce: 409,
+      getFailAfterConflict: true,
+    });
+    useDb();
+    const m = await mount('/sync');
+    await m.click('.btn-primary');
+    await m.wait(400);
+    const before = gh.puts.length;
+    await m.click('#editNamesBtn');
+    await m.type('#nickPartner', '读不到新 sha');
+    await m.click('#saveNamesBtn');
+    await m.wait(1400);
+
+    const prof = gh.puts.slice(before).filter((p) => p.path.includes('profiles.json'));
+    check(prof.length === 1, '★ 读不到新 sha → 不空撞第二次', `实际 ${prof.length} 次`);
+    check(m.html().includes('刚被改过'), '★ 给出「文件刚被改过」的提示，让用户先同步');
+    await m.close();
+    gh.restore();
+  }
+
+  console.log('\n[同步 · 读仓库一律绕过浏览器 HTTP 缓存]');
+  localStorage.clear();
+  {
+    const base = seed();
+    const gh = installFakeGithub({
+      recipes: { schema: 3, updatedAt: 'x', recipes: base.recipes },
+      orders: { schema: 3, updatedAt: 'x', orders: base.orders },
+      profiles: { schema: 3, updatedAt: 'x', profiles: base.profiles },
+    });
+    useDb();
+    const m = await mount('/sync');
+    await m.click('.btn-primary'); /* 拉一次：三份 GET */
+    await m.wait(400);
+    await m.click('#editNamesBtn');
+    await m.type('#nickPartner', '缓存无关');
+    await m.click('#saveNamesBtn'); /* 改一下：至少一次 PUT */
+    await m.wait(1400);
+
+    const cached = gh.fetches.filter((f) => f.cache !== 'no-store');
+    check(
+      gh.fetches.length > 0 && cached.length === 0,
+      '★ 每个 GitHub 请求都带 cache: no-store（否则拿到的可能是缓存里的旧 sha）',
+      cached.map((f) => `${f.method} ${f.path} cache=${String(f.cache)}`).join(' | '),
+    );
+    check(
+      gh.fetches.some((f) => f.method === 'GET') && gh.fetches.some((f) => f.method === 'PUT'),
+      '读写两条路都验到了',
+    );
+    await m.close();
+    gh.restore();
+  }
+
+  console.log('\n[同步 · 首次推送前先取一次 sha，不靠撞车去救]');
+  localStorage.clear();
+  {
+    /* 新开一局（内存里还没有任何 sha）直接点单：以前会先发一个不带 sha 的 PUT
+       撞 422 / 409，然后才靠重试补救 —— 现在推之前先把 sha 读回来。 */
+    const base = seed();
+    const gh = installFakeGithub({
+      recipes: { schema: 3, updatedAt: 'x', recipes: base.recipes },
+      orders: { schema: 3, updatedAt: 'x', orders: base.orders },
+      profiles: { schema: 3, updatedAt: 'x', profiles: base.profiles },
+      validateSha: true,
+    });
+    useDb();
+    const m = await mount('/order');
+    await m.click('.dishgrid .pick:nth-child(1)');
+    await m.click('.sendbtn');
+    /* 两段等：发送本身要 720ms，推送的 700ms 防抖是这次状态更新之后才挂上的 */
+    await m.wait(800);
+    await m.wait(1200);
+
+    const recipes = gh.puts.filter((p) => p.path.includes('recipes.json'));
+    check(recipes.length === 1, '★ 菜谱只推了一次（不再先空撞一个没有 sha 的 PUT）', `实际 ${recipes.length} 次`);
+    check(recipes[0]?.sha === 'sha-recipes', '★ PUT 带的是刚读回来的 sha', String(recipes[0]?.sha));
+    check(
+      gh.fetches.some((f) => f.method === 'GET' && f.path.includes('recipes.json')),
+      '推之前确实先读了一次 sha',
+    );
+    check(!m.html().includes('刚被改过'), '★ 没有多余的冲突报错');
+    await m.close();
+    gh.restore();
+  }
+
   console.log('\n[状态容器 · 日志全量保留]');
   localStorage.clear();
   {
@@ -2749,6 +2907,29 @@ async function edgeChecks() {
     const html = m.html();
     check(html.includes('1 份'), 'me=a → 只数我点的单（1 份）');
     check(!html.includes('少放辣'), '不显示对方点的单（o2 的备注）');
+    await m.close();
+  }
+
+  console.log('\n[边界 · 今日点单卡片的超长标题不溢出]');
+  localStorage.clear();
+  {
+    /* 单子是剪藏来的话，标题可能是一整句视频标题。以前那个 .ellip 挂在 span 上 ——
+       text-overflow 对内联盒不生效，文字直接溢出卡片被裁掉，还压住右边的箭头。 */
+    const LONG = '西红柿炒鸡蛋，你就像我这样做，真的很下饭！';
+    useDb((db) => {
+      db.orders[0].items = [{ recipeId: null, dishName: LONG }]; /* o1：我今天的那单 */
+    });
+    const m = await mount('/order');
+    const t = m.$('.osum .ob .t');
+    check(t?.textContent === LONG, '★ 长标题整句留在 DOM 里（截断交给 CSS，不是切字符串）', t?.textContent ?? '');
+    check(!t?.classList.contains('ellip'), '★ 不再用对内联盒无效的 .ellip');
+    /* 样式那半边：两行截断，冒烟里样式表是空的，只能读文件验 */
+    const css = readFileSync('src/styles/screens.css', 'utf8');
+    check(
+      /\.s-order \.osum \.ob \.t\s*\{[^}]*-webkit-line-clamp:\s*2/.test(css),
+      '★ 今日点单标题按两行截断',
+    );
+    check(/\.s-order \.osum \.ob \.t\s*\{[^}]*overflow:\s*hidden/.test(css), '截断框自己兜住溢出');
     await m.close();
   }
 

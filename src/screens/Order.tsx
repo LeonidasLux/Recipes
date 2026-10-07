@@ -483,7 +483,8 @@ function OrderCard({
           {art ? <img src={artUrl(art)} alt={main} /> : <span className="mono">{initial(main)}</span>}
         </span>
         <span className="ob">
-          <span className="t ellip">{orderSummary(order)}</span>
+          {/* 标题（尤其是剪藏来的长视频标题）按两行截断，见 .s-order .osum .ob .t */}
+          <span className="t">{orderSummary(order)}</span>
           <span className="m">
             {mealLabel(order.meal)} · {order.createdAt} · <StatusChip status={order.status} />
           </span>
