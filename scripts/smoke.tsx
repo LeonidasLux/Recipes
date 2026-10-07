@@ -130,8 +130,11 @@ interface Mounted {
    * 等价于「已经滚到底」——正好用来驱动滚动懒加载。
    */
   scroll(sel: string): Promise<void>;
-  pointerDown(sel: string): Promise<void>;
+  /** pointerType 传 'touch' 才像真机触摸；不传等同于鼠标 */
+  pointerDown(sel: string, pointerType?: string): Promise<void>;
   pointerUp(sel: string): Promise<void>;
+  /** 派发 contextmenu（长按链接时系统补的那个事件），返回是否被 preventDefault */
+  contextMenu(sel: string): Promise<boolean>;
   /** 长按：按下 → 推进虚拟时间（默认 600ms）→ 松手 */
   longPress(sel: string, ms?: number): Promise<void>;
   value(sel: string): string;
@@ -239,12 +242,24 @@ async function mount(path: string): Promise<Mounted> {
         el.dispatchEvent(new window.Event('scroll', { bubbles: true }));
       });
     },
-    async pointerDown(sel) {
+    async pointerDown(sel, pointerType) {
       const el = root.querySelector<HTMLElement>(sel);
       if (!el) throw new Error(`找不到 ${sel}`);
       await act(async () => {
-        el.dispatchEvent(new window.Event('pointerdown', { bubbles: true }));
+        const ev = new window.Event('pointerdown', { bubbles: true, cancelable: true });
+        /* jsdom 没有 PointerEvent，用普通 Event 顶上；pointerType 得手动挂 */
+        Object.defineProperty(ev, 'pointerType', { value: pointerType ?? '' });
+        el.dispatchEvent(ev);
       });
+    },
+    async contextMenu(sel) {
+      const el = root.querySelector<HTMLElement>(sel);
+      if (!el) throw new Error(`找不到 ${sel}`);
+      let prevented = false;
+      await act(async () => {
+        prevented = !el.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+      });
+      return prevented;
     },
     async pointerUp(sel) {
       const el = root.querySelector<HTMLElement>(sel);
@@ -3274,6 +3289,23 @@ async function edgeChecks() {
       edit.tagName === 'TEXTAREA' && edit.closest('.field') !== null && (edit.getAttribute('style') ?? '') === '',
       '详情编辑的备注也是 .field 里的 textarea（两边结构一致）',
     );
+    await m.close();
+  }
+
+  console.log('\n[边界 · 菜谱库长按走系统长按事件也能弹气泡]');
+  localStorage.clear();
+  {
+    useDb();
+    const m = await mount('/library');
+    /* 桌面右键（没有触摸指针）→ 不弹删除气泡 */
+    await m.contextMenu('.dishrow');
+    check(m.$('.tip') === null, '★ 鼠标右键不弹删除气泡');
+    /* 安卓长按 <a> 走系统那条路：指针序列可能被取消，平台随后补一个 contextmenu */
+    await m.pointerDown('.dishrow', 'touch');
+    await m.pointerUp('.dishrow');
+    await m.contextMenu('.dishrow');
+    check(m.$('.tip') !== null, '★ 触摸长按的系统长按事件也能弹出删除气泡');
+    check(m.$('.tip .tip-del') !== null, '气泡里还是那个删除按钮');
     await m.close();
   }
 

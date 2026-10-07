@@ -44,6 +44,8 @@ export default function Library() {
   const [tip, setTip] = useState<DeleteTipState | null>(null);
   const pressTimer = useRef<number | null>(null);
   const longPressed = useRef(false);
+  /* 最近一次按下的指针类型：只有触摸才算「长按」；鼠标右键不该弹删除气泡 */
+  const pressType = useRef('');
 
   /* 长按弹出的删除提示是遮罩：手机返回键先收起它，而不是退出应用 */
   useBackClose(tip !== null, closeTip);
@@ -105,6 +107,12 @@ export default function Library() {
       longPressed.current = true;
       setTip(anchorDeleteTip(el, r.id, r.title));
     }, 450);
+  }
+
+  function showTip(el: HTMLElement, r: Recipe) {
+    cancelPress();
+    longPressed.current = true;
+    setTip(anchorDeleteTip(el, r.id, r.title));
   }
 
   function closeTip() {
@@ -255,10 +263,22 @@ export default function Library() {
                     className="dishrow"
                     key={r.id}
                     to={`/recipe/${r.id}`}
-                    onPointerDown={(e) => startPress(e.currentTarget, r)}
+                    onPointerDown={(e) => {
+                      pressType.current = e.pointerType ?? '';
+                      startPress(e.currentTarget, r);
+                    }}
                     onPointerUp={cancelPress}
                     onPointerLeave={cancelPress}
                     onPointerCancel={cancelPress}
+                    onContextMenu={(e) => {
+                      /* 这一行是 <a>：安卓上长按链接走的是**系统那条长按路**，平台可能在
+                         我们 450ms 定时器到点之前就把指针序列取消掉，于是「按了半天没反应」。
+                         系统长按（触摸）会补一个 contextmenu，这里接住它弹同一个气泡。
+                         桌面右键（没有触摸指针）不进这条路，免得右键也弹删除。 */
+                      e.preventDefault();
+                      if (pressType.current !== 'touch') return;
+                      showTip(e.currentTarget, r);
+                    }}
                     onClick={(e) => {
                       if (!longPressed.current) return;
                       /* 长按已经弹了删除提示，这一次 click 不算「点开详情」，
