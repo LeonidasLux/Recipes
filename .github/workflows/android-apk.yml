@@ -59,6 +59,9 @@ jobs:
 
       - name: 打包 APK
         run: npm run apk
+        env:
+          # 让 versionName 变成 1.0.0-build.<run_number>、versionCode 随之递增
+          JISHIBEN_BUILD: ${{ github.run_number }}
 
       - name: 上传 APK（每次运行的 Actions 页面都能下载）
         uses: actions/upload-artifact@v4

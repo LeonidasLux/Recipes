@@ -215,7 +215,7 @@ GitHub Contents API：
 | `npm run test:live` | 对真实 GitHub 仓库跑同步自检（**会真的写仓库**；需要环境变量 `JISHIBEN_REPO` / `JISHIBEN_TOKEN`） |
 | `npm run test:connect` | 端到端跑一遍首次连接（真填表真点击真网络，不写入仓库） |
 | `npm run icons` | 重新生成 PWA 图标（纯 Node 写 PNG） |
-| `npm run apk` | 构建 Web → `cap sync android` → `gradlew assembleDebug` |
+| `npm run apk` | 写版本号（`scripts/set-version.mjs`）→ 构建 Web → `cap sync android` → `gradlew assembleDebug` |
 | `npm run apk:release` | 同上，出 release 包 |
 
 测试防护是强制约束（见 `AGENTS.md` §5）：**每个功能都要有对应测试，功能变更必须同步新增 / 调整测试**。冒烟测试（`scripts/smoke.tsx`）分九段（编号一～八，外加一段手机返回键）：
@@ -225,7 +225,7 @@ GitHub Contents API：
 - 纯函数：`share.ts`（解析 / **标题只留菜名** / **搜索链接取搜索词当标题（`searchKeyword`）** / **营销尾巴剥离（`toDishName`）** / 链接提取 / 来源识别 / 插画猜测）、`ai.ts`（`maskAiKey` / `normalizeAiKey` / `aiKeyShapeError` / 提示词与 JSON 宽容解析 / `normalizeAiRecipe` / `recognizeRecipe` / `verifyAiKey` 及全部错误分类）、`reader.ts`（`isFetchableUrl` / `readPageHtml` 的成功与错误分支 / `compactPage` 的标题·描述·作者候选·内嵌 JSON 昵称·噪音过滤）、`github.ts`（`maskToken` / `normalizeToken` / `tokenShapeError` / `withTimeout` / `getJson` / `putJson` / `verifyRepo` 及全部错误分类 / UTF-8 base64）、`helpers.ts`（称呼 / 摘要 / 状态 / 在单检测）、`seed` / `migrate` 数据契约。
 - 同步引擎（stub `fetch`）：首次连接（空仓库 / 已有数据 / 失败分支 / **仓库里是老结构**）、立即同步拉取、本地改动自动推送且只推变化的那一份、空仓库先拉后推、409 自动重试一次、断开二次确认、「我是谁」静默切换、日志全量保留。
 - 组件与界面边界：详情占位卡、Toast 最多同时 3 条、「设置」格图标随同步状态变绿 / 变红（未连接不染色）、菜谱库 / 点单 / 掌勺顶栏不再出现同步状态（设置页仍显示）、点单 / 掌勺屏右上角切角色（落库 `config.view`、底部第二格立刻变、顺手跳到对应那屏、不触发推送、设置页已无角色区、掌勺有没做完的单时开关右上角挂数字红点、全做完则不挂）、掌勺点一道菜弹出菜品详情（带备注与原文链接；× / 遮罩 / Esc 都能关；临时菜只给说明不给外链）、菜谱库长按删除（短按不弹、长按弹 tooltip、点删除真删、长按后不误跳详情）、详情页删除需二次确认、设置页同步日志（默认折叠、展开先 20 条、滚到底每次再 20 条、到底提示已全部加载）、点单页「历史点单」与掌勺页「已做完」默认折叠只露数量、导入配置 JSON、本地模式进入、**首次设置高级设置里的可选 DeepSeek Key（在折叠区内、密码框、可留空连接、填了就落 config、形状不对标红、本地模式也能带上）**、错误边界兜底页（渲染期抛错不白屏）。
-- 仓库结构：直接读 `.github/workflows/android-apk.yml`，断言「`push` 到 `main` 触发、跑的就是 `npm run apk`、上传 `app-debug.apk`、用 `gh release create` 出 Release、声明 `contents: write`」这几步没被删掉（静态断言，不涉及网络与界面）。
+- 仓库结构：直接读 `.github/workflows/android-apk.yml`、`android/app/build.gradle` 与 `scripts/set-version.mjs`，断言「`push` 到 `main` 触发、跑的就是 `npm run apk`、带上 `JISHIBEN_BUILD=<run_number>`、上传 `app-debug.apk`、用 `gh release create` 出 Release、声明 `contents: write`」没被删掉；版本号计算（本机 = package.json 的 version、CI = `<version>-build.<n>` 且 `versionCode` 递增、build 号非数字时退回基准值）与「debug 构建显式用仓库里的 `android/app/debug.keystore`、该文件确实在仓库里」也一并钉住（静态断言 + 纯函数，不涉及网络与界面）。
 - 手机返回键：`backAction()` 决策表（有遮罩关遮罩 / **一级页直接退出应用，哪怕历史里还压着别的格** / 二级页有来路就回上一屏 / 深链进二级页没来路落到菜谱库 / 网页端不接管）、`isRootPath()` 一级页名单（四格 + 首次设置 + `/`）与 `trackHistory()` 台账（首个条目落栈、push 加深、replace 换顶、pop 变浅、根屏 pop 不掏空栈）；真实挂载后调 `pressBack()`（和真机 `backButton` 事件同一个入口）验证：菜谱库点进详情按返回回菜谱库、再按一次才交给系统退出、添加页按返回回菜谱库、从点单页进的添加页存完回点单页且返回键不会退回那张已交掉的表单、长按删除提示与掌勺菜品详情都被返回键优先关掉、**一级页之间不互相回退**（设置页按返回不回菜谱库，从详情跳去的点单页按返回不回详情）、做完的首次向导不留在返回栈里。
 
 `scripts/register-dom.mjs` 用 `node --import` 预加载 jsdom，**不能**改成普通 `import`。它还注入一个**虚拟时钟**（`globalThis.__domClock`）：默认不武装、定时器照常透传真实实现，所以 `dump` / `test:connect` 这类脚本完全不受影响；只有冒烟测试在启动时 `arm()`，之后用 `settle(ms)` 显式推进时间。各屏「进场骨架」（460～520ms）与同步防抖（700ms）因此不再真的空等挂钟 —— 整套冒烟从约 85s 降到约 2s，断言覆盖面不变（未注入时 `settle` 自动回退到真实等待）。
@@ -233,11 +233,11 @@ GitHub Contents API：
 ### GitHub Actions 自动打包（`.github/workflows/android-apk.yml`）
 
 - 触发：`push` 到 `main`，外加手动 `workflow_dispatch`。
-- 步骤：`actions/setup-node@v4`（Node 20 + npm 缓存）→ `actions/setup-java@v4`（temurin 17 + gradle 缓存）→ `android-actions/setup-android@v3`（装 `platforms;android-34`、`build-tools;34.0.0`）→ `npm ci` → **`npm run apk`**（和本机同一条命令，不另写打包步骤）。
+- 步骤：`actions/setup-node@v4`（Node 20 + npm 缓存）→ `actions/setup-java@v4`（temurin 17 + gradle 缓存）→ `android-actions/setup-android@v3`（装 `platforms;android-34`、`build-tools;34.0.0`）→ `npm ci` → **`npm run apk`**（和本机同一条命令，不另写打包步骤；这一步带 `JISHIBEN_BUILD=<run_number>`，`scripts/set-version.mjs` 据此把 `versionName` 写成 `<package.json version>-build.<run_number>`、`versionCode` 写成 `100000 + run_number`）。
 - `package.json` 的 `apk` 脚本是 Windows 写法（`cd android && gradlew assembleDebug`），Linux runner 上要多做一步「让 gradlew 可用」：`android/gradlew` 在仓库里是**权限位 644 + CRLF + 带 BOM**（Windows 上提交的），直接跑会是 bad interpreter —— 工作流先就地 `sed` 成 LF 去 BOM（只改 runner 工作区，不进仓库）再 `chmod +x`，最后把 `$GITHUB_WORKSPACE/android` 追加进 `$GITHUB_PATH`，`sh` 才找得到这个不带扩展名的 wrapper。本机 Windows 走的是 `gradlew.bat`，不受影响。
 - 下载源：本机的**腾讯云 Gradle 镜像**只对国内链路有意义，工作流在 runner 上把 `distributionUrl` 的域名换回 `services.gradle.org/distributions/`（同样只改工作区，不进仓库）；Maven 那边仍沿用 `android/build.gradle` 里的阿里云镜像（后面还有 `google()` / `mavenCentral()` 兜底）。
 - 产物两条路：① `android/app/build/outputs/apk/debug/app-debug.apk` 作为 run artifact 上传（Actions 页面可下载）；② 用 runner 自带的 `gh` 建一个 Release，tag = `v<package.json version>-build.<run_number>`，附件名 `jishiben-<tag>.apk`，并标为 latest。同一 run 重跑时 tag 已存在，走 `gh release upload --clobber`。
-- Release 里挂的是 **debug 签名**的包（可直接安装、不能上架）；正式签名见 README「Debug 包 vs Release 包」。
+- Release 里挂的是 **debug 签名**的包，而且**签名固定**：debug keystore 就是仓库里的 `android/app/debug.keystore`（口令是工具链默认的 `android` / `androiddebugkey`，`android/app/build.gradle` 的 `signingConfigs.debug` 显式指向它）。固定之前每个 runner 都会现生成一份调试密钥，签名各不相同，手机上覆盖安装会报「与已安装应用签名不同」；现在本机与 CI 的包签名一致，能互相覆盖。**代价**：调试密钥是公开、不防篡改的，拿到它的人可以签出同包名的包；要更强的保护得换正式密钥 + 不入库（见 README「Debug 包 vs Release 包」）。
 - 权限：只有 `contents: write`（建 Release 用 `github.token`）；仓库里不落任何 token（见 `AGENTS.md` §6）。
 
 ## 11. PWA 与 Android
@@ -245,6 +245,8 @@ GitHub Contents API：
 - PWA：`npm run build` 后把 `dist/` 部署到任意静态托管（HashRouter 无需 rewrite）；Android Chrome / iOS Safari 可「添加到主屏幕」，参数见 `public/manifest.webmanifest` 与 `index.html`。
 - Capacitor：应用 ID `com.leonidaslux.jishiben`，应用名「记食本」，`webDir=dist`；Android `minSdk 22 / compileSdk 34 / targetSdk 34`（`android/variables.gradle`）。
 - **`@capacitor/app` 是手机返回键的底座**：WebView 自己不处理返回键，装上这个插件、由 `App.addListener('backButton')` 交给 `src/lib/back.tsx` 决策，二级页按返回才是「回上一屏」而不是关掉应用（没接管的旧包表现就是按返回直接回桌面）。插件要在 `android/` 工程里生效，靠 `npx cap sync android`（`npm run apk` 里已经带了）；`android/capacitor.settings.gradle` 与 `android/app/capacitor.build.gradle` 是这条同步的结果，跟着一起提交。
+- **签名固定成仓库里那份 debug keystore**（`android/app/debug.keystore`，口令 `android` / 别名 `androiddebugkey`，`android/app/build.gradle` 的 `signingConfigs.debug` 显式指向它）。AGP 默认的调试密钥是**每台机器 / 每个 CI runner 现生成**的，签名各不相同 —— 那正是「下载覆盖安装报签名不同」的原因。固定之后本机与 Release 的包能互相覆盖；**换签名（比如改用正式密钥）时必须先卸载一次旧包**。这份调试密钥是公开、不防篡改的（不是 token，可以入库，见 `AGENTS.md` §6）。
+- **版本号每次递增**：`scripts/set-version.mjs` 在打包前改写 `android/app/build.gradle` 的 `versionCode` / `versionName`。本机（无 build 号）= `package.json` 的 version + `versionCode 100000`；CI 带 `JISHIBEN_BUILD=<run_number>` = `<version>-build.<n>` + `versionCode 100000 + n`。`npm run apk` / `apk:release` 里已经带上了这一步。手机上「应用信息」能直接看到版号。
 - 国内网络：`android/gradle/wrapper/gradle-wrapper.properties` 的 `distributionUrl` 指向腾讯云镜像；`android/build.gradle` 把阿里云镜像放在 `google()` / `mavenCentral()` 之前。这两处是生成产物，删除 `android/` 重新生成后需重做。
 - 自动打包：提交到 `main` 后由 `.github/workflows/android-apk.yml` 在 GitHub 上跑 `npm run apk` 并出一个 Release（细节见 §10）；CI 里 Gradle 发行包换回官方源（runner 在境外），Maven 仍走阿里云镜像。
 - 图标由 `scripts/make-icons.mjs` 生成（PWA + 各密度 launcher）：**单一来源是首次设置页顶部那张插画 `public/art/sync-pot.svg`** —— 脚本自带一个极简 SVG 光栅化（只认 rect / circle / path 的 M L H V C S Z，遇到别的命令直接报错），把插画烘成 PNG；`public/icon.svg` 直接复制同一张插画。maskable / 圆形图标垫满插画自带的奶油底（`#FFF3DC`）并把图形缩进安全区，自适应图标前景层用透明底 + 去掉插画自带的那块圆角底（背景色由 `values/ic_launcher_background.xml` 提供同样的奶油色），拼起来和原插画一致。

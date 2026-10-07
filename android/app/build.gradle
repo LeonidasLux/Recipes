@@ -7,8 +7,9 @@ android {
         applicationId "com.leonidaslux.jishiben"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // 打包前由 scripts/set-version.mjs 改写（CI 带 run_number，每次递增）
+        versionCode 100000
+        versionName "1.0.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,7 +17,23 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    /* 固定签名：debug keystore 跟仓库走（android/app/debug.keystore，口令就是 Android 工具链
+       默认的 android / androiddebugkey）。CI 的 runner 每次都是全新的，不固定的话每次现生成的
+       debug key 都不一样，手机上覆盖安装会报「与已安装应用签名不同」。本机也用同一份，
+       本机的包和 Release 的包才能互相覆盖安装。 */
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+            storeType 'jks'
+        }
+    }
     buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'

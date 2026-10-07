@@ -197,6 +197,10 @@ sdk.dir=C\:\\Users\\Administrator\\AppData\\Local\\Android\\Sdk
 npm run apk          # = 构建 Web → 同步进原生工程 → gradlew assembleDebug
 ```
 
+打包前会先跑 `scripts/set-version.mjs` 写版本号（`android/app/build.gradle` 里的 `versionCode` / `versionName`）：
+本机是 `package.json` 的 version（如 `1.0.0`），CI 是 `1.0.0-build.<运行序号>`，`versionCode` 随之递增 ——
+手机上「应用信息」里能直接看到装的是哪一版，覆盖安装也不会因为版本号没变而看不出差别。
+
 产出的 APK 在：
 
 ```
@@ -222,6 +226,24 @@ GitHub 会用和你本机一样的 `npm run apk` 打一次包，然后：
 
 Release 里挂的是 debug 签名的包 —— 和本机 `npm run apk` 出来的那份一样，**能直接装、不能上架**。
 想自己签名出正式包，见下面的「Debug 包 vs Release 包」。
+
+### 可以直接覆盖安装（签名固定）
+
+`android/app/debug.keystore` 是**随仓库走的固定调试密钥**（口令就是 Android 工具链默认的
+`android` / `androiddebugkey`），`android/app/build.gradle` 里 debug 构建显式指向它。
+所以本机打的包和 CI 出的 Release **签名一致**，可以互相覆盖安装。
+
+在这之前的版本用的是「每台机器 / 每个 runner 现生成」的调试密钥，签名各不相同，覆盖安装会报
+**「与已安装应用签名不同」**。已经装过旧版的话，需要卸载一次再装新版：
+
+1. 先在 App 的「设置」里确认同步是绿的（数据都推到仓库了）；
+2. 卸载旧版（会连本机缓存一起清掉，token 也在这里，重装后要重新填）；
+3. 装新版，重新走一次连接向导，数据会从仓库拉回来。
+
+之后再升级就能直接覆盖安装了。
+
+固定的是**调试密钥**，它是公开的、不防篡改：拿到这份 keystore 的人能签出同包名的包。
+要更强的保护就换成自己的正式密钥并且**不把密钥入库**（见下面的「Debug 包 vs Release 包」）。
 
 ### 改了图标之后
 
@@ -265,6 +287,9 @@ PKIX path building failed
 
 上面产出的是 **debug 包**：用调试密钥签名，直接能装，适合自己用。
 缺点是体积偏大、跑得稍慢，而且**不能上应用商店**。
+
+这里的 debug 密钥是仓库里那份固定的 `android/app/debug.keystore`（见上面「可以直接覆盖安装」），
+所以本机与 CI 出的包能互相覆盖；换用下面的正式密钥时，签名会变，**装过旧包的话同样要先卸载一次**。
 
 要出正式包需要自己生成一个签名密钥（**这个文件丢了就再也无法覆盖升级，务必存好**）：
 

@@ -50,6 +50,7 @@
 
 - **绝不**把 token 或任何凭据提交进仓库。文档 / 代码 / 提交信息中都不得写入真实 token。
 - Token 只允许存于本机 `localStorage`，不得写入仓库文件或外发到 `api.github.com` 以外的地方。
+- 澄清一处例外：`android/app/debug.keystore` 是 Android 工具链的**公开调试密钥**（口令就是 `android`，别名 `androiddebugkey`），它随仓库走是为了让本机与 CI 出的 APK 签名一致、能互相覆盖安装，不属于上面说的凭据。**正式签名密钥及其口令、任何 token 一律不得入库**；要换正式签名就配 GitHub Secrets，别提交文件。
 
 ## 7. 代码风格
 

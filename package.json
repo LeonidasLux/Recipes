@@ -15,8 +15,8 @@
     "test:live": "esbuild scripts/live-github-test.ts --bundle --platform=node --format=esm --target=node20 --outfile=.tmp/live.mjs --log-level=warning && node .tmp/live.mjs",
     "test:connect": "esbuild scripts/live-connect-test.tsx --bundle --platform=node --format=esm --target=node20 --loader:.css=empty --external:react --external:react-dom --external:react-dom/client --external:react-router-dom --external:jsdom --outfile=.tmp/live-connect.mjs --log-level=warning && node --import ./scripts/register-dom.mjs .tmp/live-connect.mjs",
     "check": "npm run typecheck && npm run classes && npm run smoke && npm run build",
-    "apk": "npm run icons && npm run build && npx cap sync android && cd android && gradlew assembleDebug",
-    "apk:release": "npm run icons && npm run build && npx cap sync android && cd android && gradlew assembleRelease"
+    "apk": "node scripts/set-version.mjs && npm run icons && npm run build && npx cap sync android && cd android && gradlew assembleDebug",
+    "apk:release": "node scripts/set-version.mjs && npm run icons && npm run build && npx cap sync android && cd android && gradlew assembleRelease"
   },
   "dependencies": {
     "@capacitor/android": "^6.2.2",

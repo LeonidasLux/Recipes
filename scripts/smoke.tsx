@@ -8,7 +8,8 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { applyVersion, resolveVersion } from './set-version.mjs';
 import { AppShell } from '../src/App';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
 import { DB_KEY, emptyProfiles, migrate, normalizeOrders, normalizeProfiles, normalizeRecipes, SCHEMA, seed } from '../src/data/seed';
@@ -3297,7 +3298,7 @@ async function boundaryChecks() {
   }
 }
 
-/* ═══════════ 八、仓库结构（GitHub Actions 自动打包）═══════════ */
+/* ═══════════ 八、仓库结构（GitHub Actions 自动打包 + 版本号 / 签名）═══════════ */
 
 /** 工作流本身要 GitHub 的 runner 才跑得起来，这里退一步做静态断言：
     关键步骤（触发分支 / 打包命令 / 产物 / 建 Release / 权限）缺一个就报错，
@@ -3320,6 +3321,34 @@ function workflowChecks() {
   check(yml.includes('gh release create') && yml.includes('--latest'), '★ 建 Release 并标 latest');
   check(yml.includes('contents: write'), '给了建 Release 需要的 contents: write');
   check(yml.includes("java-version: '17'"), 'JDK 17（AGP 8.2.1 要求）');
+  check(
+    yml.includes('JISHIBEN_BUILD: ${{ github.run_number }}'),
+    '★ 打包时按 run_number 写版本号（每次 Release 版本都不一样）',
+  );
+
+  console.log('\n[仓库 · 版本号与固定签名]');
+  const local = resolveVersion('1.2.3', '');
+  check(local.code === 100000 && local.name === '1.2.3', '本机打包：versionName 就是 package.json 的 version', JSON.stringify(local));
+  const ci = resolveVersion('1.2.3', '42');
+  check(ci.code === 100042 && ci.name === '1.2.3-build.42', '★ CI 打包：versionName 带 build 号，versionCode 随之递增', JSON.stringify(ci));
+  check(resolveVersion('1.2.3', 'abc').code === 100000, 'build 号不是数字时退回基准值，不写坏 versionCode');
+  check(
+    applyVersion('  versionCode 1\n  versionName "1.0"', 100042, '1.0.0-build.42').includes('versionCode 100042'),
+    '脚本能把版本号写进 build.gradle',
+  );
+
+  let gradle = '';
+  try {
+    gradle = readFileSync('android/app/build.gradle', 'utf8');
+  } catch (e) {
+    fail('android/app/build.gradle 在仓库里', e instanceof Error ? e.message : String(e));
+  }
+  if (gradle) {
+    check(/versionCode\s+\d+/.test(gradle) && /versionName\s+"[^"]*"/.test(gradle), 'build.gradle 里有可改写的 versionCode / versionName');
+    check(gradle.includes("storeFile file('debug.keystore')"), '★ debug 构建显式用仓库里那份 keystore 签名');
+    check(gradle.includes('signingConfig signingConfigs.debug'), 'debug buildType 挂上这个签名配置');
+    check(existsSync('android/app/debug.keystore'), '★ 固定签名文件随仓库走（CI 与本机同一份，才能覆盖安装）');
+  }
 }
 
 /* ═══════════ 跑 ═══════════ */
