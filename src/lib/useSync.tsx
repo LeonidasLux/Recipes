@@ -10,7 +10,7 @@ import {
 import { useStore } from '../data/store';
 import { useToast } from '../components/Toast';
 import { SCHEMA, normalizeOrders, normalizeProfiles, normalizeRecipes } from '../data/seed';
-import { nowHM } from '../data/helpers';
+import { nowStamp } from '../data/helpers';
 import type { RemoteOrders, RemoteProfiles, RemoteRecipes, SyncStatus, SyncConfig } from '../data/types';
 import {
   GithubError,
@@ -197,8 +197,8 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       storeRef.current.setSyncState('busy');
       doPush()
         .then(() => {
-          storeRef.current.setSyncState('ok', null, nowHM());
-          storeRef.current.patchConfig({ lastPushedAt: nowHM(), lastSyncError: undefined });
+          storeRef.current.setSyncState('ok', null, nowStamp());
+          storeRef.current.patchConfig({ lastPushedAt: nowStamp(), lastSyncError: undefined });
         })
         .catch((e: unknown) => {
           fail(e);
@@ -226,8 +226,8 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       void doPull()
         .then((r) => {
           if (r === 'ok') {
-            storeRef.current.setSyncState('ok', null, nowHM());
-            storeRef.current.patchConfig({ lastPulledAt: nowHM() });
+            storeRef.current.setSyncState('ok', null, nowStamp());
+            storeRef.current.patchConfig({ lastPulledAt: nowStamp() });
           }
         })
         .catch(() => {
@@ -252,16 +252,16 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       try {
         if (s.rev !== pushedRev.current) {
           await doPush();
-          s.patchConfig({ lastPushedAt: nowHM() });
+          s.patchConfig({ lastPushedAt: nowStamp() });
         } else {
           const r = await doPull();
           if (r === 'empty') {
             await doPush();
           } else {
-            s.patchConfig({ lastPulledAt: nowHM() });
+            s.patchConfig({ lastPulledAt: nowStamp() });
           }
         }
-        s.setSyncState('ok', null, nowHM());
+        s.setSyncState('ok', null, nowStamp());
         s.patchConfig({ lastSyncError: undefined });
         toast('同步完成');
       } catch (e) {
@@ -295,8 +295,8 @@ export function SyncProvider({ children }: { children: ReactNode }) {
           seeded = true;
         }
 
-        s.patchConfig({ lastPulledAt: nowHM(), lastPushedAt: nowHM(), lastSyncError: undefined });
-        s.setSyncState('ok', null, nowHM());
+        s.patchConfig({ lastPulledAt: nowStamp(), lastPushedAt: nowStamp(), lastSyncError: undefined });
+        s.setSyncState('ok', null, nowStamp());
         return { seeded };
       } catch (e) {
         done();
@@ -316,8 +316,8 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       s.setSyncState('busy');
       try {
         await doPull();
-        s.patchConfig({ lastPulledAt: nowHM() });
-        s.setSyncState('ok', null, nowHM());
+        s.patchConfig({ lastPulledAt: nowStamp() });
+        s.setSyncState('ok', null, nowStamp());
       } catch (e) {
         fail(e);
       }

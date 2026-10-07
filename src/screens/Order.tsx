@@ -6,13 +6,15 @@ import { TabBar, usePreviewState } from '../components/TabBar';
 import { RoleSwitch } from '../components/RoleSwitch';
 import { SkeletonRows, SourceBadge, SourceDot, StateCard, StatusChip, Thumb } from '../components/Bits';
 import { Icon } from '../components/Icons';
+import { anchorDeleteTip, DeleteTip, type DeleteTipState } from '../components/DeleteTip';
 import { artUrl, initial, isTodayOrder, itemArt, mealLabel, orderArt, orderItems, orderMain, orderSummary, todayLine } from '../data/helpers';
 import { useNames } from '../data/useNames';
 import { preserveTypedValue } from '../lib/inputs';
+import { useBackClose } from '../lib/back';
 import type { DB, Meal, Order, OrderItem } from '../data/types';
 
 export default function OrderScreen() {
-  const { db, addOrder, me } = useStore();
+  const { db, addOrder, deleteOrder, me } = useStore();
   const { toast } = useToast();
   /* 点单屏：下单的人是「我」，做饭的是对方 */
   const names = useNames();
@@ -29,8 +31,15 @@ export default function OrderScreen() {
   const [sending, setSending] = useState(false);
   /* 历史点单默认折叠：只露数量，点一下才铺开 */
   const [showHistory, setShowHistory] = useState(false);
+  /* 长按某张单 → 弹删除提示（今日点单 / 历史点单都支持） */
+  const [tip, setTip] = useState<DeleteTipState | null>(null);
+  const pressTimer = useRef<number | null>(null);
+  const longPressed = useRef(false);
 
   const preselected = useRef(false);
+
+  /* 长按弹出的删除提示是遮罩：手机返回键先收起它，而不是退出应用 */
+  useBackClose(tip !== null, closeTip);
 
   /* 详情页「去点单 · 带上这道菜」带过来的 ?add=id */
   useEffect(() => {
@@ -112,6 +121,45 @@ export default function OrderScreen() {
     if (next.has(id)) next.delete(id);
     else next.add(id);
     setOpen(next);
+  }
+
+  /* ─── 长按删除 ─────────────────────────────────
+     按下开始计时（450ms），松手 / 划走 / 滚动就取消 —— 普通点按还是展开这张单。
+     长按弹出后，紧随其后的那次 click 要吞掉，不然会顺带把这张单展开。 */
+  function cancelPress() {
+    if (pressTimer.current !== null) {
+      window.clearTimeout(pressTimer.current);
+      pressTimer.current = null;
+    }
+  }
+
+  function startPress(el: HTMLElement, o: Order) {
+    longPressed.current = false;
+    cancelPress();
+    pressTimer.current = window.setTimeout(() => {
+      pressTimer.current = null;
+      longPressed.current = true;
+      setTip(anchorDeleteTip(el, o.id, orderSummary(o)));
+    }, 450);
+  }
+
+  function closeTip() {
+    longPressed.current = false;
+    setTip(null);
+  }
+
+  function removeOrder(id: string, title: string) {
+    deleteOrder(id);
+    closeTip();
+    toast(`已删除「${title}」`);
+  }
+
+  function onCardClick(id: string) {
+    if (longPressed.current) {
+      longPressed.current = false;
+      return;
+    }
+    toggleOpen(id);
   }
 
   /* 点单页只看我点的单；对方点的那些在「掌勺」里等我做 */
@@ -200,7 +248,7 @@ export default function OrderScreen() {
         </button>
       </section>
 
-      <main className="scroll">
+      <main className="scroll" onScroll={closeTip}>
         <div className="pad" style={{ display: 'flex', flexDirection: 'column', gap: 18, paddingTop: 14, paddingBottom: 22 }}>
           <section>
             <div className="sechead">
@@ -278,7 +326,7 @@ export default function OrderScreen() {
             <div className="sechead">
               <div>
                 <h2 className="h3">今日点单</h2>
-                <p className="hint">点一张单可展开看里面每道菜</p>
+                <p className="hint">点一张单可展开看里面每道菜 · 长按可删除</p>
               </div>
               <span className="meta">{todayOrders.length} 份</span>
             </div>
@@ -302,7 +350,9 @@ export default function OrderScreen() {
                     db={db}
                     partner={names.partnerName}
                     open={open.has(o.id)}
-                    onToggle={() => toggleOpen(o.id)}
+                    onToggle={() => onCardClick(o.id)}
+                    onPressStart={(el) => startPress(el, o)}
+                    onPressEnd={cancelPress}
                   />
                 ))
               )}
@@ -332,7 +382,9 @@ export default function OrderScreen() {
                       db={db}
                       partner={names.partnerName}
                       open={open.has(o.id)}
-                      onToggle={() => toggleOpen(o.id)}
+                      onToggle={() => onCardClick(o.id)}
+                      onPressStart={(el) => startPress(el, o)}
+                      onPressEnd={cancelPress}
                     />
                   ))}
                 </div>
@@ -341,6 +393,8 @@ export default function OrderScreen() {
           )}
         </div>
       </main>
+
+      {tip && <DeleteTip tip={tip} onDelete={() => removeOrder(tip.id, tip.title)} onClose={closeTip} />}
 
       <TabBar active="order" />
     </div>
@@ -355,6 +409,8 @@ function OrderCard({
   partner,
   open,
   onToggle,
+  onPressStart,
+  onPressEnd,
 }: {
   order: Order;
   db: DB;
@@ -362,6 +418,10 @@ function OrderCard({
   partner: string;
   open: boolean;
   onToggle: () => void;
+  /** 按下这张单的卡头（长按计时起点） */
+  onPressStart: (el: HTMLElement) => void;
+  /** 松手 / 划走 / 取消长按 */
+  onPressEnd: () => void;
 }) {
   const items = orderItems(order);
   const art = orderArt(order, db);
@@ -369,7 +429,15 @@ function OrderCard({
 
   return (
     <div className={`card sticker ocard${order.status === 'done' ? ' done' : ''}${open ? ' open' : ''}`}>
-      <button className="osum" aria-expanded={open} onClick={onToggle}>
+      <button
+        className="osum"
+        aria-expanded={open}
+        onPointerDown={(e) => onPressStart(e.currentTarget)}
+        onPointerUp={onPressEnd}
+        onPointerLeave={onPressEnd}
+        onPointerCancel={onPressEnd}
+        onClick={onToggle}
+      >
         <span className="omt">
           {art ? <img src={artUrl(art)} alt={main} /> : <span className="mono">{initial(main)}</span>}
         </span>

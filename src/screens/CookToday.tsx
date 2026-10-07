@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../data/store';
 import { useToast } from '../components/Toast';
 import { TabBar, usePreviewState } from '../components/TabBar';
@@ -6,13 +6,14 @@ import { RoleSwitch } from '../components/RoleSwitch';
 import { SkeletonRows, StateCard, StatusChip } from '../components/Bits';
 import { Icon } from '../components/Icons';
 import { DishSheet } from '../components/DishSheet';
+import { anchorDeleteTip, DeleteTip, type DeleteTipState } from '../components/DeleteTip';
 import { artUrl, initial, itemArt, mealLabel, orderItems } from '../data/helpers';
 import { useNames } from '../data/useNames';
 import { useBackClose } from '../lib/back';
 import type { Order, OrderItem } from '../data/types';
 
 export default function CookToday() {
-  const { db, setOrderStatus, me } = useStore();
+  const { db, deleteOrder, setOrderStatus, me } = useStore();
   const { toast } = useToast();
   /* 掌勺屏：只做对方点的单；我自己点的那份留在「点单」里 */
   const names = useNames();
@@ -24,9 +25,14 @@ export default function CookToday() {
   const [showDone, setShowDone] = useState(false);
   /* 点了哪道菜 → 弹它的详情；null 表示没弹 */
   const [dish, setDish] = useState<OrderItem | null>(null);
+  /* 长按某张单的卡头 → 弹删除提示（今日菜单 / 已做完都支持） */
+  const [tip, setTip] = useState<DeleteTipState | null>(null);
+  const pressTimer = useRef<number | null>(null);
 
   /* 菜品详情是遮罩：手机返回键先关它，而不是退出应用（点遮罩 / × / Esc 照旧） */
   useBackClose(dish !== null, () => setDish(null));
+  /* 删除提示也是遮罩：返回键先收起它 */
+  useBackClose(tip !== null, closeTip);
 
   useEffect(() => {
     const t = window.setTimeout(() => setLoading(false), 460);
@@ -48,6 +54,34 @@ export default function CookToday() {
     }, 600);
   }
 
+  /* ─── 长按删除 ─────────────────────────────────
+     卡头按满 450ms 弹删除提示；松手 / 划走就取消。
+     卡头本身没有点击行为，所以不用担心长按顺带触发别的动作。 */
+  function cancelPress() {
+    if (pressTimer.current !== null) {
+      window.clearTimeout(pressTimer.current);
+      pressTimer.current = null;
+    }
+  }
+
+  function startPress(el: HTMLElement, o: Order) {
+    cancelPress();
+    pressTimer.current = window.setTimeout(() => {
+      pressTimer.current = null;
+      setTip(anchorDeleteTip(el, o.id, `${mealLabel(o.meal)}单`));
+    }, 450);
+  }
+
+  function closeTip() {
+    setTip(null);
+  }
+
+  function removeOrder(id: string, title: string) {
+    deleteOrder(id);
+    closeTip();
+    toast(`已删除「${title}」`);
+  }
+
   const interval = db.config?.autoPull ? db.config.intervalSec : 0;
   const noticeLabel = interval
     ? `与仓库同一数据 · 每 ${interval >= 60 ? `${interval / 60} 分钟` : `${interval} 秒`}自动拉取`
@@ -66,13 +100,13 @@ export default function CookToday() {
               今日菜单
             </h1>
             <small style={{ display: 'block', fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
-              {names.partnerNamed ? `${names.partnerName}点给你的几道菜` : '点给你的几道菜'}
+              {names.partnerNamed ? `${names.partnerName}点给你的几道菜` : '点给你的几道菜'} · 长按卡片可删除
             </small>
           </div>
         </div>
       </header>
 
-      <main className="scroll">
+      <main className="scroll" onScroll={closeTip}>
         <div className="pad" style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingTop: 14, paddingBottom: 20 }}>
           {loading ? (
             <div className="card sticker" style={{ padding: '8px 16px' }}>
@@ -101,6 +135,8 @@ export default function CookToday() {
                       pending={pendingId === o.id}
                       onAdvance={() => advance(o)}
                       onOpenDish={setDish}
+                      onPressStart={(el) => startPress(el, o)}
+                      onPressEnd={cancelPress}
                     />
                   ))}
                 </section>
@@ -131,6 +167,8 @@ export default function CookToday() {
                           pending={false}
                           onAdvance={() => {}}
                           onOpenDish={setDish}
+                          onPressStart={(el) => startPress(el, o)}
+                          onPressEnd={cancelPress}
                         />
                       ))}
                     </div>
@@ -149,6 +187,8 @@ export default function CookToday() {
 
       <TabBar active="cook" />
 
+      {tip && <DeleteTip tip={tip} onDelete={() => removeOrder(tip.id, tip.title)} onClose={closeTip} />}
+
       {dish && <DishSheet item={dish} db={db} onClose={() => setDish(null)} />}
     </div>
   );
@@ -161,6 +201,8 @@ function CookCard({
   pending,
   onAdvance,
   onOpenDish,
+  onPressStart,
+  onPressEnd,
 }: {
   order: Order;
   db: ReturnType<typeof useStore>['db'];
@@ -170,13 +212,23 @@ function CookCard({
   onAdvance: () => void;
   /** 点某道菜 → 上层弹它的详情 */
   onOpenDish: (item: OrderItem) => void;
+  /** 按卡头（长按计时起点） */
+  onPressStart: (el: HTMLElement) => void;
+  /** 松手 / 划走 / 取消长按 */
+  onPressEnd: () => void;
 }) {
   const items = orderItems(order);
   const isDone = order.status === 'done';
 
   return (
     <div className={`card sticker cookcard${isDone ? ' done' : ''}`}>
-      <div className="cch">
+      <div
+        className="cch"
+        onPointerDown={(e) => onPressStart(e.currentTarget)}
+        onPointerUp={onPressEnd}
+        onPointerLeave={onPressEnd}
+        onPointerCancel={onPressEnd}
+      >
         <div style={{ minWidth: 0 }}>
           <div className="tt">
             {mealLabel(order.meal)}单 · {items.length} 道菜

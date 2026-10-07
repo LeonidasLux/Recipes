@@ -43,10 +43,12 @@ import {
 } from '../src/lib/github';
 import {
   artUrl,
+  dateKey,
   initial,
   mealLabel,
   meOf,
   nicknameOf,
+  nowStamp,
   orderSummary,
   partnerOf,
   recipeInOpenOrder,
@@ -55,6 +57,9 @@ import {
 } from '../src/data/helpers';
 import { backAction, isRootPath, pressBack, trackHistory } from '../src/lib/back';
 import type { DB, Order, Profiles, Recipe } from '../src/data/types';
+
+/** 记录时间统一格式：`2026-10-07 09:40` —— 必须带年月日 */
+const DATE_TIME_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
 
 const root = document.getElementById('root') as HTMLElement;
 
@@ -270,8 +275,8 @@ function useDb(mutate?: (db: DB) => void) {
   db.configured = true;
   /* 名字随仓库同步，示例里给上，方便断言具体称呼 */
   db.profiles = {
-    a: { nickname: '小辉', updatedAt: '12:05' },
-    b: { nickname: '小红', updatedAt: '12:05' },
+    a: { nickname: '小辉', updatedAt: nowStamp() },
+    b: { nickname: '小红', updatedAt: nowStamp() },
   };
   db.config = {
     repo: 'xiaoman/family-recipes',
@@ -285,8 +290,8 @@ function useDb(mutate?: (db: DB) => void) {
     view: 'order',
     autoPull: true,
     intervalSec: 60,
-    lastPulledAt: '12:05',
-    lastPushedAt: '12:05',
+    lastPulledAt: nowStamp(),
+    lastPushedAt: nowStamp(),
   };
   mutate?.(db);
   localStorage.clear();
@@ -691,6 +696,11 @@ async function interactionChecks() {
       ok('发送 → 落库为一单两菜、状态待接、含临时菜');
     }
     check(created.note === '少放辣，米饭少一点', '★ 备注随单落库（首尾空格去掉）', `实际「${created.note}」`);
+    check(
+      DATE_TIME_RE.test(created.createdAt) && DATE_TIME_RE.test(created.updatedAt),
+      '★ 新订单的下单 / 更新时间都带年月日',
+      `${created.createdAt} / ${created.updatedAt}`,
+    );
     if (m.$$('.sel').length !== 0) fail('发送后清空组合器', `还剩 ${m.$$('.sel').length} 颗`);
     else ok('发送后组合器清空');
     check(m.value('.ordernote') === '', '发送后备注框也清空', `实际「${m.value('.ordernote')}」`);
@@ -1299,6 +1309,11 @@ async function interactionChecks() {
 
     check(readDb().profiles.b.nickname === '大厨老王', '改名落库');
     check(readDb().profiles.a.nickname === '小辉', '没动的那一栏保持不变');
+    check(
+      DATE_TIME_RE.test(readDb().profiles.b.updatedAt),
+      '★ 昵称更新时间带年月日',
+      readDb().profiles.b.updatedAt,
+    );
     check(readDb().logs.some((l) => l.text.includes('昵称已更新并推送')), '改名写入同步日志（会触发推送）');
     await m.close();
   }
@@ -2558,24 +2573,26 @@ async function edgeChecks() {
     db.config!.me = 'b'; // b 点的单：o2 今天、o3 昨天
   });
   {
+    const yesterday = readDb().orders.find((o) => o.id === 'o3')!.createdAt;
     const m = await mount('/order');
     const html = m.html();
     check(html.includes('今日点单') && html.includes('历史点单'), '点单页同时有今日与历史两段');
     check(html.includes('1 份'), '今天 1 份 / 历史 1 份都显示数量', `实际片段：${html.length}`);
-    check(!html.includes('昨天 10:15'), '历史单默认折叠，不铺开卡片');
+    check(!html.includes(yesterday), '历史单默认折叠，不铺开卡片');
     await m.clickByText('.morebar', '历史点单');
-    check(m.html().includes('昨天 10:15'), '点历史条 → 展开昨天的单');
+    check(m.html().includes(yesterday), '点历史条 → 展开昨天的单');
     await m.close();
   }
 
   console.log('\n[边界 · 已做完默认折叠，只露数量]');
   useDb(); // me=a：掌勺屏看到 o2（待接）+ o3（已做完，昨天）
   {
+    const yesterday = readDb().orders.find((o) => o.id === 'o3')!.createdAt;
     const m = await mount('/cook');
     check(m.html().includes('已做完'), '掌勺页有「已做完」折叠条');
-    check(!m.html().includes('昨天 10:15'), '已完成单默认折叠，不铺开卡片');
+    check(!m.html().includes(yesterday), '已完成单默认折叠，不铺开卡片');
     await m.clickByText('.morebar', '已做完');
-    check(m.html().includes('昨天 10:15'), '点「已做完」→ 展开完成单');
+    check(m.html().includes(yesterday), '点「已做完」→ 展开完成单');
     await m.close();
   }
 
@@ -2584,7 +2601,7 @@ async function edgeChecks() {
   {
     useDb((db) => {
       db.logs = Array.from({ length: 45 }, (_, i) => ({
-        t: `10:${String(i).padStart(2, '0')}`,
+        t: `${dateKey()} 10:${String(i).padStart(2, '0')}`,
         kind: 'ok' as const,
         text: `第 ${i + 1} 条记录`,
       }));
@@ -2819,31 +2836,35 @@ async function edgeChecks() {
   localStorage.clear();
   {
     useDb();
+    const r5 = readDb().recipes.find((r) => r.id === 'r5')!;
     const m = await mount('/library');
     const row = m.$$('.cardlist .dishrow')[4]; /* r5 台式三杯鸡 */
     check(m.$('.dishrow .when') === null, '★ 列表行里没有时间栏');
-    check(!(row?.textContent ?? '').includes('8月26日'), '★ 列表不显示更新时间', row?.textContent ?? '');
-    check(!m.html().includes('8月26日'), '整页都找不到更新时间');
+    check(!(row?.textContent ?? '').includes(r5.updatedAt), '★ 列表不显示更新时间', row?.textContent ?? '');
+    check(!m.html().includes(r5.updatedAt), '整页都找不到更新时间');
     await m.close();
   }
   {
     useDb();
+    const r5 = readDb().recipes.find((r) => r.id === 'r5')!;
     const m = await mount('/recipe/r5');
-    check(m.html().includes('收藏于 8月9日'), '★ 详情页显示收藏时间');
-    check(m.html().includes('更新于 8月26日'), '★ 详情页显示更新时间');
+    check(m.html().includes(`收藏于 ${r5.createdAt}`), '★ 详情页显示收藏时间');
+    check(m.html().includes(`更新于 ${r5.updatedAt}`), '★ 详情页显示更新时间');
     check(m.html().includes('做法') && m.html().includes('麻油小火煸姜片到卷边'), '★ 详情页展示做法');
     await m.close();
   }
   {
-    /* 改完菜谱：更新时间变成「刚刚」，收藏时间不动 */
+    /* 改完菜谱：更新时间变成带年月日的当前时刻，收藏时间不动 */
     useDb();
+    const r5 = readDb().recipes.find((r) => r.id === 'r5')!;
     const m = await mount('/recipe/r5');
     await m.click('#editRecipeBtn');
     await m.type('#editNote', '改一下备注');
     await m.click('.editrow .btn-sticker.primary');
     await m.wait(200);
-    check(m.html().includes('收藏于 8月9日'), '★ 改完收藏时间不变');
-    check(m.html().includes('更新于 刚刚'), '★ 改完更新时间变「刚刚」');
+    check(m.html().includes(`收藏于 ${r5.createdAt}`), '★ 改完收藏时间不变');
+    check(m.html().includes(`更新于 ${dateKey()} `), '★ 改完更新时间变成带年月日的当前时刻');
+    check(!m.html().includes('更新于 刚刚'), '★ 更新时间不再只剩「刚刚」');
     await m.close();
   }
   {
@@ -2866,6 +2887,36 @@ async function edgeChecks() {
     const m = await mount('/recipe/r9');
     check(m.html().includes('收藏于 上周'), '老数据能正常显示收藏时间');
     check(!m.html().includes('undefined'), '页面里不会冒出 undefined');
+    await m.close();
+  }
+
+  console.log('\n[边界 · 记录时间都必须带年月日]');
+  {
+    check(DATE_TIME_RE.test(nowStamp()), '★ nowStamp 返回「年-月-日 时:分」', nowStamp());
+    check(/^\d{4}-\d{2}-\d{2}$/.test(dateKey()), '★ dateKey 返回完整日期', dateKey());
+
+    /* 示例数据里每一条记录下来的时间都必须带年月日 */
+    const s = seed();
+    const rows: Array<[string, string]> = [
+      ['db.updatedAt', s.updatedAt],
+      ['config.lastPulledAt', s.config!.lastPulledAt],
+      ['config.lastPushedAt', s.config!.lastPushedAt],
+    ];
+    s.recipes.forEach((r) => rows.push([`${r.id}.createdAt`, r.createdAt], [`${r.id}.updatedAt`, r.updatedAt]));
+    s.orders.forEach((o) => rows.push([`${o.id}.createdAt`, o.createdAt], [`${o.id}.updatedAt`, o.updatedAt]));
+    s.logs.forEach((l, i) => rows.push([`logs[${i}].t`, l.t]));
+    const bad = rows.filter(([, v]) => !DATE_TIME_RE.test(v));
+    check(bad.length === 0, '★ 示例数据里每条记录时间都带年月日', bad.map(([k, v]) => `${k}=${v}`).join('; '));
+
+    /* 新加的菜谱同样带年月日 */
+    useDb();
+    const m = await mount('/recipe/r5');
+    await m.click('#editRecipeBtn');
+    await m.type('#editNote', '再看一眼时间');
+    await m.click('.editrow .btn-sticker.primary');
+    await m.wait(200);
+    const edited = readDb().recipes.find((r) => r.id === 'r5')!;
+    check(DATE_TIME_RE.test(edited.updatedAt), '★ 改完菜谱的更新时间带年月日', edited.updatedAt);
     await m.close();
   }
 
@@ -2961,6 +3012,53 @@ async function edgeChecks() {
     check(m.$('.tip') !== null, 'tooltip 还开着');
     await m.click('.tip-mask');
     check(m.$('.tip') === null, '点别处收起 tooltip');
+    await m.close();
+  }
+
+  console.log('\n[边界 · 今日点单与今日菜单长按删除]');
+  localStorage.clear();
+  {
+    /* 点单页的「今日点单」：短按还是展开，长按才弹删除 */
+    useDb();
+    const m = await mount('/order');
+    check(m.$$('.osum').length === 1, '点单页今天只有 1 张单', `实际 ${m.$$('.osum').length}`);
+    check(m.$('.tip') === null, '默认没有删除 tooltip');
+
+    /* 按一下就松 → 不算长按 */
+    await m.pointerDown('.osum');
+    await m.wait(150);
+    await m.pointerUp('.osum');
+    await m.wait(600);
+    check(m.$('.tip') === null, '★ 点单卡短按不弹删除 tooltip');
+
+    await m.longPress('.osum');
+    check(m.$('.tip') !== null, '★ 长按今日点单 → 弹出删除 tooltip');
+    check(m.$('.tip .tip-del svg') !== null, 'tooltip 里有删除图标');
+
+    /* 长按之后紧接着的那次 click 被吞掉，不该顺带展开这张单 */
+    await m.click('.osum');
+    check(m.$('.ocard.open') === null, '★ 长按后不误展开这张单');
+    check(m.$('.tip') !== null, 'tooltip 还开着');
+
+    await m.click('.tip-del');
+    check(m.$('.tip') === null, '删完收起 tooltip');
+    check(!readDb().orders.some((o) => o.id === 'o1'), '★ 今日点单那张从库里删掉');
+    check(readDb().logs.some((l) => l.text.includes('已删除点单')), '删除写同步日志');
+    check(m.html().includes('已删除「番茄炖牛腩 等 2 道」'), '给出删除提示');
+    check(m.html().includes('今天还没下过单'), '★ 删完今日点单回到空态');
+    await m.close();
+  }
+  {
+    /* 掌勺页的「今日菜单」：长按卡头弹删除 */
+    useDb();
+    const m = await mount('/cook');
+    check(m.$$('.cookcard').length === 1, '掌勺页先只有 1 张待做的单', `实际 ${m.$$('.cookcard').length}`);
+    await m.longPress('.cch');
+    check(m.$('.tip') !== null, '★ 长按今日菜单 → 弹出删除 tooltip');
+    await m.click('.tip-del');
+    check(!readDb().orders.some((o) => o.id === 'o2'), '★ 今日菜单里那张单从库里删掉');
+    check(m.$$('.cookcard').length === 0, '删完卡片消失');
+    check(m.html().includes('今天清清闲闲'), '★ 删完今日菜单回到空态');
     await m.close();
   }
 
@@ -3191,6 +3289,16 @@ async function backChecks() {
     check(m.$('.tip') !== null, '长按菜谱 → 弹出删除提示');
     await act(async () => pressBack());
     check(m.$('.tip') === null && m.$('.s-library') !== null, '★ 返回键先收起提示，不退屏');
+    await m.close();
+  }
+  {
+    /* 点单页的删除提示同样是遮罩：返回键先收起它 */
+    useDb();
+    const m = await mount('/order');
+    await m.longPress('.osum');
+    check(m.$('.tip') !== null, '长按点单卡 → 弹出删除提示');
+    await act(async () => pressBack());
+    check(m.$('.tip') === null && m.$('.s-order') !== null, '★ 返回键先收起提示，不退屏');
     await m.close();
   }
 

@@ -6,6 +6,7 @@ import { useSync } from '../lib/useSync';
 import { TabBar, usePreviewState } from '../components/TabBar';
 import { SkeletonRows, SourceBadge, StateCard, Thumb } from '../components/Bits';
 import { Icon } from '../components/Icons';
+import { anchorDeleteTip, DeleteTip, type DeleteTipState } from '../components/DeleteTip';
 import { preserveTypedValue } from '../lib/inputs';
 import { useBackClose } from '../lib/back';
 import { todayLine } from '../data/helpers';
@@ -29,7 +30,7 @@ export default function Library() {
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(true);
   /* 长按某条菜谱 → 在这条旁边弹一个小 tooltip，里面有删除 */
-  const [tip, setTip] = useState<{ id: string; title: string; top: number; left: number } | null>(null);
+  const [tip, setTip] = useState<DeleteTipState | null>(null);
   const pressTimer = useRef<number | null>(null);
   const longPressed = useRef(false);
 
@@ -80,11 +81,10 @@ export default function Library() {
   function startPress(el: HTMLElement, r: Recipe) {
     longPressed.current = false;
     cancelPress();
-    const rect = el.getBoundingClientRect();
     pressTimer.current = window.setTimeout(() => {
       pressTimer.current = null;
       longPressed.current = true;
-      setTip({ id: r.id, title: r.title, top: rect.bottom + 6, left: Math.max(12, rect.right - 100) });
+      setTip(anchorDeleteTip(el, r.id, r.title));
     }, 450);
   }
 
@@ -243,22 +243,7 @@ export default function Library() {
         </section>
       </main>
 
-      {tip && (
-        <>
-          <button type="button" className="tip-mask" aria-label="收起删除提示" onClick={closeTip} />
-          <div className="tip" role="tooltip" style={{ top: tip.top, left: tip.left }}>
-            <button
-              type="button"
-              className="tip-del"
-              aria-label={`删除「${tip.title}」`}
-              onClick={() => removeRecipe(tip.id, tip.title)}
-            >
-              <Icon name="trash" />
-              删除
-            </button>
-          </div>
-        </>
-      )}
+      {tip && <DeleteTip tip={tip} onDelete={() => removeRecipe(tip.id, tip.title)} onClose={closeTip} />}
 
       <TabBar active="library" />
     </div>

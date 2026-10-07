@@ -18,15 +18,25 @@ function pad(n: number): string {
   return (n < 10 ? '0' : '') + n;
 }
 
-/** 当前时刻 HH:MM —— 与设计源 nowHM() 一致 */
-export function nowHM(): string {
-  const d = new Date();
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+/** 只要日期部分：`2026-10-07`（判断「今天」等比较用） */
+export function dateKey(d: Date = new Date()): string {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-/** 今天 09:40 这种写法，用于订单时间戳 */
+/**
+ * 记录时间统一格式：`2026-10-07 09:40`。
+ *
+ * 所有「记录下来的时间字段」（菜谱收藏 / 更新时间、订单下单 / 更新时间、
+ * 昵称更新时间、同步日志、同步时间戳）都用它，**必须带年月日**，
+ * 不能只剩下小时和分钟，否则跨天就分不清是哪一天。
+ */
+export function stamp(d: Date = new Date()): string {
+  return `${dateKey(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** 当前时刻的完整时间戳（见 stamp） */
 export function nowStamp(): string {
-  return `今天 ${nowHM()}`;
+  return stamp();
 }
 
 /* ─── 来源徽章 ───────────────────────────────── */
@@ -164,11 +174,13 @@ export function viewOf(cfg: SyncConfig | null): ViewRole {
 /**
  * 这张单是不是「今天的单」。
  *
- * 订单时间戳是 `今天 09:40` / `昨天 10:15` 这类展示串（见 nowStamp），
- * 所以按前缀判断：点单页用它把「今日点单」与「历史点单」分开。
+ * 订单时间戳是 `2026-10-07 09:40` 这类带年月日的绝对串（见 nowStamp），
+ * 所以按「日期部分是不是今天」判断：点单页用它把「今日点单」与「历史点单」分开。
+ * 老缓存 / 老仓库里可能还留着 `今天 09:40` 这类相对串，一并按「今天」认。
  */
 export function isTodayOrder(o: Order): boolean {
-  return (o?.createdAt ?? '').startsWith('今天');
+  const s = o?.createdAt ?? '';
+  return s.startsWith(dateKey()) || s.startsWith('今天');
 }
 
 /* ─── 插画路径 ───────────────────────────────── */

@@ -23,7 +23,7 @@ import type {
   ViewRole,
 } from './types';
 import { DB_KEY, migrate, normalizeOrders, normalizeProfiles, seed } from './seed';
-import { meOf, newId, nicknameOf, nowHM, nowStamp, orderSummary, partnerOf, PERSON_KEYS, viewOf } from './helpers';
+import { meOf, newId, nicknameOf, nowStamp, orderSummary, partnerOf, PERSON_KEYS, viewOf } from './helpers';
 
 /* ============================================================
    状态 = 数据 + 本地改动计数（rev）+ 同步状态
@@ -129,6 +129,8 @@ export interface StoreValue {
   /** 删菜谱（内容改动，会触发推送）；订单里的菜名是快照，不受影响 */
   deleteRecipe(id: string): void;
   addOrder(input: { meal: Meal; items: OrderItem[]; note?: string }): Order;
+  /** 删订单（内容改动，会触发推送）；点单 / 掌勺两边都会同步消失 */
+  deleteOrder(id: string): void;
   setOrderStatus(id: string, status: OrderStatus): void;
   /** 改昵称：两个人谁都能改，改完随仓库同步（内容改动，会触发推送） */
   setProfiles(next: Partial<Record<PersonKey, string>>): void;
@@ -182,8 +184,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   /** 同步日志全量保留（只存本机，不进仓库）；设置页默认折叠、滚动懒加载 */
   const pushLog = useCallback((db: DB, kind: LogEntry['kind'], text: string) => {
-    db.logs = [{ t: nowHM(), kind, text }, ...(db.logs ?? [])];
-    db.updatedAt = nowHM();
+    const t = nowStamp();
+    db.logs = [{ t, kind, text }, ...(db.logs ?? [])];
+    db.updatedAt = t;
   }, []);
 
   const value = useMemo<StoreValue>(() => {
@@ -206,8 +209,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           art: input.art,
           steps: input.steps,
           note: input.note,
-          createdAt: '刚刚',
-          updatedAt: '刚刚',
+          createdAt: nowStamp(),
+          updatedAt: nowStamp(),
         };
         commit((db) => {
           db.recipes.unshift(rec);
@@ -225,7 +228,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (patch.url !== undefined) r.url = patch.url;
           if (patch.steps !== undefined) r.steps = patch.steps;
           if (patch.note !== undefined) r.note = patch.note;
-          r.updatedAt = '刚刚';
+          r.updatedAt = nowStamp();
           pushLog(db, 'ok', `${r.id} · ${r.title} 已更新并推送`);
           return db;
         });
@@ -277,6 +280,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         });
       },
 
+      deleteOrder(id) {
+        commit((db) => {
+          const o = db.orders.find((x) => x.id === id);
+          if (!o) return db;
+          db.orders = db.orders.filter((x) => x.id !== id);
+          pushLog(db, 'ok', `已删除点单：${orderSummary(o)}`);
+          return db;
+        });
+      },
+
       setProfiles(next) {
         commit((db) => {
           const changed: string[] = [];
@@ -285,7 +298,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             if (typeof raw !== 'string') return;
             const name = raw.trim();
             if (db.profiles[p].nickname === name) return;
-            db.profiles[p] = { nickname: name, updatedAt: nowHM() };
+            db.profiles[p] = { nickname: name, updatedAt: nowStamp() };
             changed.push(name ? `「${name}」` : '「未设置」');
           });
           if (changed.length) pushLog(db, 'ok', `昵称已更新并推送：${changed.join('、')}`);
@@ -342,12 +355,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const otherSlot = partnerOf(slot);
           const changed: string[] = [];
           if (db.profiles[slot].nickname !== mine) {
-            db.profiles[slot] = { nickname: mine, updatedAt: nowHM() };
+            db.profiles[slot] = { nickname: mine, updatedAt: nowStamp() };
             changed.push(`「${mine}」`);
           }
           /* 对方那栏留空就别动 —— 仓库里可能已经有对方自己设的名字 */
           if (theirs && db.profiles[otherSlot].nickname !== theirs) {
-            db.profiles[otherSlot] = { nickname: theirs, updatedAt: nowHM() };
+            db.profiles[otherSlot] = { nickname: theirs, updatedAt: nowStamp() };
             changed.push(`「${theirs}」`);
           }
 
@@ -400,7 +413,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (Array.isArray(remote.recipes)) db.recipes = remote.recipes;
           if (Array.isArray(remote.orders)) db.orders = normalizeOrders(remote.orders);
           db.configured = true;
-          db.updatedAt = nowHM();
+          db.updatedAt = nowStamp();
           return db;
         });
       },

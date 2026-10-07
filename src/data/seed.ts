@@ -1,7 +1,16 @@
 import type { DB, Order, PersonKey, Profile, Profiles, Recipe, SyncConfig } from './types';
+import { nowStamp, stamp } from './helpers';
 
 export const SCHEMA = 3;
 export const DB_KEY = 'jishiben-db-v1';
+
+/** 示例数据里的相对时刻：daysAgo 天前的 hh:mm，落成带年月日的完整时间戳 */
+function past(daysAgo: number, hh: number, mm: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - daysAgo);
+  d.setHours(hh, mm, 0, 0);
+  return stamp(d);
+}
 
 /** 还不知道名字时的兜底 —— 首次设置填完就会被真名替换 */
 export function emptyProfiles(): Profiles {
@@ -13,10 +22,11 @@ export function emptyProfiles(): Profiles {
 
 /** 首次打开时的示例数据 —— 与设计源 seed() 一致，菜名/作者/备注都是真实内容 */
 export function seed(): DB {
+  const t = nowStamp();
   return {
     schema: SCHEMA,
     configured: false,
-    updatedAt: '12:05',
+    updatedAt: t,
     config: {
       repo: '',
       branch: 'main',
@@ -29,8 +39,8 @@ export function seed(): DB {
       view: 'order',
       autoPull: true,
       intervalSec: 60,
-      lastPulledAt: '12:05',
-      lastPushedAt: '12:05',
+      lastPulledAt: t,
+      lastPushedAt: t,
     },
     /* 名字留空：不认识这两个人，界面用「点菜方 / 掌勺方」兜底，首次设置里填 */
     profiles: emptyProfiles(),
@@ -44,8 +54,8 @@ export function seed(): DB {
         art: 'tomato-beef.svg',
         note: '高压锅 40 分钟更省事；八角可放可不放，不放汤色更清。',
         steps: '1. 牛腩冷水下锅焯水，撇沫捞出。\n2. 番茄去皮切块，一半先炒出沙，一半后放。\n3. 加热水没过牛腩，小火炖 40 分钟。\n4. 收汁前调味，撒葱花。',
-        createdAt: '8月20日',
-        updatedAt: '昨天',
+        createdAt: past(48, 10, 12),
+        updatedAt: past(1, 20, 30),
       },
       {
         id: 'r2',
@@ -56,8 +66,8 @@ export function seed(): DB {
         art: 'scallion-noodle.svg',
         note: '葱油一次多熬一点，密封冷藏能存两周。',
         steps: '1. 葱切段，冷油小火熬到葱变焦黄，滤出葱油。\n2. 水开下面，煮 2 分钟捞出过冰水。\n3. 鸡蛋煮 6 分半，冰水泡过再剥壳。\n4. 面拌葱油、生抽和一点糖，摆上溏心蛋。',
-        createdAt: '8月19日',
-        updatedAt: '周三',
+        createdAt: past(49, 21, 5),
+        updatedAt: past(6, 12, 40),
       },
       {
         id: 'r3',
@@ -68,8 +78,8 @@ export function seed(): DB {
         art: 'coconut-chicken.svg',
         note: '两只椰青取水打底，不用再加一滴清水。',
         steps: '1. 两只椰青取水，椰肉挖成条。\n2. 鸡块冷水下锅焯水后洗净。\n3. 椰水加等量清水煮开，下鸡块煮 8 分钟。\n4. 先喝汤，再涮菜。',
-        createdAt: '8月15日',
-        updatedAt: '周二',
+        createdAt: past(53, 18, 0),
+        updatedAt: past(7, 8, 15),
       },
       {
         id: 'r4',
@@ -80,8 +90,8 @@ export function seed(): DB {
         art: 'basque-cake.svg',
         note: '奶油奶酪要室温软化，面糊过筛两遍更细腻。',
         steps: '1. 奶油奶酪室温软化，加糖打顺滑。\n2. 分次加蛋液拌匀，再加淡奶油。\n3. 筛入面粉，面糊过筛两遍。\n4. 220℃ 烤 25 分钟，表面焦黑即可，冷藏一夜更好吃。',
-        createdAt: '8月12日',
-        updatedAt: '8月30日',
+        createdAt: past(56, 15, 30),
+        updatedAt: past(8, 21, 9),
       },
       {
         id: 'r5',
@@ -92,8 +102,8 @@ export function seed(): DB {
         art: 'three-cup-chicken.svg',
         note: '九层塔要关火再放，香气差很多。',
         steps: '1. 鸡腿切块，用米酒抓一下。\n2. 麻油小火煸姜片到卷边，下蒜瓣。\n3. 下鸡块煎上色，加酱油、米酒、糖。\n4. 收汁后关火，拌入九层塔。',
-        createdAt: '8月9日',
-        updatedAt: '8月26日',
+        createdAt: past(59, 9, 45),
+        updatedAt: past(12, 19, 26),
       },
       {
         id: 'r6',
@@ -104,8 +114,8 @@ export function seed(): DB {
         art: 'mango-sticky-rice.svg',
         note: '椰浆里加一小撮盐再淋，甜而不腻。',
         steps: '1. 糯米提前泡 4 小时，上锅蒸 25 分钟。\n2. 椰浆加糖和一小撮盐，小火煮化。\n3. 趁热把椰浆拌进糯米，盖上焖 15 分钟。\n4. 配芒果片，淋剩下的椰浆。',
-        createdAt: '8月5日',
-        updatedAt: '8月21日',
+        createdAt: past(63, 14, 0),
+        updatedAt: past(17, 10, 21),
       },
     ],
     orders: [
@@ -113,8 +123,8 @@ export function seed(): DB {
         id: 'o1',
         meal: 'lunch',
         status: 'accepted',
-        createdAt: '今天 08:20',
-        updatedAt: '今天 09:02',
+        createdAt: past(0, 8, 20),
+        updatedAt: past(0, 9, 2),
         placedBy: 'a',
         note: '',
         items: [
@@ -126,8 +136,8 @@ export function seed(): DB {
         id: 'o2',
         meal: 'dinner',
         status: 'pending',
-        createdAt: '今天 09:40',
-        updatedAt: '今天 09:40',
+        createdAt: past(0, 9, 40),
+        updatedAt: past(0, 9, 40),
         placedBy: 'b',
         note: '少放辣',
         items: [
@@ -139,18 +149,18 @@ export function seed(): DB {
         id: 'o3',
         meal: 'lunch',
         status: 'done',
-        createdAt: '昨天 10:15',
-        updatedAt: '昨天 12:02',
+        createdAt: past(1, 10, 15),
+        updatedAt: past(1, 12, 2),
         placedBy: 'b',
         note: '',
         items: [{ recipeId: 'r3', dishName: '椰子鸡火锅' }],
       },
     ],
     logs: [
-      { t: '12:05', kind: 'ok', text: '已拉取 recipes.json + orders.json（6 条菜谱 · 3 份点单）' },
-      { t: '11:41', kind: 'ok', text: '晚餐单已推送：溏心蛋葱油拌面 + 芒果糯米饭（等待接单）' },
-      { t: '11:40', kind: 'ok', text: '掌勺方已接下今日午餐单：番茄炖牛腩 + 巴斯克芝士蛋糕' },
-      { t: '09:41', kind: 'ok', text: 'r1 · 番茄炖牛腩 备注已更新并推送' },
+      { t: past(0, 12, 5), kind: 'ok', text: '已拉取 recipes.json + orders.json（6 条菜谱 · 3 份点单）' },
+      { t: past(0, 11, 41), kind: 'ok', text: '晚餐单已推送：溏心蛋葱油拌面 + 芒果糯米饭（等待接单）' },
+      { t: past(0, 11, 40), kind: 'ok', text: '掌勺方已接下今日午餐单：番茄炖牛腩 + 巴斯克芝士蛋糕' },
+      { t: past(0, 9, 41), kind: 'ok', text: 'r1 · 番茄炖牛腩 备注已更新并推送' },
     ],
   };
 }
