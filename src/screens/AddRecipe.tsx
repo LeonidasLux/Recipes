@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useStore } from '../data/store';
 import { useToast } from '../components/Toast';
 import { SourceBadge } from '../components/Bits';
 import { Icon } from '../components/Icons';
 import { artUrl, initial } from '../data/helpers';
+import { usePageBack } from '../lib/back';
 import { detectSource, guessArt, parseShare } from '../lib/share';
 import { aiTimeout, DeepseekError, recognizeRecipe } from '../lib/ai';
 import { compactPage, isFetchableUrl, readPageHtml } from '../lib/reader';
@@ -14,7 +14,9 @@ import type { SourceKey } from '../data/types';
 export default function AddRecipe() {
   const { addRecipe, db } = useStore();
   const { toast } = useToast();
-  const navigate = useNavigate();
+
+  /* 返回按钮与手机物理返回键共用同一套判断：能回上一屏就回，回不去才落到菜谱库 */
+  const goBack = usePageBack('/library');
 
   /** 粘贴进来的原文（链接或整段分享文案） */
   const [raw, setRaw] = useState('');
@@ -120,7 +122,8 @@ export default function AddRecipe() {
         note: note.trim(),
       });
       toast('已保存 · 已同步');
-      window.setTimeout(() => navigate('/library'), 650);
+      /* 存完就离开这一页：返回键不该再退回到一张已经交掉的表单 */
+      window.setTimeout(() => goBack(), 650);
     }, 750);
   }
 
@@ -131,9 +134,9 @@ export default function AddRecipe() {
       <div className="sheetbar">
         <button
           className="icbtn ghost"
-          aria-label="返回菜谱库"
+          aria-label="返回上一屏"
           style={{ borderRadius: 16 }}
-          onClick={() => navigate('/library')}
+          onClick={goBack}
         >
           <Icon name="back" />
         </button>

@@ -52,6 +52,7 @@ import {
   srcMeta,
   statusMeta,
 } from '../src/data/helpers';
+import { backAction, pressBack, trackHistory } from '../src/lib/back';
 import type { DB, Order, Profiles, Recipe } from '../src/data/types';
 
 const root = document.getElementById('root') as HTMLElement;
@@ -3100,6 +3101,122 @@ async function edgeChecks() {
   }
 }
 
+/* ═══════════ 七·五、手机返回键 ═══════════ */
+
+/**
+ * 手机物理返回键由 src/lib/back.tsx 接管。真机上它接的是 @capacitor/app 的 backButton
+ * 事件，jsdom 里没有原生桥，所以测试直接调同一个入口 pressBack()，走的还是那条路径。
+ */
+async function backChecks() {
+  console.log('\n[返回键 · 决策表]');
+  check(backAction({ hasOverlay: true, level: 1, native: true }) === 'overlay', '有遮罩 → 先关遮罩');
+  check(backAction({ hasOverlay: false, level: 3, native: true }) === 'page', '页内还有来路 → 回上一屏');
+  check(backAction({ hasOverlay: false, level: 1, native: true }) === 'exit', '★ 已经在根屏上 → 才退出应用');
+  check(backAction({ hasOverlay: false, level: 1, native: false }) === 'idle', '网页端不接管（浏览器自己管返回）');
+
+  console.log('\n[返回键 · 页内返回栈台账]');
+  let stack = trackHistory([], 'a', 'POP');
+  check(stack.join() === 'a', '首个条目落栈');
+  stack = trackHistory(stack, 'b', 'PUSH');
+  check(stack.join() === 'a,b', 'push 加深一层', stack.join());
+  stack = trackHistory(stack, 'c', 'REPLACE');
+  check(stack.join() === 'a,c', 'replace 换掉栈顶、不加深', stack.join());
+  stack = trackHistory(stack, 'a', 'POP');
+  check(stack.join() === 'a', 'pop 变浅一层', stack.join());
+  check(trackHistory(stack, 'x', 'POP').join() === 'a', '已经在根屏上时 pop 不会把栈掏空');
+
+  console.log('\n[返回键 · 菜谱库 → 详情 → 返回]');
+  useDb();
+  {
+    const m = await mount('/library');
+    await m.click('.dishrow');
+    check(m.$('.s-detail') !== null, '点一道菜 → 进详情页');
+    await act(async () => pressBack());
+    check(
+      m.$('.s-library') !== null && m.$('.s-detail') === null,
+      '★ 详情页按返回 → 回菜谱库（不再关掉应用）',
+    );
+    await act(async () => pressBack());
+    check(m.$('.s-library') !== null, '★ 已经在菜谱库上，再按返回不跳走，交给系统退出应用');
+    await m.close();
+  }
+
+  console.log('\n[返回键 · 添加页]');
+  useDb();
+  {
+    const m = await mount('/library');
+    await m.click('.tab.add');
+    check(m.$('.s-add') !== null, '点「＋添加」→ 进添加页');
+    await act(async () => pressBack());
+    check(m.$('.s-add') === null && m.$('.s-library') !== null, '★ 添加页按返回 → 回菜谱库');
+    await m.close();
+  }
+
+  console.log('\n[返回键 · 保存完的添加页不留在返回栈里]');
+  useDb();
+  {
+    const m = await mount('/order');
+    await m.click('.tab.add');
+    await m.click('#manualBtn');
+    await m.type('#mTitle', '返回键测试菜');
+    await m.click('.actionbar .btn-primary');
+    await m.wait(1600);
+    check(m.$('.s-add') === null && m.$('.s-order') !== null, '从点单页进来，存完回到点单页');
+    await act(async () => pressBack());
+    check(
+      m.$('.s-add') === null && m.$('.s-order') !== null,
+      '★ 返回键不会退回到一张已经交掉的表单',
+    );
+    await m.close();
+  }
+
+  console.log('\n[返回键 · 遮罩优先：长按删除提示]');
+  useDb();
+  {
+    const m = await mount('/library');
+    await m.longPress('.dishrow');
+    check(m.$('.tip') !== null, '长按菜谱 → 弹出删除提示');
+    await act(async () => pressBack());
+    check(m.$('.tip') === null && m.$('.s-library') !== null, '★ 返回键先收起提示，不退屏');
+    await m.close();
+  }
+
+  console.log('\n[返回键 · 遮罩优先：掌勺的菜品详情]');
+  useDb();
+  {
+    const m = await mount('/cook');
+    await m.click('.dit');
+    check(m.$('.dishsheet') !== null, '点一道菜 → 弹出菜品详情');
+    await act(async () => pressBack());
+    check(m.$('.dishsheet') === null && m.$('.s-cook') !== null, '★ 返回键先关掉菜品详情，不退屏');
+    await m.close();
+  }
+
+  console.log('\n[返回键 · 底部导航走过的屏也能退]');
+  useDb();
+  {
+    const m = await mount('/library');
+    await m.clickByText('.tab', '设置');
+    check(m.$('.s-sync') !== null, '点「设置」→ 进设置页');
+    await act(async () => pressBack());
+    check(m.$('.s-library') !== null, '按返回 → 退回上一格（菜谱库）');
+    await m.close();
+  }
+
+  console.log('\n[返回键 · 做完的首次向导不留在返回栈里]');
+  localStorage.clear();
+  {
+    const m = await mount('/setup');
+    await m.type('#fNickname', '小辉');
+    await m.clickByText('.btn-ghost', '稍后再说（本地模式）');
+    await m.wait(250);
+    check(m.$('.s-library') !== null, '向导走完 → 进菜谱库');
+    await act(async () => pressBack());
+    check(m.$('.s-setup') === null && m.$('.s-library') !== null, '★ 返回键不会退回已经做完的向导');
+    await m.close();
+  }
+}
+
 /* ═══════════ 一·五、错误边界 ═══════════ */
 
 /** 故意在渲染期抛错，用来确认错误边界真的兜住了 */
@@ -3186,6 +3303,7 @@ await migrationChecks();
 await connectChecks();
 await syncChecks();
 await edgeChecks();
+await backChecks();
 workflowChecks();
 
 netGuard.restore();

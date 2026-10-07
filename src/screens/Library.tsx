@@ -7,6 +7,7 @@ import { TabBar, usePreviewState } from '../components/TabBar';
 import { SkeletonRows, SourceBadge, StateCard, Thumb } from '../components/Bits';
 import { Icon } from '../components/Icons';
 import { preserveTypedValue } from '../lib/inputs';
+import { useBackClose } from '../lib/back';
 import { todayLine } from '../data/helpers';
 import type { Recipe, SourceKey } from '../data/types';
 
@@ -31,6 +32,9 @@ export default function Library() {
   const [tip, setTip] = useState<{ id: string; title: string; top: number; left: number } | null>(null);
   const pressTimer = useRef<number | null>(null);
   const longPressed = useRef(false);
+
+  /* 长按弹出的删除提示是遮罩：手机返回键先收起它，而不是退出应用 */
+  useBackClose(tip !== null, closeTip);
 
   /* 进场骨架 → 呈现（与设计源 520ms 一致） */
   useEffect(() => {

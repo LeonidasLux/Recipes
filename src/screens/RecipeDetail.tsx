@@ -6,6 +6,7 @@ import { SourceBadge, StateCard } from '../components/Bits';
 import { Icon } from '../components/Icons';
 import { artUrl, initial, recipeInOpenOrder } from '../data/helpers';
 import { preserveTypedValue } from '../lib/inputs';
+import { usePageBack } from '../lib/back';
 
 export default function RecipeDetail() {
   const { id = '' } = useParams();
@@ -27,10 +28,8 @@ export default function RecipeDetail() {
 
   const inOpenOrder = recipe ? recipeInOpenOrder(db.orders, recipe.id) : null;
 
-  function goBack() {
-    if (window.history.length > 1) navigate(-1);
-    else navigate('/library');
-  }
+  /* 屏内返回按钮与手机物理返回键共用同一套判断（能回就回，回不去才落到菜谱库） */
+  const goBack = usePageBack('/library');
 
   function startEdit() {
     if (!recipe) return;
@@ -60,7 +59,8 @@ export default function RecipeDetail() {
     const title = recipe.title;
     deleteRecipe(recipe.id);
     toast(`已删除「${title}」`);
-    navigate('/library');
+    /* 这道菜已经没了，别把返回键留在详情页上 */
+    goBack();
   }
 
   function openOrderWithThis() {
@@ -76,7 +76,7 @@ export default function RecipeDetail() {
     return (
       <div className="app s-detail">
         <div className="sheetbar">
-          <button className="icbtn ghost" aria-label="返回菜谱库" onClick={goBack} style={{ borderRadius: 16 }}>
+          <button className="icbtn ghost" aria-label="返回上一屏" onClick={goBack} style={{ borderRadius: 16 }}>
             <Icon name="back" />
           </button>
           <h1 className="title" style={{ flex: 1, textAlign: 'center' }}>
@@ -102,7 +102,7 @@ export default function RecipeDetail() {
   return (
     <div className="app s-detail">
       <div className="sheetbar">
-        <button className="icbtn ghost" aria-label="返回菜谱库" onClick={goBack} style={{ borderRadius: 16 }}>
+        <button className="icbtn ghost" aria-label="返回上一屏" onClick={goBack} style={{ borderRadius: 16 }}>
           <Icon name="back" />
         </button>
         <h1 className="title" style={{ flex: 1, textAlign: 'center' }}>

@@ -74,3 +74,16 @@
 
   整体不超过 100 字；用户另外给了 message 时结合它来写；用户没给 RDC 编号就不写 RDC 行。
 - 推送失败时原样输出错误信息，不要换一种推送方式重试。
+
+## 9. 手机返回键（Android 物理返回键 / 手势返回）
+
+**背景**：Capacitor 的 WebView 自己不处理返回键 —— 没人接管的话，按返回就是直接 finish 掉 Activity，也就是关掉应用回到桌面。所以「添加菜谱」「菜谱详情」这类二级页上按返回，用户期望的回上一屏会变成退出应用。接管层是 `src/lib/back.tsx`，决策顺序固定为**先关遮罩 → 再页内回退 → 已经在根屏上才 `App.exitApp()`**（纯函数 `backAction()`，有单测），真机靠 `@capacitor/app` 的 `backButton` 事件接进统一入口 `pressBack()`。
+
+**硬性要求**（违反其中任何一条，返回键就会关掉应用或关错层，属于功能缺陷）：
+
+- **新增二级页（不在底部四格里的屏）必须靠路由 push 进入**，不要用 `replace` 抹掉来路，否则返回键无处可回。
+- **新增的二级页必须带上出口**：屏内返回按钮与「保存 / 删除」后的收尾一律用 `usePageBack(兜底路由)`，不要直接 `navigate('/某屏')`。这样按钮与物理返回键结果一致，也不会把一张已经交掉的表单留在返回栈里。
+- **新增任何遮罩 / 弹层（盖住整屏、可关闭的界面）必须用 `useBackClose(open, close)` 登记**，否则按返回会直接退屏或退出应用，而不是关掉这层。
+- **新增原生插件后必须跑 `npx cap sync android`**，并把 `android/capacitor.settings.gradle`、`android/app/capacitor.build.gradle` 这些生成物一起提交；少了这一步，`android/` 工程里没有这个插件，真机上等于没接。
+- 网页端（PWA）不接管返回键：`Capacitor.isNativePlatform()` 为 false 时交给浏览器自己，`exit` 分支不执行。
+- 相关测试在 `scripts/smoke.tsx` 的「手机返回键」一节，直接调 `pressBack()`，走和真机同一条路径。**新增二级页 / 遮罩时必须补上对应断言**（见 §5）。

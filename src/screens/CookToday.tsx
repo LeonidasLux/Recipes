@@ -8,6 +8,7 @@ import { Icon } from '../components/Icons';
 import { DishSheet } from '../components/DishSheet';
 import { artUrl, initial, itemArt, mealLabel, orderItems } from '../data/helpers';
 import { useNames } from '../data/useNames';
+import { useBackClose } from '../lib/back';
 import type { Order, OrderItem } from '../data/types';
 
 export default function CookToday() {
@@ -23,6 +24,9 @@ export default function CookToday() {
   const [showDone, setShowDone] = useState(false);
   /* 点了哪道菜 → 弹它的详情；null 表示没弹 */
   const [dish, setDish] = useState<OrderItem | null>(null);
+
+  /* 菜品详情是遮罩：手机返回键先关它，而不是退出应用（点遮罩 / × / Esc 照旧） */
+  useBackClose(dish !== null, () => setDish(null));
 
   useEffect(() => {
     const t = window.setTimeout(() => setLoading(false), 460);

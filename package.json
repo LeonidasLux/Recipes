@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@capacitor/android": "^6.2.2",
+    "@capacitor/app": "^6.0.3",
     "@capacitor/core": "^6.2.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

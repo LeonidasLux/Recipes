@@ -273,7 +273,8 @@ export default function Setup() {
     setConfig(cfg);
     applyNames();
     toast('已进入本地模式，之后可在「同步」里连接');
-    navigate('/library');
+    /* 向导是单向门：用 replace 离开，返回键不会把用户退回已经做完的向导 */
+    navigate('/library', { replace: true });
   }
 
   /* ─── 已连接视图 ─── */
@@ -306,7 +307,7 @@ export default function Setup() {
               </p>
               <button
                 className="btn-primary"
-                onClick={() => navigate('/library')}
+                onClick={() => navigate('/library', { replace: true })}
               >
                 开始使用
               </button>
