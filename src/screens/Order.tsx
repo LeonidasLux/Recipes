@@ -4,7 +4,7 @@ import { useStore } from '../data/store';
 import { useToast } from '../components/Toast';
 import { TabBar, usePreviewState } from '../components/TabBar';
 import { RoleSwitch } from '../components/RoleSwitch';
-import { SkeletonRows, SourceBadge, SourceDot, StateCard, StatusChip, Thumb } from '../components/Bits';
+import { SkeletonRows, SourceBadge, StateCard, StatusChip, Thumb } from '../components/Bits';
 import { Icon } from '../components/Icons';
 import { anchorDeleteTip, DeleteTip, type DeleteTipState } from '../components/DeleteTip';
 import { artUrl, initial, isTodayOrder, itemArt, mealLabel, orderArt, orderItems, orderMain, orderSummary, todayLine } from '../data/helpers';
@@ -24,6 +24,8 @@ export default function OrderScreen() {
   const [meal, setMeal] = useState<Meal>('lunch');
   const [selected, setSelected] = useState<OrderItem[]>([]);
   const [manual, setManual] = useState('');
+  /* 挑选网格的搜索词：菜谱多了以后靠它找菜 */
+  const [pickQ, setPickQ] = useState('');
   /* 给掌勺的话（可不填），随这一单一起发出去 */
   const [note, setNote] = useState('');
   const [open, setOpen] = useState<Set<string>>(new Set());
@@ -172,17 +174,23 @@ export default function OrderScreen() {
 
   const canSend = selected.length > 0 && !sending;
 
+  /* 挑选网格：搜索词命中菜名 / 备注 / 作者，与菜谱库那套同一口径 */
+  const pickSearching = pickQ.trim().length > 0;
+  const pickList = useMemo(() => {
+    const lq = pickQ.trim().toLowerCase();
+    if (!lq) return db.recipes;
+    return db.recipes.filter((r) => `${r.title} ${r.note} ${r.author}`.toLowerCase().includes(lq));
+  }, [db.recipes, pickQ]);
+
   return (
     <div className="app s-order">
-      <header className="topbar" style={{ paddingBottom: 8 }}>
-        <div className="toprow">
-          <p className="greeting">{todayLine()}</p>
-          <RoleSwitch />
-        </div>
+      <header className="topbar">
+        <p className="greeting">{todayLine()}</p>
         <div className="navrow">
-          <h1 className="ptitle" style={{ margin: 0, fontSize: 25 }}>
+          <h1 className="ptitle" style={{ margin: 0 }}>
             点一顿饭
           </h1>
+          <RoleSwitch />
         </div>
       </header>
 
@@ -254,13 +262,37 @@ export default function OrderScreen() {
             <div className="sechead">
               <div>
                 <h2 className="h3">从菜谱库挑选</h2>
-                <p className="hint">可多选 · 已选中的会堆到上面</p>
+                <p className="hint">
+                  {pickSearching ? `找到 ${pickList.length} 道「${pickQ.trim()}」` : '可多选 · 已选中的会堆到上面'}
+                </p>
               </div>
               <button className="btn-sticker solid" onClick={randomAdd}>
                 <Icon name="shuffle" />
                 随机加一道
               </button>
             </div>
+
+            {/* 库里一道菜都没有时不摆搜索框 —— 那时该看到的是下面的空态引导 */}
+            {db.recipes.length > 0 && (
+              <div className="picksearch">
+                <Icon name="search" />
+                <input
+                  type="text"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="搜菜名、备注或作者"
+                  aria-label="搜索菜谱库"
+                  value={pickQ}
+                  onChange={(e) => setPickQ(e.target.value)}
+                  {...preserveTypedValue(setPickQ)}
+                />
+                {pickSearching && (
+                  <button type="button" className="sclear" aria-label="清除搜索" onClick={() => setPickQ('')}>
+                    <Icon name="x" />
+                  </button>
+                )}
+              </div>
+            )}
 
             <div className="dishgrid">
               {!db.recipes.length ? (
@@ -273,8 +305,18 @@ export default function OrderScreen() {
                     去添加
                   </Link>
                 </div>
+              ) : !pickList.length ? (
+                <div className="card statecard grid-empty">
+                  <p style={{ margin: '0 0 4px', fontSize: 16, fontWeight: 600 }}>没找到「{pickQ.trim()}」</p>
+                  <p className="meta" style={{ margin: '0 0 12px' }}>
+                    换个关键词，或者用下面那栏自己输一道。
+                  </p>
+                  <button className="btn-sticker primary" style={{ minWidth: 140 }} onClick={() => setPickQ('')}>
+                    清除搜索
+                  </button>
+                </div>
               ) : (
-                db.recipes.map((r) => {
+                pickList.map((r) => {
                   const on = selIndex(r.id) !== -1;
                   return (
                     <button
@@ -289,7 +331,6 @@ export default function OrderScreen() {
                       </span>
                       <span className="info">
                         <span className="t">{r.title}</span>
-                        <SourceDot source={r.source} />
                       </span>
                       <span className="ck">
                         <Icon name="check" />

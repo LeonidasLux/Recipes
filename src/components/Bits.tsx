@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Icon, type IconName } from './Icons';
-import { artUrl, initial, srcColorVar, srcMeta, statusMeta } from '../data/helpers';
+import { artUrl, initial, srcMeta, statusMeta } from '../data/helpers';
 import type { OrderStatus, SourceKey } from '../data/types';
 
 /* ─── 骨架屏 ─────────────────────────────────── */
@@ -28,26 +28,6 @@ export function SourceBadge({ source, solid }: { source: SourceKey; solid?: bool
   return (
     <span className={`src ${m.cls}${solid ? ' solid' : ''}`}>
       <i />
-      {m.label}
-    </span>
-  );
-}
-
-/** 网格里那个更小的内联来源点 */
-export function SourceDot({ source }: { source: SourceKey }) {
-  const m = srcMeta(source);
-  return (
-    <span className="s" style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
-      <i
-        style={{
-          width: 7,
-          height: 7,
-          borderRadius: '50%',
-          background: srcColorVar(source),
-          boxShadow: '0 0 0 1.5px color-mix(in oklch, currentColor 35%, transparent)',
-          display: 'inline-block',
-        }}
-      />
       {m.label}
     </span>
   );

@@ -90,10 +90,7 @@ export default function CookToday() {
   return (
     <div className="app s-cook">
       <header className="topbar">
-        <div className="toprow">
-          <p className="greeting">{names.meNamed ? `${names.meName} · 掌勺` : '我来掌勺'}</p>
-          <RoleSwitch />
-        </div>
+        <p className="greeting">{names.meNamed ? `${names.meName} · 掌勺` : '我来掌勺'}</p>
         <div className="navrow">
           <div>
             <h1 className="ptitle" style={{ margin: 0 }}>
@@ -103,6 +100,7 @@ export default function CookToday() {
               {names.partnerNamed ? `${names.partnerName}点给你的几道菜` : '点给你的几道菜'} · 长按卡片可删除
             </small>
           </div>
+          <RoleSwitch />
         </div>
       </header>
 

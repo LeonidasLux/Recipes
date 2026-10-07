@@ -1527,6 +1527,14 @@ async function interactionChecks() {
     await m.close();
   }
   {
+    const m = await mount('/order');
+    await m.ime('.picksearch input', '椰');
+    await m.blur('.picksearch input');
+    check(m.value('.picksearch input') === '椰', '★ 点单挑选网格的搜索框不丢字');
+    check(m.$$('.dishgrid .pick').length === 2, '★ 挑选搜索真的过滤了网格（不是只显示在框里）', `实际 ${m.$$('.dishgrid .pick').length}`);
+    await m.close();
+  }
+  {
     const m = await mount('/add');
     await m.ime('#shareInput', BILI_SHARE);
     await m.click('#recognizeBtn');
@@ -2673,6 +2681,67 @@ async function edgeChecks() {
     await m.close();
   }
 
+  console.log('\n[边界 · 点单挑选网格：不显示来源 + 支持搜索]');
+  useDb();
+  {
+    const m = await mount('/order');
+    const picks = () => m.$$('.dishgrid .pick');
+    const pickTitles = () => picks().map((p) => (p.querySelector('.t')?.textContent ?? '').trim());
+
+    /* 每张卡片只露缩略图 + 菜名，不再挂来源平台 */
+    check(picks().length === 6, '挑选网格列出全部 6 道', `实际 ${picks().length}`);
+    check(m.$$('.dishgrid .pick .src').length === 0, '★ 挑选网格里没有来源徽章');
+    check(m.$$('.dishgrid .pick .s').length === 0, '★ 挑选网格里没有来源小圆点');
+    check(
+      !picks().some((p) => /小红书|B站|抖音|手动/.test(p.textContent ?? '')),
+      '★ 卡片文案里不出现来源平台名',
+      picks().map((p) => p.textContent).join(' | '),
+    );
+    check(
+      picks().every((p) => p.querySelector('.pt') !== null && p.querySelector('.t') !== null),
+      '缩略图与菜名还在',
+    );
+
+    /* 搜索：菜名 / 备注 / 作者都能命中，只过滤可见项 */
+    await m.type('.picksearch input', '椰');
+    check(pickTitles().join(' / ') === '椰子鸡火锅 / 芒果糯米饭', '★ 搜「椰」→ 只剩 2 道（备注里的椰浆也算）', pickTitles().join(' / '));
+    check(m.html().includes('找到 2 道「椰」'), '★ 提示找到 2 道');
+    await m.click('.picksearch .sclear');
+    check(picks().length === 6, '★ 清除搜索 → 恢复全部 6 道', `实际 ${picks().length}`);
+
+    await m.type('.picksearch input', '海南小厨娘');
+    check(pickTitles().join(' / ') === '椰子鸡火锅', '★ 按作者搜得到', pickTitles().join(' / '));
+    await m.type('.picksearch input', '九层塔');
+    check(pickTitles().join(' / ') === '台式三杯鸡', '按备注也能搜到', pickTitles().join(' / '));
+
+    /* 搜不中：给空态卡，一键清除搜索 */
+    await m.type('.picksearch input', 'zzz');
+    check(picks().length === 0, '搜不中 → 网格空');
+    check(m.html().includes('没找到「zzz」'), '★ 搜不中给「没找到」空态卡');
+    await m.clickByText('.dishgrid .grid-empty .btn-sticker', '清除搜索');
+    check(picks().length === 6, '空态卡上的「清除搜索」恢复全部', `实际 ${picks().length}`);
+
+    /* 搜索只影响挑选网格，已经选好的菜留在组合器里 */
+    await m.clickByText('.pick', '椰子鸡火锅');
+    await m.type('.picksearch input', '番茄');
+    check(pickTitles().join(' / ') === '番茄炖牛腩', '过滤后网格只剩命中的那道');
+    check(
+      m.$$('.sel').length === 1 && (m.$('.sel')?.textContent ?? '').includes('椰子鸡火锅'),
+      '★ 已选不受搜索影响（还堆在组合器里）',
+      m.$('.sel')?.textContent ?? '',
+    );
+    await m.close();
+  }
+  useDb((db) => {
+    db.recipes = [];
+  });
+  {
+    const m = await mount('/order');
+    check(m.$('.picksearch') === null, '★ 菜谱库为空时不摆搜索框');
+    check(m.html().includes('菜谱库还是空的'), '空态的「去添加」引导还在');
+    await m.close();
+  }
+
   console.log('\n[边界 · 「今日点单」只列我点的]');
   useDb();
   {
@@ -2949,6 +3018,42 @@ async function edgeChecks() {
     check(/prefers-reduced-motion[^{]*\{[^}]*\.tab\.sync-busy/.test(css), '系统关了动效时不再闪 / 转');
   }
 
+  console.log('\n[边界 · 四个一级页的顶栏结构一致]');
+  useDb();
+  {
+    /* 菜谱库 / 点单 / 掌勺 / 设置共用同一套顶栏：日期行（greeting）+ 标题行（navrow > ptitle）。
+       点单 / 掌勺只是把角色开关放进标题行右端，日期与标题的位置 / 间距不该跟着变。
+       （样式表在冒烟里是空的，布局约束靠 DOM 结构与样式文件断言一起兜） */
+    for (const path of ['/library', '/order', '/cook', '/sync']) {
+      const m = await mount(path);
+      const topbar = m.$('.topbar');
+      const kids = Array.from(topbar?.children ?? []).map((c) => c.className);
+      check(
+        kids.length === 2 && kids[0].includes('greeting') && kids[1].includes('navrow'),
+        `★ ${path} 顶栏 = 日期行 + 标题行`,
+        kids.join(' | '),
+      );
+      check(m.$('.topbar .toprow') === null, `${path} 不再有单独的开关行（曾经把标题顶下去）`);
+      check(m.$('.topbar .navrow .ptitle') !== null, `${path} 标题就在 navrow 里`);
+      const title = m.$('.ptitle');
+      check(
+        !/font-size/.test(title?.getAttribute('style') ?? ''),
+        `★ ${path} 标题字号不再被单页改小（统一走 .ptitle）`,
+        title?.getAttribute('style') ?? '',
+      );
+      await m.close();
+    }
+    const o = await mount('/order');
+    check(o.$('.topbar .navrow > .rolesw') !== null, '★ 点单：开关挂在标题行右端');
+    check(o.$('.topbar > .greeting') !== null, '★ 点单：日期仍是顶栏第一行（位置与设置页一致）');
+    await o.close();
+    const c = await mount('/cook');
+    check(c.$('.topbar .navrow > .rolesw') !== null, '★ 掌勺：开关同样挂在标题行右端');
+    check(c.$('.topbar > .greeting') !== null, '★ 掌勺：日期行同样是顶栏第一行');
+    await c.close();
+  }
+  useDb();
+
   console.log('\n[边界 · 角色切换贴在第二格屏右上角]');
   localStorage.clear();
   {
@@ -2962,7 +3067,7 @@ async function edgeChecks() {
 
     const m = await mount('/order');
     check(m.$('.topbar .rolesw') !== null, '★ 点单屏右上角有角色开关');
-    check(m.$('.topbar > .toprow > .rolesw') !== null, '开关就挂在顶栏第一行的右端');
+    check(m.$('.topbar > .navrow > .rolesw') !== null, '开关挂在标题行（navrow）的右端');
     check((m.$('.rolesw button.on')?.textContent ?? '') === '点单', '当前角色 → 开关高亮「点单」');
     check((m.$$('.tabbar .tab')[1]?.textContent ?? '').includes('点单'), '点单角色 → 底部第二格是「点单」');
 
@@ -2986,7 +3091,7 @@ async function edgeChecks() {
     const m2 = await mount('/cook');
     check(m2.$('.topbar .rolesw') !== null, '掌勺屏右上角也有角色开关');
     check((m2.$('.rolesw button.on')?.textContent ?? '') === '掌勺', '掌勺角色 → 开关高亮「掌勺」');
-    check(m2.$('.topbar > .toprow > .rolesw') !== null, '掌勺屏：开关同样是顶栏第一行的右端');
+    check(m2.$('.topbar > .navrow > .rolesw') !== null, '掌勺屏：开关同样挂在标题行的右端');
     await m2.clickByText('.rolesw button', '点单');
     await m2.wait(900);
     check(readDb().config?.view === 'order', '从掌勺屏切回点单');
@@ -3172,6 +3277,18 @@ async function edgeChecks() {
     check(readDb().logs.some((l) => l.text.includes('已删除菜谱')), '删除写同步日志');
     check(m.html().includes('我的菜谱库'), '删完回到菜谱库');
     await m.close();
+  }
+
+  console.log('\n[边界 · 菜谱库列表行走紧凑布局]');
+  {
+    /* 列表行调矮：缩略图列 56px、上下内边距 8px，骨架屏跟列表行同尺寸（样式表在冒烟里是空的，只能读文件断言） */
+    const css = readFileSync('src/styles/app.css', 'utf8');
+    check(/\.dishrow\s*\{[^}]*grid-template-columns:\s*56px 1fr/.test(css), '★ 列表行缩略图列 56px');
+    check(/\.dishrow\s*\{[^}]*padding:\s*8px 0/.test(css), '★ 列表行上下内边距收到 8px');
+    check(/\.thumb\s*\{[^}]*width:\s*56px; height:\s*56px/.test(css), '★ 菜品图片缩到 56px');
+    check(/\.thumb\s*\{[^}]*border-radius:\s*14px/.test(css), '缩略图圆角跟着调小');
+    check(/\.sk-row\s*\{[^}]*grid-template-columns:\s*56px 1fr[^}]*padding:\s*9px 0/.test(css), '骨架屏行跟列表行同尺寸');
+    check(/\.sk-thumb\s*\{[^}]*width:\s*56px; height:\s*56px/.test(css), '骨架屏缩略图同样 56px');
   }
 
   console.log('\n[边界 · 菜谱库长按删除]');
