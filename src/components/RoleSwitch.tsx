@@ -24,7 +24,8 @@ export function RoleSwitch() {
     if (next === view) return;
     setView(next);
     toast(next === 'cook' ? '已切到「掌勺」· 底部第二格换成掌勺' : '已切到「点单」· 底部第二格换成点单');
-    navigate(`${next === 'cook' ? '/cook' : '/order'}${search}`);
+    /* 点单 / 掌勺同属一级页：换屏用 replace，不叠历史（返回键不该在一级页之间来回，见 src/lib/back.tsx） */
+    navigate(`${next === 'cook' ? '/cook' : '/order'}${search}`, { replace: true });
   }
 
   const seg = (key: ViewRole, label: string) => (

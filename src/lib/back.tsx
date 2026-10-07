@@ -20,21 +20,44 @@ import { App } from '@capacitor/app';
  *
  * 接管后按三层决策（见 backAction）：
  *   1. 有遮罩（菜谱库长按删除提示、掌勺的菜品详情）→ 先关遮罩；
- *   2. 页内还有来路（返回栈深 > 1）→ 回上一屏；
- *   3. 已经在根屏上 → 交给 Capacitor 退出应用（和安卓惯例一致）。
+ *   2. 当前屏是一级页（底部四格 / 首次设置）→ 直接交给 Capacitor 退出应用。
+ *      一级页**不互相回退**：从设置、点单、菜谱库按返回就是回桌面，不该退回
+ *      「上一次用过的一级页」；
+ *   3. 二级页（详情 / 添加）→ 有来路就回上一屏，深链进来没来路才落到菜谱库。
  *
  * 真机靠 `@capacitor/app` 的 backButton 事件接进 pressBack()；网页端浏览器自己管
  * 返回键，这里不接线（Capacitor.isNativePlatform() 为 false，退出分支也不执行）。
  */
 
 export type NavType = 'PUSH' | 'POP' | 'REPLACE';
-export type BackAction = 'overlay' | 'page' | 'exit' | 'idle';
+export type BackAction = 'overlay' | 'page' | 'home' | 'exit' | 'idle';
 
-/** 返回键决策（纯函数，便于单测）：先关遮罩 → 再页内回退 → 根屏上交系统退出 */
-export function backAction(o: { hasOverlay: boolean; level: number; native: boolean }): BackAction {
+/** 一级页：底部四格那几屏 + 首次设置。它们上面按返回 = 退出应用 */
+export const ROOT_PATHS = ['/', '/library', '/order', '/cook', '/sync', '/setup'];
+
+/** 二级页没有来路（深链进来）时的兜底落点 */
+export const HOME = '/library';
+
+/** 当前屏是不是一级页（尾斜杠无所谓） */
+export function isRootPath(pathname: string): boolean {
+  const p = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
+  return ROOT_PATHS.includes(p);
+}
+
+/** 返回键决策（纯函数，便于单测）：先关遮罩 → 一级页直接退出 → 二级页回上一屏 */
+export function backAction(o: {
+  hasOverlay: boolean;
+  /** 当前屏是一级页（底部四格 / 首次设置） */
+  root: boolean;
+  /** 页内返回栈深度，1 表示没有来路 */
+  level: number;
+  native: boolean;
+}): BackAction {
   if (o.hasOverlay) return 'overlay';
+  if (o.root) return o.native ? 'exit' : 'idle';
   if (o.level > 1) return 'page';
-  return o.native ? 'exit' : 'idle';
+  /* 二级页但没来路（深链进来的）：落回菜谱库，别让用户卡在原地 */
+  return 'home';
 }
 
 /**
@@ -119,18 +142,20 @@ export function BackGuard({ children }: { children: ReactNode }) {
     const fn = () => {
       const action = backAction({
         hasOverlay: overlayClosers.length > 0,
+        root: isRootPath(location.pathname),
         level: stack.current.length,
         native: Capacitor.isNativePlatform(),
       });
       if (action === 'overlay') closeTopOverlay();
       else if (action === 'page') navigate(-1);
+      else if (action === 'home') navigate(HOME, { replace: true });
       else if (action === 'exit') void App.exitApp();
     };
     backHooks.add(fn);
     return () => {
       backHooks.delete(fn);
     };
-  }, [navigate]);
+  }, [navigate, location.pathname]);
 
   /* 真机接线：backButton 事件 → 统一入口。网页端不接线，交给浏览器自己的返回 */
   useEffect(() => {

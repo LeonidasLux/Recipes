@@ -52,7 +52,7 @@ import {
   srcMeta,
   statusMeta,
 } from '../src/data/helpers';
-import { backAction, pressBack, trackHistory } from '../src/lib/back';
+import { backAction, isRootPath, pressBack, trackHistory } from '../src/lib/back';
 import type { DB, Order, Profiles, Recipe } from '../src/data/types';
 
 const root = document.getElementById('root') as HTMLElement;
@@ -3109,10 +3109,22 @@ async function edgeChecks() {
  */
 async function backChecks() {
   console.log('\n[返回键 · 决策表]');
-  check(backAction({ hasOverlay: true, level: 1, native: true }) === 'overlay', '有遮罩 → 先关遮罩');
-  check(backAction({ hasOverlay: false, level: 3, native: true }) === 'page', '页内还有来路 → 回上一屏');
-  check(backAction({ hasOverlay: false, level: 1, native: true }) === 'exit', '★ 已经在根屏上 → 才退出应用');
-  check(backAction({ hasOverlay: false, level: 1, native: false }) === 'idle', '网页端不接管（浏览器自己管返回）');
+  check(backAction({ hasOverlay: true, root: false, level: 1, native: true }) === 'overlay', '有遮罩 → 先关遮罩');
+  check(backAction({ hasOverlay: false, root: false, level: 3, native: true }) === 'page', '二级页有来路 → 回上一屏');
+  check(backAction({ hasOverlay: false, root: true, level: 1, native: true }) === 'exit', '★ 一级页 → 直接退出应用');
+  check(
+    backAction({ hasOverlay: false, root: true, level: 4, native: true }) === 'exit',
+    '★ 一级页哪怕有历史，也不退回上一次的一级页，照样退出应用',
+  );
+  check(backAction({ hasOverlay: false, root: false, level: 1, native: true }) === 'home', '二级页没来路（深链）→ 落到菜谱库');
+  check(backAction({ hasOverlay: false, root: true, level: 1, native: false }) === 'idle', '网页端不接管（浏览器自己管返回）');
+
+  console.log('\n[返回键 · 一级页判定]');
+  check(
+    ['/library', '/order', '/cook', '/sync', '/setup', '/'].every(isRootPath),
+    '★ 底部四格 + 首次设置（含根路径）都算一级页',
+  );
+  check(!isRootPath('/recipe/r1') && !isRootPath('/add'), '菜谱详情 / 添加菜谱是二级页');
 
   console.log('\n[返回键 · 页内返回栈台账]');
   let stack = trackHistory([], 'a', 'POP');
@@ -3192,14 +3204,40 @@ async function backChecks() {
     await m.close();
   }
 
-  console.log('\n[返回键 · 底部导航走过的屏也能退]');
+  console.log('\n[返回键 · 一级页之间不互相回退]');
   useDb();
   {
     const m = await mount('/library');
     await m.clickByText('.tab', '设置');
     check(m.$('.s-sync') !== null, '点「设置」→ 进设置页');
     await act(async () => pressBack());
-    check(m.$('.s-library') !== null, '按返回 → 退回上一格（菜谱库）');
+    check(
+      m.$('.s-sync') !== null && m.$('.s-library') === null,
+      '★ 设置页按返回 → 不回菜谱库，直接交给系统退出应用',
+    );
+    await m.close();
+  }
+  useDb();
+  {
+    const m = await mount('/order');
+    await act(async () => pressBack());
+    check(m.$('.s-order') !== null, '★ 点单页按返回 → 不跳走，直接交给系统退出应用');
+    await m.close();
+  }
+
+  console.log('\n[返回键 · 从详情跳去点单，点单页上也不退回详情]');
+  useDb();
+  {
+    const m = await mount('/library');
+    /* 挑一道当时不在未完成单里的菜（r1 / r2 / r4 / r6 都挂在单上，按钮会是「已在今天单里」） */
+    await m.clickByText('.dishrow', '椰子鸡火锅');
+    await m.clickByText('.actionbar .btn-primary', '去点单');
+    check(m.$('.s-order') !== null, '详情页「去点单 · 带上这道菜」→ 进点单页');
+    await act(async () => pressBack());
+    check(
+      m.$('.s-order') !== null && m.$('.s-detail') === null,
+      '★ 点单页按返回 → 不退回详情，直接交给系统退出应用',
+    );
     await m.close();
   }
 

@@ -52,7 +52,9 @@ export function TabBar({ active }: { active: TabKey }) {
   const second = view === 'cook' ? COOK_TAB : ORDER_TAB;
 
   const tab = (t: TabDef, extra = '') => (
-    <Link key={t.key} to={t.to} className={`tab${extra}${t.key === active ? ' active' : ''}`}>
+    /* 四格之间互相换屏用 replace：一级页不叠历史，否则按返回会退回「上一次用过的一级页」，
+       而不是直接回桌面（返回键规则见 src/lib/back.tsx）。中间那个「＋添加」是二级页，仍走 push。 */
+    <Link key={t.key} to={t.to} replace className={`tab${extra}${t.key === active ? ' active' : ''}`}>
       <Icon name={t.icon} />
       <span>{t.label}</span>
       <span className="bubble" />
