@@ -7,11 +7,29 @@
    提交即同步：本地改动 → 立刻 PUT 回仓库。
    ============================================================ */
 
+import { dataUrlBase64, imageExtFor } from './photo';
+
 const API = 'https://api.github.com';
 
 export const RECIPES_PATH = 'recipes.json';
 export const ORDERS_PATH = 'orders.json';
 export const PROFILES_PATH = 'profiles.json';
+/** 菜谱照片放这个目录，一张图一个文件 */
+export const IMAGES_DIR = 'images';
+
+/** 菜谱照片在仓库里的路径：`images/<id>.<ext>`（扩展名跟着图片真实类型走） */
+export function imagePath(id: string, mime = 'image/jpeg'): string {
+  return `${IMAGES_DIR}/${id}.${imageExtFor(mime)}`;
+}
+
+/** 从路径反推 MIME（路径是我们自己生成的，读回来时靠它还原 data URL） */
+export function imageMimeOf(path: string): string {
+  const ext = path.split('.').pop()?.toLowerCase() ?? '';
+  if (ext === 'png') return 'image/png';
+  if (ext === 'webp') return 'image/webp';
+  if (ext === 'gif') return 'image/gif';
+  return 'image/jpeg';
+}
 
 /* 一律绕过浏览器 HTTP 缓存。GitHub 的 contents 接口回的是
    `Cache-Control: public, max-age=60`，按默认缓存模式读，一分钟内拿到的可能是
@@ -162,6 +180,127 @@ export async function putJson(
 
   const body = (await res.json()) as { content?: { sha?: string } };
   return body.content?.sha ?? '';
+}
+
+/* ─── 菜谱照片：一张图一个文件 ───────────────────
+   为什么不把 base64 塞进 recipes.json：GitHub contents 接口对超过 1 MB 的
+   文件**不回正文**（`content` 为空），几张手机截图就能把 recipes.json 顶过线，
+   那之后连菜谱都读不出来；而且每次改一条菜谱都要把整库图片重传一遍。
+   放成独立文件后，菜谱库 JSON 一直是小的，只有新增 / 换图才动图片。
+
+   读取用 JSON 形态（顺便拿到 sha，PUT / DELETE 都要它）。图片自己控制在
+   800 KB 以内（见 photo.ts），稳在 1 MB 这条线下面。 */
+
+/** 读仓库里的一张图片，返回 data URL 与 sha；文件不存在返回 null */
+export async function getImage(
+  repo: string,
+  path: string,
+  branch: string,
+  token: string,
+  signal?: AbortSignal,
+): Promise<{ dataUrl: string; sha: string } | null> {
+  const url = `${API}/repos/${repo}/contents/${path}?ref=${encodeURIComponent(branch)}`;
+  let res: Response;
+  try {
+    res = await fetch(url, { ...NO_CACHE, headers: authHeaders(token), signal });
+  } catch (e) {
+    throw networkError(e);
+  }
+  if (res.status === 404) return null;
+  if (!res.ok) throw await toGithubError(res, repo);
+
+  const body = (await res.json()) as { content?: string; sha: string };
+  if (!body.content) {
+    throw new GithubError('unknown', `${path} 太大了，读不出来。`);
+  }
+  return {
+    dataUrl: `data:${imageMimeOf(path)};base64,${body.content.replace(/\s/g, '')}`,
+    sha: body.sha,
+  };
+}
+
+/** 上传（或覆盖）仓库里的一张图片，返回新的 sha */
+export async function putImage(
+  repo: string,
+  path: string,
+  branch: string,
+  token: string,
+  dataUrl: string,
+  message: string,
+  sha?: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const url = `${API}/repos/${repo}/contents/${path}`;
+  const payload: Record<string, unknown> = {
+    message,
+    content: dataUrlBase64(dataUrl),
+    branch,
+  };
+  if (sha) payload.sha = sha;
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...NO_CACHE,
+      method: 'PUT',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal,
+    });
+  } catch (e) {
+    throw networkError(e);
+  }
+  if (!res.ok) throw await toGithubError(res, repo);
+
+  const body = (await res.json()) as { content?: { sha?: string } };
+  return body.content?.sha ?? '';
+}
+
+/** 读一个文件的 sha（删图 / 覆盖前要用）；文件不存在返回 null */
+export async function getFileSha(
+  repo: string,
+  path: string,
+  branch: string,
+  token: string,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const url = `${API}/repos/${repo}/contents/${path}?ref=${encodeURIComponent(branch)}`;
+  let res: Response;
+  try {
+    res = await fetch(url, { ...NO_CACHE, headers: authHeaders(token), signal });
+  } catch (e) {
+    throw networkError(e);
+  }
+  if (res.status === 404) return null;
+  if (!res.ok) throw await toGithubError(res, repo);
+  const body = (await res.json()) as { sha?: string };
+  return body.sha ?? null;
+}
+
+/** 删仓库里的一个文件（菜谱删了 / 换了图，旧图顺手清掉） */
+export async function deleteFile(
+  repo: string,
+  path: string,
+  branch: string,
+  token: string,
+  sha: string,
+  message: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const url = `${API}/repos/${repo}/contents/${path}`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...NO_CACHE,
+      method: 'DELETE',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, sha, branch }),
+      signal,
+    });
+  } catch (e) {
+    throw networkError(e);
+  }
+  if (!res.ok) throw await toGithubError(res, repo);
 }
 
 /** 校验 token + 仓库 + 分支是否可用（连接向导用） */

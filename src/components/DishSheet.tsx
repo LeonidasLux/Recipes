@@ -1,7 +1,8 @@
 import { useEffect } from 'react';
 import { SourceBadge } from './Bits';
+import { Cover } from './Photo';
 import { Icon } from './Icons';
-import { artUrl, initial } from '../data/helpers';
+import { initial } from '../data/helpers';
 import type { DB, OrderItem } from '../data/types';
 
 /**
@@ -31,8 +32,8 @@ export function DishSheet({ item, db, onClose }: { item: OrderItem; db: DB; onCl
         </button>
 
         <div className="ds-hero">
-          {recipe?.art ? (
-            <img src={artUrl(recipe.art)} alt={item.dishName} />
+          {recipe && (recipe.image || recipe.art) ? (
+            <Cover image={recipe.image} art={recipe.art} title={item.dishName} fetch />
           ) : (
             <span className="mono-fallback">{initial(item.dishName)}</span>
           )}
@@ -42,8 +43,12 @@ export function DishSheet({ item, db, onClose }: { item: OrderItem; db: DB; onCl
           <>
             <div className="ds-meta">
               <SourceBadge source={recipe.source} />
-              <span className="meta">{recipe.author}</span>
-              <span className="meta">·</span>
+              {recipe.author.trim() !== '' && (
+                <>
+                  <span className="meta">{recipe.author}</span>
+                  <span className="meta">·</span>
+                </>
+              )}
               <span className="meta">{recipe.updatedAt} 更新</span>
             </div>
 

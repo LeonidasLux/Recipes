@@ -1,12 +1,16 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useStore } from '../data/store';
 import { useToast } from '../components/Toast';
 import { SourceBadge, StateCard } from '../components/Bits';
+import { useRecipePhoto } from '../components/Photo';
+import { PhotoViewer } from '../components/PhotoViewer';
 import { Icon } from '../components/Icons';
-import { artUrl, initial, recipeInOpenOrder } from '../data/helpers';
+import { artUrl, initial, newId, recipeInOpenOrder } from '../data/helpers';
+import { imagePath } from '../lib/github';
+import { dataUrlMime, isPhotoDataUrl, photoToDataUrl, rememberPhoto } from '../lib/photo';
 import { preserveTypedValue } from '../lib/inputs';
-import { usePageBack } from '../lib/back';
+import { useBackClose, usePageBack } from '../lib/back';
 
 export default function RecipeDetail() {
   const { id = '' } = useParams();
@@ -19,7 +23,15 @@ export default function RecipeDetail() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [draft, setDraft] = useState({ title: '', url: '', steps: '', note: '' });
+  /** 点开看大图（只有真有照片时才可能为 true） */
+  const [zoom, setZoom] = useState(false);
+  const [draft, setDraft] = useState({ title: '', url: '', image: '', steps: '', note: '' });
+
+  /* 照片：本机缓存优先，没有就去仓库取一张（取到了写回缓存） */
+  const photo = useRecipePhoto(recipe?.image, { fetch: true });
+
+  /* 大图是遮罩：手机返回键先关它，而不是退出详情页 */
+  useBackClose(zoom, () => setZoom(false));
 
   useEffect(() => {
     const t = window.setTimeout(() => setLoading(false), 480);
@@ -33,8 +45,21 @@ export default function RecipeDetail() {
 
   function startEdit() {
     if (!recipe) return;
-    setDraft({ title: recipe.title, url: recipe.url, steps: recipe.steps, note: recipe.note });
+    setDraft({ title: recipe.title, url: recipe.url, image: recipe.image, steps: recipe.steps, note: recipe.note });
     setEditing(true);
+  }
+
+  /* 编辑里换一张图：先压成 data URL 放在草稿里，保存时才定路径 */
+  async function onPickPhoto(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const dataUrl = await photoToDataUrl(file);
+      setDraft((d) => ({ ...d, image: dataUrl }));
+    } catch {
+      toast('这张图读不出来，换一张试试', false);
+    }
   }
 
   function saveEdit() {
@@ -44,9 +69,16 @@ export default function RecipeDetail() {
       toast('菜名不能为空', false);
       return;
     }
+    let image = recipe.image;
+    if (draft.image !== recipe.image) {
+      /* 换了图 / 去掉了图：新图给一条新路径，旧文件由同步引擎在推送时删掉 */
+      image = draft.image ? imagePath(newId('r'), dataUrlMime(draft.image)) : '';
+      if (draft.image) rememberPhoto(image, draft.image);
+    }
     updateRecipe(recipe.id, {
       title,
       url: draft.url.trim(),
+      image,
       steps: draft.steps.trim(),
       note: draft.note.trim(),
     });
@@ -98,6 +130,10 @@ export default function RecipeDetail() {
   }
 
   const hasNote = recipe.note.trim().length > 0;
+  /** 编辑框里现在该显示哪张图：没动过就是原图（可能还在从仓库取），动过就是草稿里那张 */
+  const draftShot = draft.image === recipe.image
+    ? photo
+    : isPhotoDataUrl(draft.image) ? draft.image : null;
 
   return (
     <div className="app s-detail">
@@ -131,7 +167,20 @@ export default function RecipeDetail() {
           <article>
             <section className="pad" style={{ paddingTop: 6 }}>
               <div className="heroimg">
-                {recipe.art ? (
+                {photo ? (
+                  /* 传上来的照片可以点开看大图；插画只是示意图，不给点击 */
+                  <button
+                    type="button"
+                    className="photobtn"
+                    aria-label="查看大图"
+                    onClick={() => setZoom(true)}
+                  >
+                    <img src={photo} alt="菜谱照片" />
+                    <span className="zoomtag" aria-hidden>
+                      <Icon name="search" />
+                    </span>
+                  </button>
+                ) : recipe.art ? (
                   <img src={artUrl(recipe.art)} alt="菜谱封面" />
                 ) : (
                   <span
@@ -176,6 +225,42 @@ export default function RecipeDetail() {
                       />
                     </div>
                     <div className="field">
+                      <label>菜谱照片</label>
+                      <div className="photofield">
+                        <span className="pthumb">
+                          {draftShot ? (
+                            <img src={draftShot} alt="菜谱照片" />
+                          ) : (
+                            <span className="pempty">没有照片</span>
+                          )}
+                        </span>
+                        <span className="pacts">
+                          <label className="btn-sticker" htmlFor="editPhoto">
+                            <Icon name="image" />
+                            {draftShot ? '换一张' : '上传截图'}
+                          </label>
+                          {draftShot && (
+                            <button
+                              type="button"
+                              id="editPhotoRemove"
+                              className="btn-sticker"
+                              onClick={() => setDraft((d) => ({ ...d, image: '' }))}
+                            >
+                              移除照片
+                            </button>
+                          )}
+                        </span>
+                        <input
+                          id="editPhoto"
+                          className="hiddenfile"
+                          type="file"
+                          accept="image/*"
+                          aria-label="选择菜谱照片"
+                          onChange={(e) => void onPickPhoto(e)}
+                        />
+                      </div>
+                    </div>
+                    <div className="field">
                       <label htmlFor="editSteps">做法</label>
                       <textarea
                         id="editSteps"
@@ -211,7 +296,8 @@ export default function RecipeDetail() {
                 <section className="pad" style={{ paddingTop: 16 }}>
                   <div className="meta-row">
                     <SourceBadge source={recipe.source} />
-                    <span className="meta">{recipe.author}</span>
+                    {/* 没填作者就不占位：以前会兜一句「来自剪藏」，手写 / 识图来的菜谱根本不成立 */}
+                    {recipe.author.trim() !== '' && <span className="meta">{recipe.author}</span>}
                   </div>
                   <h1 className="ptitle" style={{ fontSize: 27, marginTop: 10 }}>
                     {recipe.title}
@@ -291,6 +377,11 @@ export default function RecipeDetail() {
           )}
         </div>
       </div>
+
+      {/* 大图：盖在最上层，返回键 / Esc / 点遮罩 / × 都能关（见 useBackClose） */}
+      {zoom && photo && (
+        <PhotoViewer src={photo} alt={recipe.title} onClose={() => setZoom(false)} />
+      )}
     </div>
   );
 }

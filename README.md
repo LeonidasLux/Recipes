@@ -116,7 +116,8 @@ npm run check        # 一次跑完：类型 + 类名对账 + 33 项冒烟 + 构
 - 点单：多选 → 切午/晚 → 点胶囊移除 → 手动输一道 → 发送 → 校验落库为「一单两菜、临时菜 `recipeId` 为 null」→ 组合器清空 → 展开订单看每道菜
 - 掌勺：`接下这顿` → 状态回传 `accepted` → 按钮变 `全部做好了` → 再点回传 `done` → 校验同步日志
 - 备注：进编辑 → 输入 → 保存 → 校验落库与日志
-- 添加菜谱：粘贴小红书链接 → 识别出菜名与来源（配了 DeepSeek Key 还能拆做法 / 作者）→ 保存 → 新菜谱进库
+- 添加菜谱：粘贴小红书链接（或传一张菜谱截图）→ 识别出菜名与来源（配了 DeepSeek Key 还能拆做法 / 作者，
+  传了截图就直接识图）→ 保存 → 新菜谱进库
 - 搜索与筛选：关键词计数、无结果空态、按平台筛选
 - token 形状校验：自动大写的 `Ghp_`、混入空格的、位数不足的、合法的
 - 昵称：两个视角看到的称呼不同（点单屏说「发给小红」、今日菜单说「小辉点给你的」）、
@@ -346,8 +347,17 @@ profiles.json   { schema, updatedAt, profiles: Profiles   }
 `更新昵称` 提交，不会顺带重写菜谱和订单。
 
 **Token 只存在本机**（浏览器 localStorage），不会写进仓库、不会发给除了 `api.github.com` 以外的任何地方。
-DeepSeek 的 AI Key 同理，只发给 `api.deepseek.com`；两者都不会出现在仓库文件里（`config` 永远不进仓库，只有 `recipes.json` / `orders.json` / `profiles.json` 会被推送）。
-`schema` 目前是 `2`（订单为「一单多菜」的 `items[]` 结构）。
+DeepSeek 的 AI Key 同理，只发给 `api.deepseek.com`；两者都不会出现在仓库文件里（`config` 永远不进仓库，仓库里只有
+`recipes.json` / `orders.json` / `profiles.json` 三份 JSON，加上放菜谱照片的 `images/` 目录）。
+`schema` 目前是 `3`（订单为「一单多菜」的 `items[]`，人也从固定角色换成了 `a` / `b` 两格）。
+
+> **「怎么每次进来都要重填 token / 仓库 / Key？」** 配置是存了的（整份数据序列化在本机 localStorage，
+> key 是 `jishiben-db-v1`），但 localStorage **按「来源」隔离**（协议 + 主机 + 端口），所以：
+> ① 浏览器不让本站存数据（无痕窗口、开了「关闭浏览器时清除站点数据」）会每次重填 ——
+> 这种情况首次设置页和设置页会挂一条提示说清楚；
+> ② **换了地址**就是另一份存储：`localhost:5173` ↔ `192.168.x.x:5173`、`5173` ↔ `4173`、
+> iOS 上 Safari ↔ 「添加到主屏幕」的 PWA，各存各的。用同一个地址打开就都在。
+> 本地开发时端口固定 `5173`（`strictPort`，被占用直接报错而不是偷偷换到 5174）。
 
 ---
 
@@ -395,14 +405,16 @@ src/
 │   ├── helpers.ts           来源徽章、订单摘要、状态元数据、时间格式
 │   └── store.tsx            状态容器（useReducer）+ 本地持久化 + rev 计数器
 ├── lib/
-│   ├── github.ts            GitHub Contents API 客户端（UTF-8 安全 base64 / 错误分类）
+│   ├── github.ts            GitHub Contents API 客户端（UTF-8 安全 base64 / 错误分类 / 图片文件读写）
 │   ├── share.ts             分享文案解析 + 封面插画猜测
-│   ├── ai.ts                DeepSeek Chat Completions 客户端（AI 识别 + Key 工具）
+│   ├── ai.ts                DeepSeek Chat Completions 客户端（AI 识别 + 截图识图 + Key 工具）
+│   ├── photo.ts             菜谱照片：读文件 → 压成 data URL → 本机缓存
 │   ├── reader.ts            经第三方阅读器抓原链接，压成「页面线索」
 │   └── useSync.tsx          同步引擎：提交即推送、只推变化的文件、轮询拉取、冲突重试
 ├── components/
 │   ├── Icons.tsx            图标库（逐条转写原型 SVG path）
-│   ├── Bits.tsx             骨架屏 / 来源徽章 / 状态 chip / 五态占位卡
+│   ├── Bits.tsx             骨架屏 / 来源徽章 / 状态 chip / 缩略图 / 五态占位卡
+│   ├── Photo.tsx            菜谱照片组件（缓存优先，必要时去仓库取一张）
 │   ├── TabBar.tsx           随身份切换的底部导航 + ?view / ?state 演示参数
 │   ├── LiveSyncPill.tsx     顶栏同步状态 pill
 │   └── Toast.tsx            Toast 容器
@@ -410,7 +422,7 @@ src/
     ├── Setup.tsx            1 首次设置（昵称 / 身份 / token / 仓库 / JSON 导入）
     ├── Library.tsx          2 菜谱库（搜索 + 平台筛选 + 五态）
     ├── RecipeDetail.tsx     3 菜谱详情（备注编辑 / 掌勺只读）
-    ├── AddRecipe.tsx        4 添加菜谱（本地解析 / DeepSeek AI 识别 + 手动添加）
+    ├── AddRecipe.tsx        4 添加菜谱（贴链接识别 / 传截图识图 / 直接手写，两块卡片一张表）
     ├── Order.tsx            5 点单（多选组合器 + 随机加一道 + 可展开订单）
     ├── CookToday.tsx        6 掌勺今日菜单（整单接下 / 做完）
     └── Sync.tsx             7 同步与仓库（五态面板 + 身份切换 + 日志）
@@ -466,7 +478,12 @@ scripts/                     （开发工具，不参与打包）
 
 分享文案里往往还夹着食材和步骤，启发式解析只挑得出标题。为此加了一层**可选的 AI 识别**
 （`src/lib/ai.ts`）：在「设置 → AI 识别（DeepSeek）」里填一个自己的 DeepSeek API Key，
-「识别」就会把这段文案交给 `deepseek-chat`，让它一次抽出**菜名 / 作者 / 做法 / 小贴士**。
+「识别」就会把这段文案交给 `deepseek-flash`，让它一次抽出**菜名 / 作者 / 做法 / 小贴士**。
+
+**截图也是同一条路**：懒得打字就点「上传菜谱截图」，选一张手机里的菜谱截图，
+`deepseek-flash` 直接识图，把图里的菜名 / 作者 / 食材 / 步骤读进表单（同一张图会存成这条菜谱的照片）。
+截图会先在本机压到 800 KB 以内（长边 ≤1800px 的 JPEG），既能识图也能当封面；
+识图请求里带的是 `image_url` 内容块（data URL），识别前会先关掉模型的思考模式（照着抄的活儿用不上）。
 
 - 走 Chat Completions（`https://api.deepseek.com/chat/completions`，`response_format=json_object`），
   `api.deepseek.com` 会回 CORS 头，所以浏览器可以直连，仍然不需要自建后端。
@@ -551,6 +568,10 @@ scripts/                     （开发工具，不参与打包）
 - 没配 AI Key 时「识别」走的是**解析分享文案**，不是抓页面 —— 原因和做法见下方专节。配了 Key 之后，带链接的识别会默认把链接交给第三方 `r.jina.ai` 读页面（没有开关），且小红书不一定抓得到。
 - 「标题只留菜名」是启发式：带标点的文案收得干净，长而不带标点的会留长（配 AI 时由模型兜）；搜索链接配了 AI 时取搜索结果第一条的菜名，没配 AI 时才用搜索词顶。
 - AI 识别要用户自备 DeepSeek API Key；没配 / 关掉 / 失败都退回本地解析。识别时文案会发给 `api.deepseek.com`，介意就别开 AI。
+- **菜谱照片**放在仓库的 `images/` 目录里（一张一个文件，`recipes.json` 只记路径），上传前会压到 800 KB 以内；
+  详情页点一下照片能看大图（点遮罩 / × / Esc / 手机返回键关掉）。
+  列表缩略图只显示**已经缓存过**的照片（不为一屏几十条菜谱逐张拉图），进一次详情页就会取回来并缓存；
+  本机模式（没连仓库）下传的图只留在本机，连上仓库后才补传。
 - 冲突处理是 last-write-wins，没有做字段级合并。
 - Token 存在 localStorage，等价于原型里「仅存本机」的语义。要更强的保护需要走原生容器（见下）。
 - **打包成真正的 Android/iOS App**：这套代码可以直接被 Capacitor 包成原生壳

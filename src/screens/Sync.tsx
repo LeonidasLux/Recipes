@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useStore } from '../data/store';
 import { useSync } from '../lib/useSync';
 import { useToast } from '../components/Toast';
+import { StorageWarning } from '../components/Bits';
 import { TabBar } from '../components/TabBar';
 import { Icon } from '../components/Icons';
 import { maskToken, normalizeToken, tokenShapeError } from '../lib/github';
@@ -156,6 +157,8 @@ export default function SyncScreen() {
 
       <main className="scroll">
         <div className="pad" style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingBottom: 20 }}>
+          {/* token / Key 只存本机：浏览器不让存就先说清楚，别让人以为白填了 */}
+          <StorageWarning />
           {/* ─── 状态面板（五态）─── */}
           <section className="pad" style={{ padding: 0 }}>
             <StatusPanel

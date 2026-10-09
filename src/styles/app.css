@@ -376,6 +376,24 @@ textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible {
 .field .err { display: none; font-size: 12px; color: var(--danger); gap: 5px; align-items: center; }
 .field.invalid .err { display: inline-flex; }
 .field .hint { font-size: 11.5px; color: var(--muted); }
+
+/* 菜谱照片的编辑区（添加页的按钮、详情页「编辑这道菜」里的预览 + 换图） */
+.photofield { display: flex; gap: 12px; align-items: center; }
+.pthumb { width: 84px; height: 84px; border-radius: 18px; overflow: hidden; flex: 0 0 auto;
+  border: 2px solid var(--ink); background: var(--surface); display: grid; place-items: center; }
+.pthumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pthumb .pempty { font-size: 11px; color: var(--muted); text-align: center; padding: 0 6px; }
+.pacts { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+
+/* 文件选择框藏起来：点 label 上的按钮就等于点它 */
+.hiddenfile { display: none; }
+
+/* 本机存不下数据时的提示条（无痕模式 / 关浏览器就清站点数据） */
+.warnbanner { display: flex; align-items: flex-start; gap: 9px; padding: 12px 14px; border-radius: 16px;
+  background: var(--warn-soft); border: 1.5px solid color-mix(in oklch, var(--warn) 55%, transparent);
+  font-size: 13px; color: var(--fg); line-height: 1.45; }
+.warnbanner svg { width: 18px; height: 18px; stroke: var(--warn); fill: none; stroke-width: 2; flex: 0 0 auto; margin-top: 1px; }
+
 .inputrow { display: flex; gap: 8px; }
 .inputrow .btn-sticker { flex: 0 0 auto; }
 
@@ -453,6 +471,18 @@ textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible {
 
 /* ─── 菜品详情弹窗（掌勺页点一道菜）────────── */
 /* z-index 取 30：要盖住底部导航（3），但让 Toast（40）浮在上面 */
+/* ─── 点开看大图（菜谱详情里的照片）─────────────
+   整屏压暗 + 居中原图，白字 × 收在右上角；点任意处、按 Esc、按手机返回键都能关。 */
+.photoview { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 18px; }
+.pv-mask { position: absolute; inset: 0; border: 0; padding: 0; cursor: zoom-out;
+  background: color-mix(in oklch, var(--ink) 84%, transparent); animation: odfade .16s ease; }
+.pv-img { position: relative; max-width: 100%; max-height: calc(100dvh - 36px); border-radius: 14px;
+  box-shadow: 0 14px 44px rgba(0, 0, 0, .45); animation: odpop .18s ease; }
+.pv-close { position: absolute; top: 14px; right: 14px; z-index: 1; width: 40px; height: 40px; border-radius: 50%;
+  border: 0; background: rgba(255, 255, 255, .18); color: #fff; display: grid; place-items: center; cursor: pointer; }
+.pv-close:hover { background: rgba(255, 255, 255, .3); }
+.pv-close svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2.2; }
+
 .dishsheet { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 24px 18px; }
 .ds-mask { position: absolute; inset: 0; border: 0; padding: 0; cursor: pointer;
   background: color-mix(in oklch, var(--ink) 44%, transparent); animation: odfade .16s ease; }

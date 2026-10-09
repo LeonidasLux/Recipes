@@ -43,6 +43,13 @@ install('requestAnimationFrame', (cb) => setTimeout(() => cb(Date.now()), 0));
 install('cancelAnimationFrame', (id) => clearTimeout(id));
 install('IS_REACT_ACT_ENVIRONMENT', true);
 
+/* jsdom 没有 canvas（没装 canvas npm 包）：把 getContext 明确固定成 null，
+   等价于「这台设备没有 canvas 2d」。应用代码据此退回原始 data URL，
+   顺带不用在每张图的压缩里刷一屏 jsdom 的「Not implemented」日志。 */
+dom.window.HTMLCanvasElement.prototype.getContext = function getContext() {
+  return null;
+};
+
 /* ─── 虚拟时钟 ───────────────────────────────────────────────
    各屏的「进场骨架」、同步防抖、后台轮询都是 setTimeout / setInterval 驱动的。
    冒烟测试要挂载 60+ 次，每次都真的等 700ms 挂钟，整个套件因此要跑一分多钟 ——

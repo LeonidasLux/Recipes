@@ -289,7 +289,7 @@ export default function Library() {
                     }}
                   >
                     <span className="thumb">
-                      <Thumb art={r.art || null} title={r.title} />
+                      <Thumb art={r.art || null} image={r.image} title={r.title} />
                     </span>
                     <span className="body">
                       <span className="title">{r.title}</span>

@@ -136,17 +136,18 @@ export function findRecipe(db: DB, id: string | null | undefined): Recipe | null
   return db.recipes.find((r) => r.id === id) ?? null;
 }
 
-/** 取订单里第一道有插画的菜（列表大图用） */
-export function orderArt(o: Order, db: DB): string | null {
+/** 取订单里第一道有封面（照片或插画）的菜谱（列表大图用） */
+export function orderCover(o: Order, db: DB): Recipe | null {
   for (const it of orderItems(o)) {
     const r = findRecipe(db, it.recipeId);
-    if (r?.art) return r.art;
+    if (r && (r.image || r.art)) return r;
   }
   return null;
 }
 
-export function itemArt(it: OrderItem, db: DB): string | null {
-  return findRecipe(db, it.recipeId)?.art ?? null;
+export function itemCover(it: OrderItem, db: DB): Recipe | null {
+  const r = findRecipe(db, it.recipeId);
+  return r && (r.image || r.art) ? r : null;
 }
 
 /** 某道菜是否出现在未完成的单里 */

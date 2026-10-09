@@ -123,9 +123,21 @@ export interface StoreValue {
   view: ViewRole;
 
   /* 本地改动（提交即同步：每次都会触发推送） */
-  addRecipe(input: { title: string; source: Recipe['source']; url: string; author: string; art: string; steps: string; note: string }): Recipe;
-  /** 改菜谱的菜名 / 原文出处 / 做法 / 备注（内容改动，会触发推送） */
-  updateRecipe(id: string, patch: { title?: string; url?: string; steps?: string; note?: string }): void;
+  addRecipe(input: {
+    title: string;
+    source: Recipe['source'];
+    url: string;
+    author: string;
+    art: string;
+    /** 照片在仓库里的路径（空串 = 没有）；图先让同步引擎上传，路径随菜谱一起落库 */
+    image: string;
+    steps: string;
+    note: string;
+    /** 调用方可以指定 id：上传照片时得先知道图片路径（images/<id>.jpg） */
+    id?: string;
+  }): Recipe;
+  /** 改菜谱的菜名 / 原文出处 / 照片 / 做法 / 备注（内容改动，会触发推送） */
+  updateRecipe(id: string, patch: { title?: string; url?: string; image?: string; steps?: string; note?: string }): void;
   /** 删菜谱（内容改动，会触发推送）；订单里的菜名是快照，不受影响 */
   deleteRecipe(id: string): void;
   /** 下单（内容改动，会触发推送）；单里的菜各记一次「点单次数」 */
@@ -202,12 +214,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
       addRecipe(input) {
         const rec: Recipe = {
-          id: newId('r'),
+          id: input.id ?? newId('r'),
           title: input.title,
           source: input.source,
           url: input.url,
           author: input.author,
           art: input.art,
+          image: input.image,
           steps: input.steps,
           note: input.note,
           createdAt: nowStamp(),
@@ -228,6 +241,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (!r) return db;
           if (patch.title !== undefined) r.title = patch.title;
           if (patch.url !== undefined) r.url = patch.url;
+          if (patch.image !== undefined) r.image = patch.image;
           if (patch.steps !== undefined) r.steps = patch.steps;
           if (patch.note !== undefined) r.note = patch.note;
           r.updatedAt = nowStamp();

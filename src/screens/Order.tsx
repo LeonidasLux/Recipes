@@ -7,7 +7,8 @@ import { RoleSwitch } from '../components/RoleSwitch';
 import { SkeletonRows, SourceBadge, StateCard, StatusChip, Thumb } from '../components/Bits';
 import { Icon } from '../components/Icons';
 import { anchorDeleteTip, DeleteTip, type DeleteTipState } from '../components/DeleteTip';
-import { artUrl, initial, isTodayOrder, itemArt, mealLabel, orderArt, orderItems, orderMain, orderSummary, todayLine } from '../data/helpers';
+import { initial, isTodayOrder, itemCover, mealLabel, orderCover, orderItems, orderMain, orderSummary, todayLine } from '../data/helpers';
+import { Cover } from '../components/Photo';
 import { useNames } from '../data/useNames';
 import { preserveTypedValue } from '../lib/inputs';
 import { useBackClose } from '../lib/back';
@@ -327,7 +328,7 @@ export default function OrderScreen() {
                       onClick={() => toggleRecipe(r.id, r.title)}
                     >
                       <span className="pt">
-                        <Thumb art={r.art || null} title={r.title} />
+                        <Thumb art={r.art || null} image={r.image} title={r.title} />
                       </span>
                       <span className="info">
                         <span className="t">{r.title}</span>
@@ -465,7 +466,7 @@ function OrderCard({
   onPressEnd: () => void;
 }) {
   const items = orderItems(order);
-  const art = orderArt(order, db);
+  const cover = orderCover(order, db);
   const main = orderMain(order);
 
   return (
@@ -480,7 +481,11 @@ function OrderCard({
         onClick={onToggle}
       >
         <span className="omt">
-          {art ? <img src={artUrl(art)} alt={main} /> : <span className="mono">{initial(main)}</span>}
+          {cover ? (
+            <Cover image={cover.image} art={cover.art} title={main} />
+          ) : (
+            <span className="mono">{initial(main)}</span>
+          )}
         </span>
         <span className="ob">
           {/* 标题（尤其是剪藏来的长视频标题）按两行截断，见 .s-order .osum .ob .t */}
@@ -497,11 +502,15 @@ function OrderCard({
       <div className="odetail">
         {items.map((it, i) => {
           const r = db.recipes.find((x) => x.id === it.recipeId);
-          const a = itemArt(it, db);
+          const cover = itemCover(it, db);
           return (
             <div className="dit" key={`${it.recipeId ?? 'm'}-${i}`}>
               <div className="da">
-                {a ? <img src={artUrl(a)} alt={it.dishName} /> : <span className="mono">{initial(it.dishName)}</span>}
+                {cover ? (
+                  <Cover image={cover.image} art={cover.art} title={it.dishName} />
+                ) : (
+                  <span className="mono">{initial(it.dishName)}</span>
+                )}
               </div>
               <div className="dn">{it.dishName}</div>
               <div>{r && <SourceBadge source={r.source} />}</div>

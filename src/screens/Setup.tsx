@@ -4,6 +4,7 @@ import { useStore } from '../data/store';
 import { useSync } from '../lib/useSync';
 import { useToast } from '../components/Toast';
 import { Icon } from '../components/Icons';
+import { StorageWarning } from '../components/Bits';
 import { GithubError, maskToken, normalizeToken, tokenShapeError } from '../lib/github';
 import { aiKeyShapeError, maskAiKey, normalizeAiKey } from '../lib/ai';
 import { preserveTypedValue } from '../lib/inputs';
@@ -324,6 +325,8 @@ export default function Setup() {
     <div className="app s-setup">
       <main className="scroll wizard">
         <section className="pad stack" style={{ paddingTop: 20 }}>
+          {/* token / 仓库 / Key 都只存本机：浏览器不让存就先说清楚，别让人以为白填了 */}
+          <StorageWarning />
           <div className="stack" style={{ alignItems: 'center', textAlign: 'center', gap: 14 }}>
             <div className="artframe">
               <img src="/art/sync-pot.svg" alt="锅与云同步插画" />

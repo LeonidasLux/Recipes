@@ -7,7 +7,8 @@ import { SkeletonRows, StateCard, StatusChip } from '../components/Bits';
 import { Icon } from '../components/Icons';
 import { DishSheet } from '../components/DishSheet';
 import { anchorDeleteTip, DeleteTip, type DeleteTipState } from '../components/DeleteTip';
-import { artUrl, initial, itemArt, mealLabel, orderItems } from '../data/helpers';
+import { initial, itemCover, mealLabel, orderItems } from '../data/helpers';
+import { Cover } from '../components/Photo';
 import { useNames } from '../data/useNames';
 import { useBackClose } from '../lib/back';
 import type { Order, OrderItem } from '../data/types';
@@ -238,7 +239,7 @@ function CookCard({
 
       <div className="cc-items">
         {items.map((it, i) => {
-          const a = itemArt(it, db);
+          const cover = itemCover(it, db);
           return (
             <button
               type="button"
@@ -248,7 +249,11 @@ function CookCard({
               onClick={() => onOpenDish(it)}
             >
               <span className="da">
-                {a ? <img src={artUrl(a)} alt={it.dishName} /> : <span className="mono">{initial(it.dishName)}</span>}
+                {cover ? (
+                  <Cover image={cover.image} art={cover.art} title={it.dishName} />
+                ) : (
+                  <span className="mono">{initial(it.dishName)}</span>
+                )}
               </span>
               <span className="dn">{it.dishName}</span>
               <span className="qt">

@@ -17,6 +17,12 @@ export interface Recipe {
   author: string;
   /** 本地插画资源名，如 tomato-beef.svg；空串则用首字占位 */
   art: string;
+  /**
+   * 菜谱照片在仓库里的路径，如 `images/r_xxx.jpg`；空串 = 没有照片。
+   * 照片是仓库里的一张独立图片（不在这个 JSON 里塞 base64），
+   * 本机只缓存一份 data URL 供离线显示，读图见 `src/lib/photo.ts`。
+   */
+  image: string;
   /** 做法（步骤）。手动加的菜谱主要就靠这一段；剪藏来的可以留空 */
   steps: string;
   note: string;

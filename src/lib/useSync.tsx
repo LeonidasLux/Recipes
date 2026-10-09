@@ -17,11 +17,16 @@ import {
   ORDERS_PATH,
   PROFILES_PATH,
   RECIPES_PATH,
+  deleteFile,
+  getFileSha,
   getJson,
+  getImage,
+  putImage,
   putJson,
   verifyRepo,
   withTimeout,
 } from './github';
+import { cachedPhoto, forgetPhoto } from './photo';
 
 interface SyncValue {
   /** 'off' 未连接 · 'idle' 待同步 · 'busy' 同步中 · 'ok' 已同步 · 'err' 失败 */
@@ -56,6 +61,19 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   const lastPushed = useRef<{ recipes?: string; orders?: string; profiles?: string }>({});
   /** 已推送到的 rev；与 store.rev 不一致 = 有本地改动待推 */
   const pushedRev = useRef(0);
+  /** 已经确认仓库里有（或本机没有字节、不需要管）的照片路径 —— 别每次推送都重扫一遍 */
+  const knownImages = useRef<Set<string>>(new Set());
+  /**
+   * 上一轮菜谱引用到的照片：多出来的就是孤儿文件（删菜谱 / 换图留下的），顺手清掉。
+   * 初值取「挂载时本机 DB 里引用的照片」—— 认定它们仓库里已经有（要么是拉下来的，
+   * 要么是这台机器之前推上去的）；本机模式攒下、仓库里还没有的图，删的时候读不到
+   * sha，跳过就好。
+   */
+  const prevImages = useRef<Set<string>>(
+    new Set(store.db.recipes.map((r) => r.image).filter((p): p is string => Boolean(p))),
+  );
+  /** 手上记着的照片 sha（上传时返回的），删图时能省一次读 */
+  const imageShas = useRef<Record<string, string>>({});
   const busy = useRef(false);
   /** connect() 期间挂起自动推送：写 config 也会让 rev+1，
       若不拦住，推送会抢在首次拉取完成前把本地数据覆盖到远端 */
@@ -97,6 +115,14 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       if (pulledOrders) lastPushed.current.orders = JSON.stringify(pulledOrders);
       if (pulledProfiles) lastPushed.current.profiles = JSON.stringify(pulledProfiles);
 
+      /* 拉下来的菜谱引用的照片就当仓库里已经有了（它们本来就是从仓库读出来的），
+         免得下一次推送又逐张去核对 / 重传 */
+      if (pulledRecipes) {
+        const paths = new Set(pulledRecipes.map((r) => r.image).filter((p): p is string => Boolean(p)));
+        paths.forEach((p) => knownImages.current.add(p));
+        prevImages.current = paths;
+      }
+
       if (!rf && !of && !pf) return 'empty';
 
       /* 只交出「远端给了什么」，合并交给 reducer —— 它拿到的才是当前 db。
@@ -113,6 +139,52 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     } finally {
       done();
     }
+  }, []);
+
+  /* ─── 照片：一张图一个文件 ───────────────────
+     菜谱 JSON 里只记路径（`images/r_xxx.jpg`），图本身单独传。
+     先传图再推 JSON —— 否则对方拉到一条引用着还不存在的图片的菜谱。
+     本机没有字节的图（对方传的）不动它，删掉菜谱留下的孤儿图顺手清掉。 */
+  const pushImages = useCallback(async (cfg: SyncConfig, recipes: RemoteRecipes['recipes']): Promise<void> => {
+    const wanted = new Set(recipes.map((r) => r.image).filter((p): p is string => Boolean(p)));
+    const stale = [...prevImages.current].filter((p) => !wanted.has(p));
+    if (!wanted.size && !stale.length) return;
+
+    /* 图比 JSON 大得多，单独给一个更宽的超时（传一张 800 KB 的图可能要几秒） */
+    const { signal, done } = withTimeout(30000);
+    try {
+      for (const path of wanted) {
+        if (knownImages.current.has(path)) continue;
+        const dataUrl = cachedPhoto(path);
+        /* 本机没存到这张图的字节：不去猜仓库里有没有，标记一下别再检查 */
+        if (!dataUrl) {
+          knownImages.current.add(path);
+          continue;
+        }
+        const exists = await getImage(cfg.repo, path, cfg.branch, cfg.token, signal);
+        if (exists) {
+          imageShas.current[path] = exists.sha;
+          knownImages.current.add(path);
+          continue;
+        }
+        imageShas.current[path] = await putImage(
+          cfg.repo, path, cfg.branch, cfg.token, dataUrl,
+          `记食本：上传菜谱图片 ${path}`, undefined, signal,
+        );
+        knownImages.current.add(path);
+      }
+
+      for (const path of stale) {
+        const sha = imageShas.current[path]
+          ?? await getFileSha(cfg.repo, path, cfg.branch, cfg.token, signal);
+        if (!sha) continue;
+        await deleteFile(cfg.repo, path, cfg.branch, cfg.token, sha, `记食本：删除菜谱图片 ${path}`, signal);
+        forgetPhoto(path);
+      }
+    } finally {
+      done();
+    }
+    prevImages.current = wanted;
   }, []);
 
   /* ─── 推送 ─────────────────────────────────── */
@@ -145,6 +217,11 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       orders: JSON.stringify(ordersDoc.orders),
       profiles: JSON.stringify(profilesDoc.profiles),
     };
+
+    /* 照片先上：菜谱 JSON 里那条引用它的记录要等图到了才推。
+       传图自带 30 秒超时（见 pushImages），这里这 15 秒只算三份 JSON —— 
+       不然一张 800 KB 的图上传慢一点，就把推 JSON 的预算吃光了。 */
+    await pushImages(cfg, db.recipes);
 
     const { signal, done } = withTimeout();
     try {
@@ -316,6 +393,10 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       suppressAutoPush.current = true;
       /* 可能连的是另一个仓库：清掉「已推送」记录，别把新仓库的首次写入误判成没变化 */
       lastPushed.current = {};
+      /* 照片的那份台账同理：换个仓库就不算数了 */
+      knownImages.current = new Set();
+      prevImages.current = new Set();
+      imageShas.current = {};
       try {
         await verifyRepo(cfg.repo, cfg.branch, cfg.token, signal);
         done();

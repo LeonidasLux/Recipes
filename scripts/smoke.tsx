@@ -24,7 +24,15 @@ import {
   parseJsonLoose,
   recognizeRecipe,
   verifyAiKey,
+  type AiMessage,
 } from '../src/lib/ai';
+
+/** 取一条 AI 消息里的可读文字：带截图时 content 是「文字 + 图片」块数组 */
+function aiText(m: AiMessage): string {
+  return typeof m.content === 'string'
+    ? m.content
+    : m.content.map((p) => (p.type === 'text' ? p.text : '')).join('\n');
+}
 import {
   compactPage,
   isFetchableUrl,
@@ -33,14 +41,35 @@ import {
 } from '../src/lib/reader';
 import {
   GithubError,
+  deleteFile,
+  getFileSha,
   getJson,
+  getImage,
+  imageMimeOf,
+  imagePath,
   maskToken,
   normalizeToken,
+  putImage,
   putJson,
   tokenShapeError,
   verifyRepo,
   withTimeout,
 } from '../src/lib/github';
+import {
+  MAX_PHOTO_BYTES,
+  base64ToBytes,
+  blobToDataUrl,
+  bytesToBase64,
+  cachedPhoto,
+  dataUrlBase64,
+  dataUrlBytes,
+  dataUrlMime,
+  forgetPhoto,
+  imageExtFor,
+  isPhotoDataUrl,
+  photoToDataUrl,
+  rememberPhoto,
+} from '../src/lib/photo';
 import {
   artUrl,
   dateKey,
@@ -338,6 +367,10 @@ interface FakeGithub {
   calls: string[];
   /** 每次 PUT 带的 sha —— 用来验证「撞车后重试用的是新读到的 sha，不是旧 sha」 */
   puts: Array<{ path: string; sha?: string }>;
+  /** 每次 PUT 的正文（图片用例要断言 base64 对不对） */
+  putBodies: Array<{ path: string; content?: string }>;
+  /** 被 DELETE 掉的文件路径（删菜谱要顺手删图） */
+  deletes: string[];
   /** 每次 fetch 的 cache 选项 —— 用来验证读仓库绕过了浏览器 HTTP 缓存 */
   fetches: Array<{ method: string; path: string; cache?: string }>;
   restore(): void;
@@ -358,9 +391,13 @@ function installFakeGithub(opts: {
   getFailAfterConflict?: boolean;
   /** 让假 GitHub 像真的一样校验 sha：对不上回 409，没带 sha 回 422 */
   validateSha?: boolean;
+  /** 仓库里已有的图片：路径（如 `images/r1.jpg`）→ base64 正文 */
+  images?: Record<string, string>;
 }): FakeGithub {
   const calls: string[] = [];
   const puts: Array<{ path: string; sha?: string }> = [];
+  const putBodies: Array<{ path: string; content?: string }> = [];
+  const deletes: string[] = [];
   const fetches: Array<{ method: string; path: string; cache?: string }> = [];
   let putCount = 0;
   let remoteChanged = false;
@@ -375,6 +412,9 @@ function installFakeGithub(opts: {
     profiles: opts.profiles === undefined ? undefined : 'sha-profiles',
   };
   const blob = { recipes: opts.recipes, orders: opts.orders, profiles: opts.profiles } as Record<string, unknown>;
+  /* 图片是真·二进制文件：仓库里的 shape 就是「路径 → base64 正文」 */
+  const images: Record<string, string> = { ...(opts.images ?? {}) };
+  for (const p of Object.keys(images)) shaState[p] = `sha-${p}-init`;
   /* GET 的 URL 带 ?ref=main，取名字前先把查询串砍掉 */
   const nameOf = (url: string) => url.split('/contents/')[1]?.split('?')[0]?.replace('.json', '') ?? '';
 
@@ -389,7 +429,9 @@ function installFakeGithub(opts: {
       putCount++;
       const body = JSON.parse(String(init?.body ?? '{}')) as { sha?: string };
       puts.push({ path, sha: body.sha });
+      putBodies.push({ path, content: (body as { content?: string }).content });
       const name = nameOf(url);
+      if (name.startsWith('images/')) images[name] = (body as { content?: string }).content ?? '';
       /* 真 GitHub 的行为：没有 sha 或 sha 不是当前这个 → 422 / 409 */
       if (opts.validateSha) {
         if (shaState[name] === undefined) {
@@ -408,6 +450,13 @@ function installFakeGithub(opts: {
         return json({ message: 'conflict' }, opts.putFailOnce);
       }
       shaState[name] = `sha-${name}-new`;
+      /* 真 GitHub 会真的把正文存下来：写过的文件，之后再读要能读到新内容 */
+      const written = (body as { content?: string }).content ?? '';
+      try {
+        blob[name] = JSON.parse(Buffer.from(written, 'base64').toString('utf8'));
+      } catch {
+        /* 图片之类不是 JSON 的（图片走上面那条 images 分支） */
+      }
     }
 
     if (/\/repos\/[\w.-]+\/[\w.-]+$/.test(url) && method === 'GET') {
@@ -421,16 +470,25 @@ function installFakeGithub(opts: {
       const name = nameOf(url);
       if (method === 'GET') {
         if (remoteChanged && opts.getFailAfterConflict) return json({ message: 'Server Error' }, 500);
-        return shaState[name] === undefined
-          ? json({ message: 'Not Found' }, 404)
-          : json({ sha: shaState[name], content: b64(JSON.stringify(blob[name])) });
+        if (shaState[name] === undefined) return json({ message: 'Not Found' }, 404);
+        /* 图片：正文就是 base64 本身，不再套一层 JSON */
+        return json({
+          sha: shaState[name],
+          content: name.startsWith('images/') ? images[name] : b64(JSON.stringify(blob[name])),
+        });
+      }
+      if (method === 'DELETE') {
+        deletes.push(name);
+        delete shaState[name];
+        delete images[name];
+        return json({ content: { sha: 'sha-deleted' } });
       }
       return json({ content: { sha: shaState[name] ?? `sha-${name}-new` } });
     }
     return json({ message: 'unexpected call' }, 500);
   }) as typeof fetch;
 
-  return { calls, puts, fetches, restore: () => void (globalThis.fetch = prev) };
+  return { calls, puts, putBodies, deletes, fetches, restore: () => void (globalThis.fetch = prev) };
 }
 
 const FAKE_CFG = { repo: 'owner/repo', token: 'ghp_012345678901234567890123456789012345' };
@@ -512,6 +570,22 @@ const PAGE_HTML = `<html><head><title>番茄牛腩 - 小红书</title>
 /** 只贴一条 B站搜索链接（用户实际反馈的那种输入） */
 const BILI_SEARCH =
   'https://search.bilibili.com/all?vt=04531052&keyword=%E6%9D%91%E9%A9%B4&from_source=web_search&spm_id_from=333.1007&search_source=5';
+
+/** 测试用的一张假截图：5 字节（PNG 头 + 一个高位字节，验 base64 往返不丢） */
+const SHOT_BYTES = new Uint8Array([137, 80, 78, 71, 250]);
+const SHOT_B64 = Buffer.from(SHOT_BYTES).toString('base64');
+const SHOT_DATA_URL = `data:image/png;base64,${SHOT_B64}`;
+
+/** 往文件选择框里塞一张假图并派发 change —— 走的就是真机上「选截图」那条路 */
+async function pickPhoto(m: Mounted, sel: string, bytes: Uint8Array = SHOT_BYTES, name = 'shot.png') {
+  const input = m.$(sel) as HTMLInputElement | null;
+  if (!input) throw new Error(`找不到文件选择框 ${sel}`);
+  const file = new window.File([bytes], name, { type: 'image/png' });
+  Object.defineProperty(input, 'files', { value: [file], configurable: true });
+  await act(async () => {
+    input.dispatchEvent(new window.Event('change', { bubbles: true }));
+  });
+}
 
 /** 从记录的调用里取出被 PUT 过的文件路径（去重、排序） */
 function putPaths(calls: string[]): string[] {
@@ -617,9 +691,11 @@ async function renderChecks() {
   );
   await expectIn('4 添加菜谱', '/add', [
     '添加菜谱',
-    '把「分享 → 复制链接」那一整段粘进来',
-    '保存并同步到仓库',
+    '粘贴小红书 / B站 / 抖音的分享链接或文案',
+    '传张截图',
     '识别',
+    '菜名',
+    '保存并同步',
     'DeepSeek',
   ]);
   await expectIn('5 点单（未选菜 → 发送键禁用）', '/order', [
@@ -840,6 +916,7 @@ async function interactionChecks() {
   }
 
   /* 只贴链接没有文案 —— 不编造标题，直接留给用户填 */
+  useDb();
   {
     const m = await mount('/add');
     await m.type('#shareInput', 'https://xhslink.cn/o/7cNiFbAw2if');
@@ -848,9 +925,14 @@ async function interactionChecks() {
     check(m.value('#mTitle') === '', '★ 只贴链接 → 标题留空，不编造');
     check(m.value('#mSource') === 'red', '但来源认出来了（小红书）');
     check(
-      (m.$('.actionbar .btn-primary') as HTMLButtonElement).disabled,
-      '没标题时保存键禁用',
+      !(m.$('.actionbar .btn-primary') as HTMLButtonElement).disabled,
+      '保存键一直可点（点完才说缺什么，而不是给个点不动的灰按钮）',
     );
+    await m.click('.actionbar .btn-primary');
+    await m.wait(50);
+    check(m.html().includes('总得有个名字才能存'), '★ 没菜名就点保存 → 当场把「菜名」标红');
+    check(readDb().recipes.length === 6, '没有半截数据落库', String(readDb().recipes.length));
+    check(m.$('.s-add') !== null, '也没离开这一页');
     await m.close();
   }
 
@@ -893,12 +975,15 @@ async function interactionChecks() {
   useDb();
   {
     const m = await mount('/add');
-    /* jsdom 不加载 CSS，判断「显示与否」要看类名：.manual 要 .show 才展开 */
-    check(!(m.$('.manual')?.className ?? '').includes('show'), '没点之前手填区是收起的');
-    await m.click('#manualBtn');
-    check((m.$('.manual')?.className ?? '').includes('show'), '★ 手动添加 → 直接展开手填区');
-    check(m.$('#mTitle') !== null && m.$('#mSteps') !== null, '手填区里有标题和做法');
-    check(m.value('#mSource') === 'manual', '来源默认就是「手动添加（无来源）」', m.value('#mSource'));
+    /* 手填不藏在「手动添加」按钮后面：字段一直摆着，直接写就行（少一层展开收起） */
+    check(m.$('#mTitle') !== null && m.$('#mSteps') !== null, '★ 一进来就能直接填菜名和做法');
+    check(m.$('#manualBtn') === null, '没有多余的「手动添加」按钮');
+    check(m.value('#mSource') === 'manual', '★ 没贴链接时来源默认就是「手动」', m.value('#mSource'));
+    check(m.$('[aria-label="查看大图"]') === null, '★ 没选截图时封面是插画 / 首字，不给点（示意图放大没意义）');
+    check(
+      m.html().indexOf('粘贴小红书') < m.html().indexOf('id="mTitle"'),
+      '顺序是先「贴链接 / 传截图」再填菜谱本身',
+    );
 
     await m.type('#mTitle', '外婆的梅干菜扣肉');
     await m.type('#mSteps', '1. 梅干菜泡软\n2. 五花肉焯水\n3. 上锅蒸 1 小时');
@@ -910,7 +995,11 @@ async function interactionChecks() {
     check(added?.source === 'manual', '★ 没有平台来源，记为「手动」', `实际 ${added?.source}`);
     check(added?.steps === '1. 梅干菜泡软\n2. 五花肉焯水\n3. 上锅蒸 1 小时', '★ 做法落库', JSON.stringify(added?.steps));
     check(added?.note === '蒸久一点更糯', '备注落库');
-    check(added?.url === '' && added?.author !== '', '没填链接就是空串，作者走兜底', `url=${added?.url} author=${added?.author}`);
+    check(
+      added?.url === '' && added?.author === '',
+      '★ 没填链接 / 作者就是空串，不拿「来自剪藏」这种假出处顶替',
+      `url=${added?.url} author=${added?.author}`,
+    );
     await m.close();
   }
   {
@@ -1004,7 +1093,7 @@ async function interactionChecks() {
 
     const m = await mount('/add');
     check(m.text('#recognizeBtn') === 'AI 识别', '配了 Key → 按钮变成「AI 识别」', m.text('#recognizeBtn'));
-    check(m.html().includes('AI 识别已开启'), '页面提示 AI 已开启');
+    check(!m.html().includes('填 DeepSeek Key'), '★ 配了 Key 就不再挂「去设置里填 Key」的提示（按钮文案已经说明）');
 
     await m.type('#shareInput', AI_SHARE);
     await m.click('#recognizeBtn');
@@ -1014,8 +1103,13 @@ async function interactionChecks() {
     check(chatCalls.length === 1, '★ 真的调了一次 DeepSeek chat/completions', `实际 ${chatCalls.length} 次`);
     check(chatCalls[0].headers.Authorization === `Bearer ${AI_KEY}`, '请求带上了 Bearer Key');
     check(
-      (chatCalls[0].body as { model?: string; response_format?: { type?: string } })?.model === 'deepseek-chat',
-      '用的是 deepseek-chat 模型',
+      (chatCalls[0].body as { model?: string; response_format?: { type?: string } })?.model === 'deepseek-flash',
+      '★ 用的是 deepseek-flash 模型（识图与文案识别同一个）',
+      String((chatCalls[0].body as { model?: string })?.model),
+    );
+    check(
+      (chatCalls[0].body as { thinking?: { type?: string } })?.thinking?.type === 'disabled',
+      '★ 识别关掉思考模式（照着抄的活儿，快且省 token）',
     );
 
     check(m.value('#mTitle') === '番茄牛腩', '★ AI 的菜名填进输入框', `实际「${m.value('#mTitle')}」`);
@@ -1083,6 +1177,181 @@ async function interactionChecks() {
     ds.restore();
   }
 
+  console.log('\n[交互 · 上传菜谱截图 + AI 识图]');
+  useDb((db) => {
+    db.config!.aiKey = AI_KEY;
+    db.config!.aiKeyMask = maskAiKey(AI_KEY);
+    db.config!.aiOn = true;
+  });
+  {
+    const ds = stubFetch([
+      {
+        match: /chat\/completions/,
+        method: 'POST',
+        reply: () =>
+          jsonRes({
+            choices: [
+              { message: { content: '{"title":"红烧肉","author":"阿珍","steps":"1. 焯水后炒糖色","note":"小火慢炖"}' } },
+            ],
+          }),
+      },
+    ]);
+    const m = await mount('/add');
+    check(m.text('#recognizeBtn') === 'AI 识别', '还没选图时按钮是「AI 识别」');
+
+    await pickPhoto(m, '#photoInput');
+    await m.wait(200);
+    check(m.text('#recognizeBtn') === 'AI 识图', '★ 选完截图按钮变成「AI 识图」');
+    check(m.html().includes('换张截图'), '截图按钮变成「换张截图」');
+    check(m.$('button[aria-label="移除截图"]') !== null, '★ 有「移除截图」的入口');
+
+    /* 封面上的截图点一下能看大图：点 × / 点遮罩 / Esc 都能关，且不离开添加页 */
+    check(m.$('[aria-label="查看大图"]') !== null, '★ 添加页封面上的截图也能点开看大图');
+    await m.click('[aria-label="查看大图"]');
+    check(m.$('.photoview') !== null, '点封面 → 打开大图');
+    check(m.$('.pv-img')?.getAttribute('src') === SHOT_DATA_URL, '大图用的就是刚选的这张');
+    await m.click('.pv-close');
+    check(m.$('.photoview') === null && m.$('.s-add') !== null, '点 × 关掉大图，人还在添加页');
+    await m.click('[aria-label="查看大图"]');
+    await m.click('.pv-mask');
+    check(m.$('.photoview') === null, '点遮罩也能关掉');
+
+    const call = ds.calls.find((c) => c.method === 'POST' && c.url.includes('chat/completions'));
+    const sent = JSON.stringify(call?.body ?? {});
+    check(sent.includes(SHOT_DATA_URL), '★ 选完截图自动识图，整张图交给了 DeepSeek');
+    check(m.value('#mTitle') === '红烧肉', '★ 识图结果把菜名填进表单', m.value('#mTitle'));
+    check(m.value('#mSteps') === '1. 焯水后炒糖色', '做法也填进去了');
+    check(m.value('#mSource') === 'manual', '★ 只给截图没给链接 → 来源记成「手动」', m.value('#mSource'));
+    check(!sent.includes('r.jina.ai'), '没有链接就不去读页面');
+
+    /* 存库：菜谱里记的是仓库图片路径，图的字节先落在本机缓存里等推送 */
+    await m.click('.actionbar .btn-primary');
+    await m.wait(1000);
+    const added = readDb().recipes[0];
+    check(/^images\/.+\.png$/.test(added.image), '★ 菜谱记住仓库图片路径', added.image);
+    check(cachedPhoto(added.image) === SHOT_DATA_URL, '★ 图的字节先落在本机缓存（推送时上传仓库）');
+    await m.close();
+    ds.restore();
+  }
+  {
+    /* 没配 Key：识图没有，但截图照样能连菜谱一起存下来 */
+    useDb();
+    const m = await mount('/add');
+    check(m.text('#recognizeBtn') === '识别', '没配 Key 时按钮还是「识别」');
+    await pickPhoto(m, '#photoInput');
+    await m.wait(200);
+    check(m.html().includes(SHOT_DATA_URL), '★ 截图预览立刻显示（不用等 AI）');
+    check(m.html().includes('填 DeepSeek Key'), '★ 提示先配 Key 才能识图');
+    await m.type('#mTitle', '手填的菜名');
+    await m.click('.actionbar .btn-primary');
+    await m.wait(1000);
+    const added = readDb().recipes[0];
+    check(added.title === '手填的菜名' && /^images\//.test(added.image), '★ 没 AI 也能把截图连同菜谱一起存');
+    check(cachedPhoto(added.image) === SHOT_DATA_URL, '图也跟着菜谱留在本机');
+    await m.close();
+  }
+
+  console.log('\n[交互 · 详情页看照片：缓存优先，没缓存才去仓库取]');
+  localStorage.clear();
+  {
+    /* 另一台手机传的图：本机只有路径，没有字节 */
+    const gh = installFakeGithub({
+      images: { 'images/r1.png': SHOT_B64 },
+    });
+    useDb((db) => {
+      db.recipes[0].image = 'images/r1.png';
+    });
+    const m = await mount('/library');
+    check(m.html().includes('番茄炖牛腩'), '菜谱照常列出来');
+    check(!gh.calls.some((c) => c.includes('images/')), '★ 列表不为了缩略图逐张拉图（省流量）');
+    check(!m.html().includes(SHOT_DATA_URL), '没下载前缩略图先用本地插画');
+    await m.close();
+
+    const m2 = await mount('/recipe/r1');
+    await m2.wait(300);
+    check(
+      gh.calls.some((c) => c.startsWith('GET') && c.includes('images/r1.png')),
+      '★ 进详情页去仓库取这张照片',
+    );
+    check(m2.html().includes(SHOT_DATA_URL), '★ 详情页把照片显示出来');
+    check(cachedPhoto('images/r1.png') === SHOT_DATA_URL, '★ 取回来顺手写进本机缓存（之后离线也能看）');
+
+    /* 点一下看大图：整屏遮罩 + 原图，点遮罩 / × / Esc 都能关 */
+    check(m2.$('[aria-label="查看大图"]') !== null, '★ 封面成了可点的按钮（右下角有放大标记）');
+    await m2.click('[aria-label="查看大图"]');
+    check(m2.$('.photoview') !== null, '★ 点封面 → 打开大图');
+    check(m2.$('.pv-img')?.getAttribute('src') === SHOT_DATA_URL, '大图用的就是这张照片');
+    await m2.click('.pv-close');
+    check(m2.$('.photoview') === null && m2.$('.s-detail') !== null, '点 × 关掉大图，人还在详情页');
+
+    await m2.click('[aria-label="查看大图"]');
+    await m2.click('.pv-mask');
+    check(m2.$('.photoview') === null, '点遮罩也能关掉');
+
+    await m2.click('[aria-label="查看大图"]');
+    await act(async () => {
+      window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    check(m2.$('.photoview') === null, 'Esc 也能关掉');
+    await m2.close();
+
+    /* 已经缓存过：再进列表就带上照片，且不再发请求 */
+    const before = gh.calls.length;
+    const m3 = await mount('/library');
+    check(m3.html().includes(SHOT_DATA_URL), '★ 缓存过之后列表缩略图直接用照片');
+    check(gh.calls.length === before, '不再重复拉图');
+    await m3.close();
+    gh.restore();
+  }
+
+  {
+    /* 插画是示意图，不给点击：没传过照片的菜谱，封面不该是个按钮 */
+    useDb();
+    const m = await mount('/recipe/r5');
+    await m.wait(400);
+    check(m.$('[aria-label="查看大图"]') === null, '★ 只有「上传的照片」能点开看大图，插画封面不套按钮');
+    await m.close();
+  }
+
+  console.log('\n[交互 · 详情页编辑：换图 / 移除照片]');
+  localStorage.clear();
+  {
+    const gh = installFakeGithub({ images: { 'images/old.png': SHOT_B64 } });
+    useDb((db) => {
+      db.recipes[0].image = 'images/old.png';
+    });
+    const m = await mount('/recipe/r1');
+    await m.wait(300);
+    check(m.html().includes(SHOT_DATA_URL), '详情页先把仓库里的旧图显示出来');
+
+    await m.click('#editRecipeBtn');
+    check(m.html().includes('菜谱照片'), '编辑区有照片一栏');
+    await pickPhoto(m, '#editPhoto', new Uint8Array([9, 8, 7]), 'new.png');
+    await m.wait(200);
+    check(m.html().includes('data:image/png;base64,CQgH'), '★ 刚选的图立刻在编辑框里预览');
+    await m.click('.editrow .btn-sticker.primary');
+    await m.wait(1500);
+
+    const afterSwap = readDb().recipes.find((r) => r.id === 'r1')!;
+    check(
+      afterSwap.image !== 'images/old.png' && /^images\/r_.+\.png$/.test(afterSwap.image),
+      '★ 换了图 → 菜谱改指新图片路径',
+      afterSwap.image,
+    );
+    check(cachedPhoto(afterSwap.image) === 'data:image/png;base64,CQgH', '新图的字节也在本机缓存里');
+    check(gh.deletes.includes('images/old.png'), '★ 旧图顺手从仓库删掉（换了图不留孤儿）', gh.deletes.join(' | '));
+
+    /* 再把它整个移除 */
+    await m.click('#editRecipeBtn');
+    await m.click('#editPhotoRemove');
+    await m.click('.editrow .btn-sticker.primary');
+    await m.wait(1500);
+    check(readDb().recipes.find((r) => r.id === 'r1')!.image === '', '★ 移除照片 → 路径清空（退回本地插画）');
+    check(gh.deletes.includes(afterSwap.image), '★ 移除掉的那张图也从仓库删掉', gh.deletes.join(' | '));
+    await m.close();
+    gh.restore();
+  }
+
   console.log('\n[交互 · 识别时读取原链接]');
   useDb((db) => {
     db.config!.aiKey = AI_KEY;
@@ -1100,7 +1369,7 @@ async function interactionChecks() {
     ]);
 
     const m = await mount('/add');
-    check(m.html().includes('会先打开原链接补作者'), '页面提示会读原链接');
+    check(!m.html().includes('会先打开原链接'), '★ 改动原理不再写成段落（读原链接是「识别」的内部行为，不打扰用户）');
     await m.type('#shareInput', AI_SHARE);
     await m.click('#recognizeBtn');
     await m.wait(500);
@@ -1907,17 +2176,43 @@ async function aiChecks() {
   {
     const msgs = buildAiMessages('一段文案');
     check(msgs[0].role === 'system' && msgs[1].role === 'user', '消息是 system + user 两条');
-    check(/json/i.test(msgs[0].content) && /json/i.test(msgs[1].content), '提示词里带 json（json_object 模式的要求）');
-    check(msgs[1].content.includes('一段文案'), '用户消息里带上了原文');
-    check(/不要编造|绝对不要编造/.test(msgs[0].content), '明确要求不编造');
-    check(/只填菜名/.test(msgs[0].content), '提示词要求标题只填菜名');
-    check(/西红柿炒鸡蛋/.test(msgs[0].content), '提示词给了「只留菜名」的例子');
+    check(/json/i.test(aiText(msgs[0])) && /json/i.test(aiText(msgs[1])), '提示词里带 json（json_object 模式的要求）');
+    check(aiText(msgs[1]).includes('一段文案'), '用户消息里带上了原文');
+    check(/不要编造|绝对不要编造/.test(aiText(msgs[0])), '明确要求不编造');
+    check(/只填菜名/.test(aiText(msgs[0])), '提示词要求标题只填菜名');
+    check(/西红柿炒鸡蛋/.test(aiText(msgs[0])), '提示词给了「只留菜名」的例子');
     const withPage = buildAiMessages('一段文案', '作者候选: 阿珍');
-    check(withPage[1].content.includes('阿珍') && withPage[1].content.includes('页面线索'), '给了页面线索就一并带上');
-    check(/保姆级/.test(msgs[0].content), '提示词点名要去掉「保姆级 / 教程」这类营销词');
-    check(/酸甜爽脆的腌萝卜保姆级教程来了/.test(msgs[0].content), '提示词给了「只留菜品名」的具体例子');
-    check(/第一条结果/.test(msgs[0].content), '提示词约定：搜索结果页取第一条结果的菜名');
-    check(buildAiMessages('')[1].content.includes('只给了一个链接'), '只给链接（没文案）时提示词也读得通');
+    check(
+      aiText(withPage[1]).includes('阿珍') && aiText(withPage[1]).includes('页面线索'),
+      '给了页面线索就一并带上',
+    );
+    check(/保姆级/.test(aiText(msgs[0])), '提示词点名要去掉「保姆级 / 教程」这类营销词');
+    check(/酸甜爽脆的腌萝卜保姆级教程来了/.test(aiText(msgs[0])), '提示词给了「只留菜品名」的具体例子');
+    check(/第一条结果/.test(aiText(msgs[0])), '提示词约定：搜索结果页取第一条结果的菜名');
+    check(aiText(buildAiMessages('')[1]).includes('只给了一个链接'), '只给链接（没文案）时提示词也读得通');
+    check(/截图|图里/.test(aiText(msgs[0])), '提示词交代了截图识图（只抄图里真实出现的字）');
+
+    /* 带截图：content 变成「文字 + 图片」块，走 deepseek-flash 的识图 */
+    const SHOT = 'data:image/jpeg;base64,c2hvdA==';
+    const withImg = buildAiMessages('', undefined, SHOT);
+    const parts = withImg[1].content;
+    check(Array.isArray(parts), '带截图时 user 消息的 content 是内容块数组');
+    const arr = Array.isArray(parts) ? parts : [];
+    const firstPart = arr[0];
+    const secondPart = arr[1];
+    check(
+      firstPart?.type === 'text' && firstPart.text.includes('截图'),
+      '第一块是文字说明',
+      JSON.stringify(firstPart),
+    );
+    check(
+      secondPart?.type === 'image_url'
+        && secondPart.image_url.url === SHOT
+        && secondPart.image_url.detail === 'high',
+      '★ 第二块把截图以 data URL 交给模型（detail: high，小字也看得清）',
+      JSON.stringify(secondPart),
+    );
+    check(!buildAiMessages('文案').some((m) => Array.isArray(m.content)), '没有截图时仍是纯文本，老路径不变');
   }
   check(JSON.stringify(parseJsonLoose('{"title":"a"}')) === '{"title":"a"}', 'parseJsonLoose 直接解析');
   check(
@@ -1962,6 +2257,23 @@ async function aiChecks() {
       '要求 JSON 输出',
     );
     check(ds.calls[0].url === 'https://api.deepseek.com/chat/completions', '打到 chat/completions 端点', ds.calls[0].url);
+    ds.restore();
+  }
+  {
+    /* 识图：没有文案、只给一张截图，也照样走 deepseek-flash 的 image_url */
+    const ds = stubFetch([
+      {
+        match: /api\.deepseek\.com\/chat\/completions/,
+        method: 'POST',
+        reply: () => jsonRes({ choices: [{ message: { content: '{"title":"红烧肉","steps":"1. 焯水"}' } }] }),
+      },
+    ]);
+    const SHOT = 'data:image/png;base64,c2hvdA==';
+    const r = await recognizeRecipe(AI_KEY, '', { image: SHOT });
+    const sent = JSON.stringify(ds.calls[0].body);
+    check(sent.includes('deepseek-flash') && sent.includes(SHOT), '★ 识图把截图整个交给 deepseek-flash');
+    check(sent.includes('"image_url"'), '用的是 image_url 内容块（DeepSeek 识图的要求）');
+    check(r.title === '红烧肉', '识图结果同样整理成菜谱', JSON.stringify(r));
     ds.restore();
   }
   {
@@ -2038,6 +2350,116 @@ async function aiErrOf(fn: () => Promise<unknown>): Promise<DeepseekError | null
     return null;
   } catch (e) {
     return e instanceof DeepseekError ? e : null;
+  }
+}
+
+/* ═══════════ photo.ts + 仓库里的图片文件 ═══════════ */
+
+async function photoChecks() {
+  console.log('\n[照片 · data URL 工具]');
+  check(isPhotoDataUrl(SHOT_DATA_URL), '认出图片 data URL');
+  check(!isPhotoDataUrl('data:text/plain;base64,AA=='), '不是图片的 data URL 不认');
+  check(!isPhotoDataUrl('images/r1.jpg'), '仓库路径不是 data URL');
+  check(dataUrlMime(SHOT_DATA_URL) === 'image/png', 'dataUrlMime 取到 MIME');
+  check(dataUrlMime('乱七八糟') === 'image/jpeg', '认不出时按 jpeg 兜底');
+  check(dataUrlBase64(SHOT_DATA_URL) === SHOT_B64, 'dataUrlBase64 只取正文（去前缀与空白）');
+  check(dataUrlBytes(SHOT_DATA_URL) === SHOT_BYTES.length, '★ dataUrlBytes 数得准', String(dataUrlBytes(SHOT_DATA_URL)));
+  check(dataUrlBytes('') === 0, '空值算 0 字节');
+  check(MAX_PHOTO_BYTES <= 1_000_000, '★ 压完的上限卡在 GitHub contents 的 1 MB 读取线之下', String(MAX_PHOTO_BYTES));
+  check(
+    imageExtFor('image/png') === 'png'
+      && imageExtFor('image/webp') === 'webp'
+      && imageExtFor('image/gif') === 'gif'
+      && imageExtFor('image/jpeg') === 'jpg'
+      && imageExtFor('') === 'jpg',
+    'MIME → 扩展名',
+  );
+  check(
+    base64ToBytes(bytesToBase64(SHOT_BYTES)).every((b, i) => b === SHOT_BYTES[i]),
+    'base64 往返不丢字节',
+  );
+
+  console.log('\n[照片 · 读取与压缩兜底]');
+  {
+    const file = new window.File([SHOT_BYTES], 'shot.png', { type: 'image/png' });
+    const direct = await blobToDataUrl(file);
+    check(direct === SHOT_DATA_URL, 'blobToDataUrl 读出的就是文件真实字节', direct);
+    check((await photoToDataUrl(file)) === direct, '★ 没有 canvas 2d 时原样返回（不让「加截图」这条路失败）');
+    const weird = new window.File([new Uint8Array([1])], 'x.bin', { type: 'application/octet-stream' });
+    check((await blobToDataUrl(weird)).startsWith('data:image/jpeg;base64,'), '不是 image/* 的按 jpeg 装（DeepSeek 只认图片）');
+  }
+
+  console.log('\n[照片 · 本机缓存]');
+  {
+    check(cachedPhoto('images/none.jpg') === null, '没缓存过 → null');
+    rememberPhoto('images/a.png', SHOT_DATA_URL);
+    check(cachedPhoto('images/a.png') === SHOT_DATA_URL, '★ 记下之后取回来还是那张图');
+    rememberPhoto('不是 data URL', '图片');
+    check(cachedPhoto('不是 data URL') === null, '不是 data URL 的不进缓存');
+    const stored = JSON.parse(localStorage.getItem('jishiben-photos-v1') ?? '{}') as Record<string, string>;
+    check(stored['images/a.png'] === SHOT_DATA_URL, '★ 缓存单独放一个 key（不塞进主库 DB）');
+    forgetPhoto('images/a.png');
+    check(cachedPhoto('images/a.png') === null, '删掉菜谱后缓存也清干净');
+  }
+
+  console.log('\n[照片 · 仓库路径]');
+  check(imagePath('r_abc') === 'images/r_abc.jpg', '默认路径 images/<id>.jpg', imagePath('r_abc'));
+  check(imagePath('r_abc', 'image/png') === 'images/r_abc.png', '扩展名跟着图片类型走', imagePath('r_abc', 'image/png'));
+  check(
+    imageMimeOf('images/r_abc.png') === 'image/png'
+      && imageMimeOf('images/r_abc.webp') === 'image/webp'
+      && imageMimeOf('images/r_abc.gif') === 'image/gif'
+      && imageMimeOf('images/r_abc.jpg') === 'image/jpeg',
+    '路径 → MIME 读回来还原得对',
+  );
+
+  console.log('\n[照片 · 仓库读写]');
+  {
+    const ds = stubFetch([
+      { match: /\/contents\/images\//, reply: () => jsonRes({ sha: 'sha-1', content: SHOT_B64 }) },
+    ]);
+    const got = await getImage('owner/repo', 'images/r1.png', 'main', 'ghp_x');
+    check(got?.sha === 'sha-1' && got.dataUrl === SHOT_DATA_URL, '读图 → data URL + sha（sha 删图要用）', JSON.stringify(got));
+    ds.restore();
+  }
+  {
+    const ds = stubFetch([{ match: /.*/, reply: () => jsonRes({ message: 'Not Found' }, 404) }]);
+    check((await getImage('owner/repo', 'images/none.jpg', 'main', 'ghp_x')) === null, '图不在仓库 → null（不是报错）');
+    check((await getFileSha('owner/repo', 'images/none.jpg', 'main', 'ghp_x')) === null, '读 sha：不存在也是 null');
+    ds.restore();
+  }
+  {
+    const ds = stubFetch([{ match: /.*/, reply: () => jsonRes({ sha: 'x', content: '' }) }]);
+    const e = await githubErrOf(() => getImage('owner/repo', 'images/big.jpg', 'main', 'ghp_x'));
+    check(
+      e !== null && e.message.includes('太大'),
+      '★ 仓库里的图超过 1 MB（正文为空）→ 明确说「太大了」',
+      e?.message,
+    );
+    ds.restore();
+  }
+  {
+    const ds = stubFetch([{ match: /\/contents\/images\//, method: 'PUT', reply: () => jsonRes({ content: { sha: 'sha-new' } }) }]);
+    const sha = await putImage('owner/repo', 'images/r1.png', 'main', 'ghp_x', SHOT_DATA_URL, '记食本：上传菜谱图片');
+    const sent = ds.calls[0].body as { content?: string; branch?: string; sha?: string };
+    check(sha === 'sha-new', '上传返回新 sha');
+    check(
+      sent.content === SHOT_B64 && sent.branch === 'main' && sent.sha === undefined,
+      '★ 正文是纯 base64（不带 data: 前缀），新建文件不带 sha',
+      JSON.stringify(sent),
+    );
+    ds.restore();
+  }
+  {
+    const ds = stubFetch([{ match: /\/contents\/images\//, method: 'DELETE', reply: () => jsonRes({ content: { sha: 'd' } }) }]);
+    await deleteFile('owner/repo', 'images/r1.jpg', 'main', 'ghp_x', 'sha-1', '记食本：删除菜谱图片');
+    const del = ds.calls[0];
+    check(
+      del.method === 'DELETE' && (del.body as { sha?: string }).sha === 'sha-1',
+      '★ 删图带上 sha（GitHub 不带 sha 会拒）',
+      JSON.stringify(del.body),
+    );
+    ds.restore();
   }
 }
 
@@ -2231,6 +2653,14 @@ function helperChecks() {
     check(noCount[0].orderCount === 0, '★ 缺 orderCount 的老菜谱补 0', String(noCount[0].orderCount));
     check(noCount[1].orderCount === 0, '★ 负数次数规整成 0', String(noCount[1].orderCount));
     check(noCount[2].orderCount === 2, '已经是合法次数的原样保留', String(noCount[2].orderCount));
+    /* 老菜谱没有照片字段（写于加它之前）→ 补空串，别让 Photo 组件读到 undefined */
+    check(noCount[0].image === '', '★ 缺 image 的老菜谱补空串', JSON.stringify(noCount[0].image));
+    const withImg = normalizeRecipes([{ id: 'r4', image: 'images/r4.png' }]);
+    check(withImg[0].image === 'images/r4.png', '已有照片路径的原样保留');
+    /* 「来自剪藏」是我们自己写过的「没作者」占位：读到就当成没作者（手写 / 截图识图根本没有剪藏） */
+    const legacyAuthor = normalizeRecipes([{ id: 'r5', author: '来自剪藏' }, { id: 'r6', author: '阿珍' }]);
+    check(legacyAuthor[0].author === '', '★ 老数据里的「来自剪藏」被清成空串', JSON.stringify(legacyAuthor[0].author));
+    check(legacyAuthor[1].author === '阿珍', '真作者原样留着');
 
     /* 版本号已是最新、但缓存里缺 profiles 的脏数据 —— 只看 schema 会漏 */
     const noProfiles = seed() as unknown as Record<string, unknown>;
@@ -2366,6 +2796,14 @@ async function connectChecks() {
     check(db.profiles.a.nickname === '小辉', '我的昵称写进 profiles.a');
     check(db.config?.me === 'a', '本机 me=a');
     await m.close();
+
+    /* 重开一局（新挂载 = 相当于刷新页面）：不该再被向导拦住，token / 仓库还在本机 */
+    const again = await mount('/');
+    check(!again.html().includes('连接并拉取'), '★ 重开一局不再要求重新填 token / 仓库');
+    check(again.html().includes('我的菜谱库'), '直接进菜谱库', again.html().slice(0, 80));
+    check(readDb().config?.token === FAKE_CFG.token, '★ Token 还在本机缓存里');
+    check(readDb().config?.repo === FAKE_CFG.repo, '仓库名也还在');
+    await again.close();
     gh.restore();
   }
 
@@ -2731,6 +3169,101 @@ async function syncChecks() {
     );
     check(!m.html().includes('刚被改过'), '★ 没有多余的冲突报错');
     await m.close();
+    gh.restore();
+  }
+
+  console.log('\n[同步 · 照片先上传，再推菜谱；删菜谱顺手删图]');
+  localStorage.clear();
+  {
+    /* 空仓库：加一条带截图的菜谱 → 图先上，菜谱 JSON 后上 */
+    const gh = installFakeGithub({});
+    useDb();
+    const m = await mount('/add');
+    await pickPhoto(m, '#photoInput');
+    await m.wait(200);
+    await m.type('#mTitle', '带图的菜');
+    await m.click('.actionbar .btn-primary');
+    await m.wait(1000); /* 保存（750ms） */
+    await m.wait(1200); /* 推送防抖（700ms）+ 请求 */
+    await m.close();
+
+    const added = readDb().recipes[0];
+    const imgPath = added.image;
+    check(/^images\/.+\.png$/.test(imgPath), '菜谱记住了图片路径', imgPath);
+    const imgPut = gh.putBodies.find((p) => p.path.includes(imgPath));
+    check(imgPut?.content === SHOT_B64, '★ 图片按纯 base64 传到仓库里', JSON.stringify(imgPut)?.slice(0, 80));
+    check(imgPut !== undefined && imgPut.sha === undefined, '新建的图不带 sha（带了反而会被拒）');
+    const putOrder = gh.puts.map((p) => p.path).filter((p) => p.includes(imgPath) || p.includes('recipes.json'));
+    check(
+      putOrder[0]?.includes(imgPath) && putOrder[1]?.includes('recipes.json'),
+      '★ 先传图再推菜谱 JSON（对方不会拉到一条引用不存在图片的菜谱）',
+      putOrder.join(' | '),
+    );
+
+    /* 改一下备注（不动图）：图片不该被重传 */
+    const beforePuts = gh.putBodies.length;
+    const m2 = await mount(`/recipe/${added.id}`);
+    await m2.wait(300);
+    await m2.click('#editRecipeBtn');
+    await m2.type('#editNote', '改一下备注');
+    await m2.click('.editrow .btn-sticker.primary');
+    await m2.wait(1400);
+    check(
+      !gh.putBodies.slice(beforePuts).some((p) => p.path.includes(imgPath)),
+      '★ 图片没变就不重复上传（只推变了的菜谱 JSON）',
+      gh.putBodies.slice(beforePuts).map((p) => p.path).join(' | '),
+    );
+    check(readDb().recipes[0].note === '改一下备注', '备注改动照常落库');
+
+    /* 删掉这条菜谱 → 仓库里的旧图顺手删掉，别留孤儿文件 */
+    await m2.click('.dang');
+    await m2.click('.dang');
+    await m2.wait(1500);
+    await m2.close();
+    check(gh.deletes.includes(imgPath), '★ 删菜谱时仓库里的旧图也删掉（不留孤儿文件）', gh.deletes.join(' | '));
+    check(!readDb().recipes.some((r) => r.id === added.id), '本地菜谱也删掉了');
+    const lastRecipes = [...gh.putBodies].reverse().find((p) => p.path.includes('recipes.json'));
+    const pushedRecipes = (JSON.parse(atob(String(lastRecipes?.content))) as { recipes: Array<{ image: string }> }).recipes;
+    check(
+      !pushedRecipes.some((r) => r.image === imgPath),
+      '★ 最后推上去的菜谱库不再引用这张图',
+      JSON.stringify(pushedRecipes.map((r) => r.image)),
+    );
+    gh.restore();
+  }
+
+  console.log('\n[同步 · 本地攒下的图，连上仓库时补传]');
+  localStorage.clear();
+  {
+    /* 先在没有仓库的本机模式下加一条带图的菜谱 */
+    const gh = installFakeGithub({});
+    useDb((db) => {
+      db.config!.repo = '';
+      db.config!.token = '';
+      db.config!.tokenMask = '';
+    });
+    const m = await mount('/add');
+    await pickPhoto(m, '#photoInput');
+    await m.wait(200);
+    await m.type('#mTitle', '本地的带图菜');
+    await m.click('.actionbar .btn-primary');
+    await m.wait(1000);
+    await m.close();
+    const imgPath = readDb().recipes[0].image;
+    check(gh.calls.length === 0, '★ 没连仓库时一个请求都不发（图先留在本机缓存）', gh.calls.join(' | '));
+    check(cachedPhoto(imgPath) === SHOT_DATA_URL, '图的字节在本机缓存里等着');
+
+    /* 再去首次设置里连一个空仓库：本机内容（含图）作为初始内容推上去 */
+    const s = await mount('/setup');
+    await fillAndConnect(s);
+    await s.wait(1500);
+    check(
+      gh.putBodies.some((p) => p.path.includes(imgPath) && p.content === SHOT_B64),
+      '★ 连上仓库后把本机攒下的图补传上去',
+      gh.putBodies.map((p) => p.path).join(' | '),
+    );
+    check(gh.putBodies.some((p) => p.path.includes('recipes.json')), '菜谱库也一起推上去');
+    await s.close();
     gh.restore();
   }
 
@@ -3841,12 +4374,26 @@ async function backChecks() {
     await m.close();
   }
 
+  console.log('\n[返回键 · 遮罩优先：添加页上的大图]');
+  useDb();
+  {
+    const m = await mount('/add');
+    await pickPhoto(m, '#photoInput');
+    await m.wait(200);
+    await m.click('[aria-label="查看大图"]');
+    check(m.$('.photoview') !== null, '点封面 → 打开大图');
+    await act(async () => pressBack());
+    check(m.$('.photoview') === null && m.$('.s-add') !== null, '★ 返回键先关掉大图，不退屏');
+    await act(async () => pressBack());
+    check(m.$('.s-add') === null && m.$('.s-library') !== null, '★ 再按一次才回菜谱库');
+    await m.close();
+  }
+
   console.log('\n[返回键 · 保存完的添加页不留在返回栈里]');
   useDb();
   {
     const m = await mount('/order');
     await m.click('.tab.add');
-    await m.click('#manualBtn');
     await m.type('#mTitle', '返回键测试菜');
     await m.click('.actionbar .btn-primary');
     await m.wait(1600);
@@ -3889,6 +4436,25 @@ async function backChecks() {
     await act(async () => pressBack());
     check(m.$('.dishsheet') === null && m.$('.s-cook') !== null, '★ 返回键先关掉菜品详情，不退屏');
     await m.close();
+  }
+
+  console.log('\n[返回键 · 遮罩优先：详情页的大图]');
+  localStorage.clear();
+  {
+    const gh = installFakeGithub({ images: { 'images/r1.png': SHOT_B64 } });
+    useDb((db) => {
+      db.recipes[0].image = 'images/r1.png';
+    });
+    const m = await mount('/recipe/r1');
+    await m.wait(300);
+    await m.click('[aria-label="查看大图"]');
+    check(m.$('.photoview') !== null, '点封面 → 打开大图');
+    await act(async () => pressBack());
+    check(m.$('.photoview') === null && m.$('.s-detail') !== null, '★ 返回键先关掉大图，不退屏');
+    await act(async () => pressBack());
+    check(m.$('.s-detail') === null && m.$('.s-library') !== null, '★ 再按一次才回菜谱库');
+    await m.close();
+    gh.restore();
   }
 
   console.log('\n[返回键 · 一级页之间不互相回退]');
@@ -3950,6 +4516,65 @@ function Boom(): never {
 }
 
 async function boundaryChecks() {
+  console.log('\n[边界 · 没填作者的菜谱不编出处]');
+  localStorage.clear();
+  {
+    useDb((db) => {
+      db.recipes = db.recipes.map((r) => ({ ...r, author: '' }));
+    });
+    const m = await mount('/recipe/r1');
+    check(!m.html().includes('来自剪藏'), '★ 详情页不再显示「来自剪藏」这种假出处');
+    check(
+      m.$$('.meta-row .meta').every((el) => (el.textContent ?? '').trim() !== ''),
+      '★ 也不留一个空的位置（没作者就不摆那格）',
+    );
+    await m.close();
+
+    const m2 = await mount('/cook');
+    await m2.click('.dit');
+    const dsMeta = (m2.$('.ds-meta')?.textContent ?? '').trim();
+    check(!dsMeta.includes('来自剪藏'), '掌勺的菜品详情同样不编出处', dsMeta);
+    check(!dsMeta.includes('·'), '★ 没作者时不留孤零零的分隔点', dsMeta);
+    await m2.close();
+  }
+
+  console.log('\n[边界 · 浏览器不让存数据时当场说明白]');
+  localStorage.clear();
+  {
+    /* 模拟无痕模式 / 「关闭浏览器就清站点数据」：localStorage 一律写不进去。
+       jsdom 的 Storage 拦不住属性改写，所以直接换掉整个 globalThis.localStorage。 */
+    const real = globalThis.localStorage;
+    globalThis.localStorage = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error('QuotaExceededError');
+      },
+      removeItem: () => {},
+      clear: () => {},
+      key: () => null,
+      length: 0,
+    } as unknown as Storage;
+    try {
+      const m = await mount('/setup');
+      check(
+        m.html().includes('不让本站保存数据'),
+        '★ 存不了数据时明确提示（token / 仓库 / Key 每次都要重填就是这个原因）',
+      );
+      check(m.html().includes('每次进来都得重填'), '提示里说清后果');
+      await m.close();
+    } finally {
+      globalThis.localStorage = real;
+    }
+    localStorage.clear();
+
+    const m2 = await mount('/setup');
+    check(!m2.html().includes('不让本站保存数据'), '能正常存数据时不打扰用户');
+    await m2.close();
+    const m3 = await mount('/sync');
+    check(!m3.html().includes('不让本站保存数据'), '设置页同样只在真存不了时才提示');
+    await m3.close();
+  }
+
   console.log('\n[组件 · 错误边界兜住渲染异常]');
   localStorage.clear();
   /* React 会把崩溃栈打到 console.error（生产上要留着），测试里静音，别刷屏 */
@@ -4051,6 +4676,7 @@ await parseChecks();
 helperChecks();
 await githubChecks();
 await aiChecks();
+await photoChecks();
 await readerChecks();
 await migrationChecks();
 await connectChecks();

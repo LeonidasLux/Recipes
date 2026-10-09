@@ -72,6 +72,14 @@
 .s-detail .steps-text { margin: 0; font-size: 14px; line-height: 1.65; white-space: pre-wrap; }
 .s-detail .openlink { color: var(--accent-ink); font-weight: 600; text-decoration: none; }
 .s-detail .meta-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 2px; }
+/* 封面是真人上传的照片时整块可点（点开看大图）：右下角给个「可放大」的小标记，
+   插画只是示意图，不套这层按钮 */
+.s-detail .photobtn { position: absolute; inset: 0; padding: 0; border: 0; background: none; cursor: zoom-in; }
+.s-detail .photobtn img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .18s ease; }
+.s-detail .photobtn:active img { transform: scale(.985); }
+.s-detail .zoomtag { position: absolute; right: 10px; bottom: 10px; width: 30px; height: 30px; border-radius: 50%;
+  background: color-mix(in oklch, var(--ink) 58%, transparent); display: grid; place-items: center; }
+.s-detail .zoomtag svg { width: 16px; height: 16px; stroke: #fff; fill: none; stroke-width: 2.2; }
 .s-detail .linkcard { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .s-detail .linkcard a { text-decoration: none; }
 .s-detail .sent { display: none; }
@@ -107,24 +115,25 @@
 .s-cook .notice svg { width: 15px; height: 15px; stroke: var(--muted); fill: none; stroke-width: 2; }
 
 /* ═══════════ 添加菜谱 · Form ═══════════ */
-.s-add .preview {
-  border: 2px dashed color-mix(in oklch, var(--accent-deep) 45%, transparent);
-  border-radius: 20px; padding: 14px;
-}
-.s-add .preview.loaded { border-style: solid; border-color: var(--ink); background: var(--surface); box-shadow: var(--shadow-sticker); }
+/* 输入区：左边「传张截图」（虚线，次要动作），右边「识别」（主按钮，占满剩余宽度） */
+.s-add .shotrow { display: flex; align-items: center; gap: 8px; }
+.s-add .shotrow .capture { flex: 0 0 auto; border-style: dashed; padding: 9px 14px; }
+.s-add .shotrow .icbtn { flex: 0 0 auto; }
+.s-add .shotrow .btn-primary { flex: 1 1 auto; width: auto; min-height: 46px; font-size: 15px; }
+.s-add .hintline { margin: 0; font-size: 11.5px; color: var(--muted); }
+
+/* 菜谱本身：封面 + 菜名一行，下面依次是做法 / 作者 / 来源 / 链接，最后一条分隔线隔开备注 */
 .s-add .prevrow { display: grid; grid-template-columns: 84px 1fr; gap: 14px; align-items: center; }
 .s-add .cover { width: 84px; height: 84px; border-radius: 18px; overflow: hidden; border: 2px solid var(--ink);
   background: var(--accent-soft); display: grid; place-items: center; }
 .s-add .cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .s-add .cover .mono { font-family: var(--font-display); font-size: 30px; color: var(--accent-ink); }
-.s-add .preview .phint { font-size: 13px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
-.s-add .preview .phint svg { width: 18px; height: 18px; stroke: var(--muted); fill: none; stroke-width: 1.8; flex: 0 0 auto; }
-.s-add .fieldrow { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
-.s-add .manual { display: none; }
-.s-add .manual.show { display: flex; flex-direction: column; gap: 12px; }
-.s-add .manual.show { animation: odfade .2s ease; }
-@keyframes odfade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-.s-add .saveline { text-align: center; color: var(--muted); font-size: 12.5px; margin: 0; }
+/* 选好截图的封面是个按钮（点开看大图）：去掉按钮默认的边框和内边距，只留 .cover 那圈贴纸描边 */
+.s-add .cover.photobtn { padding: 0; cursor: zoom-in; }
+.s-add .cover.photobtn img { transition: transform .18s ease; }
+.s-add .cover.photobtn:active img { transform: scale(.97); }
+.s-add .sep { height: 1.5px; background: var(--border); border-radius: 999px; }
+.s-add .cover ~ .field input { font-size: 16px; font-weight: 600; }
 
 /* ═══════════ 点单 / 掌勺 · 折叠区（历史点单 / 已做完）═══════════ */
 .s-order .morebar,

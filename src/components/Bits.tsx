@@ -1,6 +1,8 @@
-import type { ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { Icon, type IconName } from './Icons';
-import { artUrl, initial, srcMeta, statusMeta } from '../data/helpers';
+import { Cover } from './Photo';
+import { srcMeta, statusMeta } from '../data/helpers';
+import { localStorageBroken } from '../lib/storage';
 import type { OrderStatus, SourceKey } from '../data/types';
 
 /* ─── 骨架屏 ─────────────────────────────────── */
@@ -53,14 +55,44 @@ export function StatusChip({ status }: { status: OrderStatus }) {
 
 /* ─── 缩略图 / 首字占位 ──────────────────────── */
 
-export function Thumb({ art, title, alt }: { art: string | null; title: string; alt?: string }) {
-  if (art) {
-    return <img src={artUrl(art)} alt={alt ?? title} loading="lazy" />;
-  }
-  return <span className="mono">{initial(title)}</span>;
+export function Thumb({
+  art,
+  image,
+  title,
+  alt,
+}: {
+  art: string | null;
+  /** 菜谱照片的仓库路径；有缓存就显示照片，没有就退回插画 */
+  image?: string;
+  title: string;
+  alt?: string;
+}) {
+  return <Cover image={image} art={art} title={alt ?? title} />;
 }
 
 /* ─── 五态占位卡 ─────────────────────────────── */
+
+/**
+ * 本机存不下数据时的提示（无痕模式 / 关浏览器就清站点数据）。
+ *
+ * token / 仓库 / DeepSeek Key 只在本机 localStorage 里，存不了就等于**每次
+ * 进来都要重填** —— 这属于环境问题，不是应用忘了保存，得当场说清楚。
+ * （另一种「换了地址就看不见数据」的情况在页面里无法判断，见 src/lib/storage.ts。）
+ */
+export function StorageWarning() {
+  const blocked = useMemo(localStorageBroken, []);
+  if (!blocked) return null;
+  return (
+    <div className="warnbanner" role="alert">
+      <Icon name="alert" />
+      <span>
+        这个浏览器不让本站保存数据（无痕窗口，或开了「关闭浏览器时清除站点数据」）：
+        token、仓库名、DeepSeek Key 每次进来都得重填。换个普通窗口打开，或把本站
+        从「关闭时清理」的名单里去掉。
+      </span>
+    </div>
+  );
+}
 
 interface StateCardProps {
   icon: IconName;
