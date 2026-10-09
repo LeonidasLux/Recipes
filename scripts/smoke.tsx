@@ -371,6 +371,8 @@ interface FakeGithub {
   putBodies: Array<{ path: string; content?: string }>;
   /** 被 DELETE 掉的文件路径（删菜谱要顺手删图） */
   deletes: string[];
+  /** 识图请求的正文（假 GitHub 顺带当 DeepSeek 用时记的） */
+  aiBodies: string[];
   /** 每次 fetch 的 cache 选项 —— 用来验证读仓库绕过了浏览器 HTTP 缓存 */
   fetches: Array<{ method: string; path: string; cache?: string }>;
   restore(): void;
@@ -393,12 +395,22 @@ function installFakeGithub(opts: {
   validateSha?: boolean;
   /** 仓库里已有的图片：路径（如 `images/r1.jpg`）→ base64 正文 */
   images?: Record<string, string>;
+  /**
+   * 顺带当 DeepSeek 用（批量识图要「识图 + 推仓库」同时发生，单个 stubFetch 装不下）：
+   * 识图请求按调用次序返回这里的菜名。
+   */
+  aiTitles?: string[];
+  /** 每次识图先等这么久（虚拟时钟下的毫秒数）：用来测「识别中」的中间态与「停止」 */
+  aiDelayMs?: number;
 }): FakeGithub {
   const calls: string[] = [];
   const puts: Array<{ path: string; sha?: string }> = [];
   const putBodies: Array<{ path: string; content?: string }> = [];
   const deletes: string[] = [];
   const fetches: Array<{ method: string; path: string; cache?: string }> = [];
+  /** 识图请求的正文（断言「一次一张图」用） */
+  const aiBodies: string[] = [];
+  let aiCount = 0;
   let putCount = 0;
   let remoteChanged = false;
   const prev = globalThis.fetch;
@@ -424,6 +436,15 @@ function installFakeGithub(opts: {
     const path = url.replace('https://api.github.com', '');
     calls.push(`${method} ${path}`);
     fetches.push({ method, path, cache: init?.cache });
+
+    /* 顺带当 DeepSeek：识图请求一张一張回菜名（见 opts.aiTitles） */
+    if (url.includes('api.deepseek.com/chat/completions')) {
+      aiBodies.push(String(init?.body ?? ''));
+      const title = (opts.aiTitles ?? [])[aiCount] ?? '';
+      aiCount++;
+      if (opts.aiDelayMs) await new Promise((r) => setTimeout(r, opts.aiDelayMs));
+      return json({ choices: [{ message: { content: JSON.stringify({ title, author: '阿珍', steps: '1. 焯水' }) } }] });
+    }
 
     if (method === 'PUT') {
       putCount++;
@@ -488,7 +509,7 @@ function installFakeGithub(opts: {
     return json({ message: 'unexpected call' }, 500);
   }) as typeof fetch;
 
-  return { calls, puts, putBodies, deletes, fetches, restore: () => void (globalThis.fetch = prev) };
+  return { calls, puts, putBodies, deletes, aiBodies, fetches, restore: () => void (globalThis.fetch = prev) };
 }
 
 const FAKE_CFG = { repo: 'owner/repo', token: 'ghp_012345678901234567890123456789012345' };
@@ -582,6 +603,19 @@ async function pickPhoto(m: Mounted, sel: string, bytes: Uint8Array = SHOT_BYTES
   if (!input) throw new Error(`找不到文件选择框 ${sel}`);
   const file = new window.File([bytes], name, { type: 'image/png' });
   Object.defineProperty(input, 'files', { value: [file], configurable: true });
+  await act(async () => {
+    input.dispatchEvent(new window.Event('change', { bubbles: true }));
+  });
+}
+
+/** 一次选多张（批量识图）：每张字节不一样，方便断言「一图一菜谱」 */
+async function pickPhotos(m: Mounted, sel: string, n: number) {
+  const input = m.$(sel) as HTMLInputElement | null;
+  if (!input) throw new Error(`找不到文件选择框 ${sel}`);
+  const files = Array.from({ length: n }, (_, i) =>
+    new window.File([new Uint8Array([137, 80, 78, 71, 100 + i])], `shot${i}.png`, { type: 'image/png' }),
+  );
+  Object.defineProperty(input, 'files', { value: files, configurable: true });
   await act(async () => {
     input.dispatchEvent(new window.Event('change', { bubbles: true }));
   });
@@ -987,7 +1021,7 @@ async function interactionChecks() {
 
     await m.type('#mTitle', '外婆的梅干菜扣肉');
     await m.type('#mSteps', '1. 梅干菜泡软\n2. 五花肉焯水\n3. 上锅蒸 1 小时');
-    await m.type('#noteArea', '蒸久一点更糯');
+    await m.type('#mNote', '蒸久一点更糯');
     await m.click('.actionbar .btn-primary');
     await m.wait(1000);
     const added = readDb().recipes[0];
@@ -1119,7 +1153,7 @@ async function interactionChecks() {
       JSON.stringify(m.value('#mSteps')),
     );
     check(m.value('#mAuthor') === '爱做饭的阿珍', 'AI 的作者填进去', `实际「${m.value('#mAuthor')}」`);
-    check(m.value('#noteArea') === '八角可放可不放', 'AI 的小贴士填进备注');
+    check(m.value('#mNote') === '八角可放可不放', 'AI 的小贴士填进备注');
     check(m.value('#mUrl') === 'http://xhslink.com/a/ai-test', '链接仍以本地解析为准（AI 不改 URL）');
     check(m.value('#mSource') === 'red', '来源按域名判断，不受 AI 影响');
 
@@ -1249,6 +1283,153 @@ async function interactionChecks() {
     check(added.title === '手填的菜名' && /^images\//.test(added.image), '★ 没 AI 也能把截图连同菜谱一起存');
     check(cachedPhoto(added.image) === SHOT_DATA_URL, '图也跟着菜谱留在本机');
     await m.close();
+  }
+
+  console.log('\n[交互 · 批量识图：一张截图一套编辑区，用户确认才入库]');
+  useDb((db) => {
+    db.config!.aiKey = AI_KEY;
+    db.config!.aiKeyMask = maskAiKey(AI_KEY);
+    db.config!.aiOn = true;
+  });
+  {
+    const titles = ['红烧肉', '糖醋排骨', '清蒸鲈鱼'];
+    /* 这一个假网络同时当 GitHub 和 DeepSeek：识图按顺序给三道菜的菜名 */
+    const gh = installFakeGithub({ aiTitles: titles });
+
+    const m = await mount('/add');
+    await pickPhotos(m, '#photoInput', 3);
+    await m.wait(900);
+
+    check(gh.aiBodies.length === 3, '★ 三张图 = 三次识图请求', String(gh.aiBodies.length));
+    const sentShots = gh.aiBodies.map((b) => /data:image\/png;base64,[^"]+/.exec(b)?.[0] ?? '');
+    check(new Set(sentShots).size === 3 && sentShots.every(Boolean), '每次请求带的图各不相同，也没漏图');
+
+    check(readDb().recipes.length === 6, '★ 识别完先不入库，等用户确认', String(readDb().recipes.length));
+    check(m.$$('.batch-tag').length === 3, '★ 三张图 → 三套编辑区纵向排开', String(m.$$('.batch-tag').length));
+    check(
+      m.value('#b0Title') === '红烧肉' && m.value('#b1Title') === '糖醋排骨' && m.value('#b2Title') === '清蒸鲈鱼',
+      '★ 识别结果按顺序预填进各自的编辑区',
+      [m.value('#b0Title'), m.value('#b1Title'), m.value('#b2Title')].join(' / '),
+    );
+    check(m.value('#b1Steps') === '1. 焯水', '做法也各自填好');
+    check(m.$('#mTitle') === null, '批量时不摆单条那张表单');
+    check(m.$$('[aria-label^="查看第"]').length === 3, '每张图的封面都点得开看大图');
+
+    /* 用户逐条看 / 改 */
+    await m.type('#b1Title', '糖醋小排');
+    await m.type('#b1Note', '第 2 张的备注');
+    await m.clickByText('.actionbar .btn-primary', '保存 3 道菜');
+    await m.wait(1000);
+    await m.wait(1200);
+
+    const db = readDb();
+    check(db.recipes.length === 9, '★ 用户点「保存 3 道菜」才真的入库', String(db.recipes.length));
+    const added = db.recipes.slice(0, 3);
+    check(
+      added.some((r) => r.title === '糖醋小排' && r.note === '第 2 张的备注'),
+      '★ 用户改过的内容按改后的存',
+      JSON.stringify(added.map((r) => r.title)),
+    );
+    check(
+      new Set(added.map((r) => r.image)).size === 3 && added.every((r) => /^images\/r_.+\.png$/.test(r.image)),
+      '★ 每条菜谱各带一张自己的图（一图一菜谱）',
+      JSON.stringify(added.map((r) => r.image)),
+    );
+    const wantShots = [100, 101, 102].map(
+      (b) => `data:image/png;base64,${Buffer.from([137, 80, 78, 71, b]).toString('base64')}`,
+    );
+    const gotShots = added.map((r) => cachedPhoto(r.image));
+    check(wantShots.every((w) => gotShots.includes(w)), '★ 每张图的字节都落在本机缓存里（推送时上传）', JSON.stringify(gotShots));
+
+    const imgPuts = gh.putBodies.filter((p) => p.path.includes('images/'));
+    check(imgPuts.length === 3, '★ 三张图都传上了仓库', String(imgPuts.length));
+    check(
+      gh.putBodies.filter((p) => p.path.includes('recipes.json')).length === 1,
+      '★ 三条一起入库只推一次菜谱库（防抖合并）',
+    );
+    check(m.$('.s-add') === null, '存完离开添加页');
+    await m.close();
+    gh.restore();
+  }
+  {
+    /* 认不出菜名（或用户没填）：卡上提醒、保存时拦住，也可以把那张移除 */
+    useDb((db) => {
+      db.config!.aiKey = AI_KEY;
+      db.config!.aiOn = true;
+    });
+    const gh = installFakeGithub({ aiTitles: ['红烧肉', ''] });
+    const m = await mount('/add');
+    await pickPhotos(m, '#photoInput', 2);
+    await m.wait(900);
+    check(m.html().includes('没认出菜名，自己填一个'), '★ 认不出菜名的那张在卡上提醒一句');
+    await m.click('.actionbar .btn-primary');
+    await m.wait(100);
+    check(readDb().recipes.length === 6, '★ 缺菜名就拦住，一条都不落库', String(readDb().recipes.length));
+    check(m.html().includes('第 2 张还缺菜名'), '告诉用户是哪一张');
+    check(
+      (m.$('#b1Title')?.parentElement?.className ?? '').includes('invalid'),
+      '把那一条的「菜名」标红',
+      m.$('#b1Title')?.parentElement?.className,
+    );
+    const removeBtns = m.$$('.batch-tag button');
+    await m.clickEl(removeBtns[1]);
+    check(m.$$('.batch-tag').length === 1, '★ 「移除这张」把不要的那张去掉');
+    await m.click('.actionbar .btn-primary');
+    await m.wait(1000);
+    check(readDb().recipes.length === 7, '剩下那道正常入库');
+    await m.close();
+    gh.restore();
+  }
+  {
+    /* 识别中可以「停止」：后面的图不再发请求，剩下的留白让用户自己填 */
+    useDb((db) => {
+      db.config!.aiKey = AI_KEY;
+      db.config!.aiOn = true;
+    });
+    const gh = installFakeGithub({ aiTitles: ['第一道', '第二道', '第三道'], aiDelayMs: 200 });
+    const m = await mount('/add');
+    await pickPhotos(m, '#photoInput', 3);
+    await m.wait(50);
+    check(m.html().includes('识别中 0 / 3'), '★ 识别中显示进度', m.text('.actionbar .btn-primary'));
+    await m.clickByText('.actionbar .btn-ghost', '停止');
+    await m.wait(900);
+    check(gh.aiBodies.length === 1, '★ 停止后不再往后发识图请求', String(gh.aiBodies.length));
+    check(m.html().includes('已停止，自己填吧'), '剩下的在卡上说明「已停止」');
+    check(readDb().recipes.length === 6, '停之前也没入库（等用户确认）');
+    await m.close();
+    gh.restore();
+  }
+  {
+    /* 一次最多 9 张；「取消」把整批丢掉、回到普通表单 */
+    useDb((db) => {
+      db.config!.aiKey = AI_KEY;
+      db.config!.aiOn = true;
+    });
+    const gh = installFakeGithub({ aiTitles: Array.from({ length: 9 }, (_, i) => `第 ${i + 1} 道`) });
+    const m = await mount('/add');
+    await pickPhotos(m, '#photoInput', 12);
+    await m.wait(900);
+    check(m.$$('.batch-tag').length === 9, '★ 一次最多认 9 张', String(m.$$('.batch-tag').length));
+    check(gh.aiBodies.length === 9, '也只发了 9 次请求', String(gh.aiBodies.length));
+    check(m.html().includes('一次最多 9 张'), '告诉用户剩下的没认（分批再来）');
+    await m.clickByText('.actionbar .btn-ghost', '取消');
+    check(m.$('.batch-tag') === null && m.$('#mTitle') !== null, '★ 「取消」丢掉这批，回到普通表单');
+    check(readDb().recipes.length === 6, '取消后一条都没入库');
+    await m.close();
+    gh.restore();
+  }
+  {
+    /* 没配 Key：批量识图没有可用的眼睛，直接说清楚，别静默吞掉 */
+    useDb();
+    const ds = stubFetch([]);
+    const m = await mount('/add');
+    await pickPhotos(m, '#photoInput', 2);
+    await m.wait(200);
+    check(ds.calls.length === 0 && m.$('.batch-tag') === null, '★ 没配 Key 时不发请求、也不进批量流程', String(ds.calls.length));
+    check(m.html().includes('批量识图要先'), '提示先去填 DeepSeek Key');
+    check(readDb().recipes.length === 6, '没有半截数据落库');
+    await m.close();
+    ds.restore();
   }
 
   console.log('\n[交互 · 详情页看照片：缓存优先，没缓存才去仓库取]');
@@ -1844,10 +2025,10 @@ async function interactionChecks() {
 
     await m.ime('#mTitle', '可乐鸡翅');
     await m.ime('#mSteps', '1. 焯水\n2. 煎到两面金黄\n3. 加可乐焖 20 分钟');
-    await m.ime('#noteArea', '收汁时开盖');
-    await m.blur('#noteArea');
+    await m.ime('#mNote', '收汁时开盖');
+    await m.blur('#mNote');
     check(
-      m.value('#mTitle') === '可乐鸡翅' && m.value('#noteArea') === '收汁时开盖' && m.value('#mSteps').includes('焖 20 分钟'),
+      m.value('#mTitle') === '可乐鸡翅' && m.value('#mNote') === '收汁时开盖' && m.value('#mSteps').includes('焖 20 分钟'),
       '标题 / 做法 / 备注输入框不丢字',
     );
 
@@ -4099,13 +4280,13 @@ async function edgeChecks() {
     /* 两处都该是「.field 里一个 label + 一个 textarea」，样式才不会各长各的 */
     useDb();
     const add = await mount('/add');
-    const note = add.$('#noteArea')!;
+    const note = add.$('#mNote')!;
     check(
       note.tagName === 'TEXTAREA' && note.closest('.field') !== null,
       '★ 添加页备注 = .field 里的 textarea',
     );
     check(
-      note.parentElement?.querySelector('label')?.getAttribute('for') === 'noteArea',
+      note.parentElement?.querySelector('label')?.getAttribute('for') === 'mNote',
       '★ 添加页备注有对应的 label',
     );
     check((note.getAttribute('style') ?? '') === '', '备注不再靠内联样式硬撑高度', note.getAttribute('style') ?? '');

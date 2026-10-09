@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent } from 'react';
+import { useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import { useStore } from '../data/store';
 import { useToast } from '../components/Toast';
 import { Icon } from '../components/Icons';
@@ -12,6 +12,31 @@ import { aiTimeout, DeepseekError, recognizeRecipe } from '../lib/ai';
 import { compactPage, isFetchableUrl, readPageHtml } from '../lib/reader';
 import { preserveTypedValue } from '../lib/inputs';
 import type { SourceKey } from '../data/types';
+
+/** 一条菜谱的草稿字段（单条表单与批量里每一张共用同一套） */
+interface RecipeDraft {
+  title: string;
+  steps: string;
+  author: string;
+  source: SourceKey;
+  url: string;
+  note: string;
+}
+
+/** 批量里的一张截图：识别结果只是「预填」，最终由用户看过、改过才入库 */
+interface BatchItem {
+  id: string;
+  file: File;
+  /** 压好的 data URL（识图要发给 AI，入库要当封面） */
+  dataUrl: string;
+  state: 'wait' | 'busy' | 'ready' | 'fail';
+  /** 说明 / 失败原因（认不出菜名也会在这儿提醒一句） */
+  error: string;
+  draft: RecipeDraft;
+}
+
+/** 一次最多认这么多张：再多就该分两批，免得一路认到天荒地老 */
+const BATCH_MAX = 9;
 
 /**
  * 添加菜谱 —— 只有两块卡片：上面「贴链接 / 传截图 → 识别」，下面就是这条菜谱本身。
@@ -48,11 +73,21 @@ export default function AddRecipe() {
   const [photoBusy, setPhotoBusy] = useState(false);
   /** AI 识别进行中（按钮换成 spinner，避免连点） */
   const [aiBusy, setAiBusy] = useState(false);
-  /** 点封面上的截图看大图（没选截图时不会打开） */
-  const [zoom, setZoom] = useState(false);
+  /** 正在看大图的那张 data URL（null = 没打开大图） */
+  const [zoom, setZoom] = useState<string | null>(null);
+  /** 批量识别（一次选了多张截图）：null = 不在批量流程里 */
+  const [batch, setBatch] = useState<BatchItem[] | null>(null);
+  /** 用户在批量流程里点了「停止」 */
+  const batchStop = useRef(false);
+  /** 点过批量保存：这时才把缺菜名的那几张标红 */
+  const [batchTriedSave, setBatchTriedSave] = useState(false);
 
   /* 大图是遮罩：手机返回键先关它，而不是退出这一页 */
-  useBackClose(zoom, () => setZoom(false));
+  useBackClose(zoom !== null, () => setZoom(null));
+
+  /** 批量还在识别中 / 已经认了几张（底部按钮与进度用） */
+  const batchBusy = batch?.some((it) => it.state === 'wait' || it.state === 'busy') ?? false;
+  const batchDone = batch?.filter((it) => it.state === 'ready' || it.state === 'fail').length ?? 0;
 
   const cover = guessArt(title);
   /**
@@ -66,14 +101,19 @@ export default function AddRecipe() {
   const aiReady = (db.config?.aiOn ?? true) && aiKey !== '';
 
   /**
-   * 选一张截图 / 照片：先压小，再（配了 Key 的话）顺手识一次图。
+   * 选截图：选一张就走「识图 → 在下面确认」，一次选多张就走批量（每张识成一道菜）。
    * `shotArg` 是刚选好的那张 —— setState 是异步的，不能指望 recognize 里读到新值。
    */
   async function onPickPhoto(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
+    const files = [...(e.target.files ?? [])];
     /* 清掉 value：不然连着选同一张图不会再触发 change */
     e.target.value = '';
-    if (!file) return;
+    if (!files.length) return;
+    if (files.length > 1) {
+      await runBatch(files);
+      return;
+    }
+    const file = files[0];
     setPhotoBusy(true);
     try {
       const dataUrl = await photoToDataUrl(file);
@@ -89,6 +129,104 @@ export default function AddRecipe() {
     } finally {
       setPhotoBusy(false);
     }
+  }
+
+  /** 只改批量里某一条的草稿字段（用户在卡片上手动改的时候走这里） */
+  function patchDraft(id: string, patch: Partial<RecipeDraft>) {
+    setBatch((b) =>
+      b ? b.map((it) => (it.id === id ? { ...it, draft: { ...it.draft, ...patch } } : it)) : b,
+    );
+  }
+
+  /** 只改批量里某一条的状态 */
+  function patchItem(id: string, patch: Partial<BatchItem>) {
+    setBatch((b) => (b ? b.map((it) => (it.id === id ? { ...it, ...patch } : it)) : b));
+  }
+
+  /**
+   * 批量识图：一次选的每张截图都识成一道菜，但**只做预填、不直接入库** ——
+   * 每张图在下面长出一套和单条一样的编辑区，用户逐条看 / 改过，点「保存」才写进菜谱库。
+   *
+   * 为什么一张接一张（不并发）：一是省得同时撞一堆请求撞上 429，
+   * 二是进度按顺序往下走，用户看得明白。Key 失效 / 余额不足这类
+   * 后面几张再试也是白试，直接停下，剩下的留白让用户自己填或移除。
+   */
+  async function runBatch(files: File[]) {
+    if (!aiReady) {
+      toast('批量识图要先在「设置」里填 DeepSeek Key', false);
+      return;
+    }
+    const picked = files.slice(0, BATCH_MAX);
+    if (files.length > BATCH_MAX) toast(`一次最多 ${BATCH_MAX} 张，先认前 ${BATCH_MAX} 张`, false);
+
+    const items: BatchItem[] = picked.map((file) => ({
+      id: newId('p'),
+      file,
+      dataUrl: '',
+      state: 'wait',
+      error: '',
+      draft: { title: '', steps: '', author: '', source: 'manual', url: '', note: '' },
+    }));
+    batchStop.current = false;
+    setBatchTriedSave(false);
+    setBatch(items);
+
+    for (const it of items) {
+      if (batchStop.current) {
+        patchItem(it.id, { state: 'fail', error: '已停止，自己填吧' });
+        continue;
+      }
+      patchItem(it.id, { state: 'busy' });
+      try {
+        const dataUrl = it.dataUrl || (await photoToDataUrl(it.file));
+        patchItem(it.id, { dataUrl });
+
+        const at = aiTimeout(25000);
+        let ai;
+        try {
+          ai = await recognizeRecipe(aiKey, '', { image: dataUrl, signal: at.signal });
+        } finally {
+          at.done();
+        }
+        /* 识别结果只当预填：用户改完再保存（认不出菜名也不算失败，留给他自己填） */
+        patchItem(it.id, {
+          state: 'ready',
+          error: ai.title ? '' : '没认出菜名，自己填一个',
+          draft: {
+            title: ai.title,
+            steps: ai.steps,
+            author: ai.author,
+            source: 'manual',
+            url: '',
+            note: ai.note,
+          },
+        });
+      } catch (err) {
+        const msg = err instanceof DeepseekError ? err.message : '识别失败，自己填吧';
+        patchItem(it.id, { state: 'fail', error: msg });
+        if (err instanceof DeepseekError && (err.kind === 'auth' || err.kind === 'balance')) {
+          batchStop.current = true;
+        }
+      }
+    }
+  }
+
+  /** 批量：用户确认后才写进菜谱库（一张图 = 一条菜谱，各带自己的图片） */
+  function saveBatch() {
+    if (!batch) return;
+    const missing = batch.findIndex((it) => !it.draft.title.trim());
+    if (missing !== -1) {
+      setBatchTriedSave(true);
+      toast(`第 ${missing + 1} 张还缺菜名（或者把它移除）`, false);
+      return;
+    }
+    setSaving(true);
+    const items = batch;
+    window.setTimeout(() => {
+      items.forEach((it) => addRecipe(recipeInputFrom(it.draft, it.dataUrl)));
+      toast(`已加入 ${items.length} 道菜`);
+      window.setTimeout(() => goBack(), 650);
+    }, 750);
   }
 
   async function recognize(shotArg?: string) {
@@ -169,25 +307,12 @@ export default function AddRecipe() {
       return;
     }
     setSaving(true);
-    /* id 先定下来：照片路径（images/<id>.jpg）要跟着这条菜谱走。
-       图的字节先落在本机缓存里 —— 推送时同步引擎会把它传到仓库，
-       没连仓库就先只有本机能看，连上之后再传。 */
-    const id = newId('r');
-    const path = photo ? imagePath(id, dataUrlMime(photo)) : '';
-    if (path) rememberPhoto(path, photo);
+    const input = recipeInputFrom(
+      { title, steps, author, source, url, note },
+      photo,
+    );
     window.setTimeout(() => {
-      addRecipe({
-        id,
-        title: title.trim(),
-        source,
-        url: url.trim(),
-        /* 作者留空就真的留空：界面上不占位，别拿「来自剪藏」这种假出处顶替 */
-        author: author.trim(),
-        art: cover,
-        image: path,
-        steps: steps.trim(),
-        note: note.trim(),
-      });
+      addRecipe(input);
       toast('已保存 · 已同步');
       /* 存完就离开这一页：返回键不该再退回到一张已经交掉的表单 */
       window.setTimeout(() => goBack(), 650);
@@ -213,6 +338,53 @@ export default function AddRecipe() {
 
       <main className="scroll">
         <div className="pad stack" style={{ paddingTop: 10, paddingBottom: 14 }}>
+          {batch ? (
+            /* 批量：每张截图长出一套和单条一样的编辑区，纵向排开，用户看过 / 改过再保存 */
+            <>
+              {batch.map((it, i) => (
+                <section className="card sticker stack" key={it.id} style={{ padding: 14 }}>
+                  <div className="batch-tag">
+                    <span className="bt-n">第 {i + 1} 张</span>
+                    <span className="meta">
+                      {it.state === 'busy' ? '识别中…' : it.state === 'wait' ? '排队中' : it.error}
+                    </span>
+                    {batch.length > 1 && (
+                      <button
+                        className="inlinebtn"
+                        onClick={() => setBatch((b) => (b ? b.filter((x) => x.id !== it.id) : b))}
+                      >
+                        移除这张
+                      </button>
+                    )}
+                  </div>
+
+                  <RecipeFields
+                    prefix={`b${i}`}
+                    titleInvalid={batchTriedSave && !it.draft.title.trim()}
+                    value={it.draft}
+                    onChange={(patch) => patchDraft(it.id, patch)}
+                    cover={
+                      it.dataUrl ? (
+                        <button
+                          type="button"
+                          className="cover photobtn"
+                          aria-label={`查看第 ${i + 1} 张大图`}
+                          onClick={() => setZoom(it.dataUrl)}
+                        >
+                          <img src={it.dataUrl} alt="" />
+                        </button>
+                      ) : (
+                        <div className="cover">
+                          <span className="spinner" aria-hidden />
+                        </div>
+                      )
+                    }
+                  />
+                </section>
+              ))}
+            </>
+          ) : (
+            <>
           {/* ① 输入：贴一段分享文案，或者传一张截图 —— 两个按钮并排，点完就识别 */}
           <section className="card sticker stack" style={{ padding: 14 }}>
             <div className={`field${rawInvalid ? ' invalid' : ''}`}>
@@ -258,6 +430,7 @@ export default function AddRecipe() {
                 className="hiddenfile"
                 type="file"
                 accept="image/*"
+                multiple
                 aria-label="选择菜谱截图"
                 onChange={(e) => void onPickPhoto(e)}
               />
@@ -291,136 +464,243 @@ export default function AddRecipe() {
 
           {/* ② 这条菜谱本身：识别结果直接填在这些字段里，随时可改 */}
           <section className="card sticker stack" style={{ padding: 14 }}>
-            <div className="prevrow">
-              {photo ? (
-                /* 选好的截图点一下能看大图；没选图时封面是插画 / 首字，不给点 */
-                <button
-                  type="button"
-                  className="cover photobtn"
-                  aria-label="查看大图"
-                  onClick={() => setZoom(true)}
-                >
-                  <img src={photo} alt="菜谱截图" />
-                </button>
-              ) : (
-                <div className="cover">
-                  {cover ? (
-                    <img src={artUrl(cover)} alt="封面" />
-                  ) : (
-                    <span className="mono">{initial(title)}</span>
-                  )}
-                </div>
-              )}
-              <div className={`field${titleBad ? ' invalid' : ''}`} style={{ minWidth: 0 }}>
-                <label htmlFor="mTitle">菜名</label>
-                <input
-                  id="mTitle"
-                  type="text"
-                  spellCheck={false}
-                  placeholder="这道菜叫什么？"
-                  value={title}
-                  onChange={(e) => {
-                    setTitle(e.target.value);
-                    setTitleBad(false);
-                  }}
-                  {...preserveTypedValue((v) => {
-                    setTitle(v);
-                    setTitleBad(false);
-                  })}
-                />
-                <span className="err">总得有个名字才能存</span>
-              </div>
-            </div>
-
-            <div className="field">
-              <label htmlFor="mSteps">做法</label>
-              <textarea
-                id="mSteps"
-                placeholder="一步一行，换行分开就行"
-                style={{ minHeight: 92 }}
-                value={steps}
-                onChange={(e) => setSteps(e.target.value)}
-                {...preserveTypedValue(setSteps)}
-              />
-            </div>
-
-            <div className="row" style={{ gap: 12, alignItems: 'flex-start' }}>
-              <div className="field" style={{ flex: 1 }}>
-                <label htmlFor="mAuthor">作者</label>
-                <input
-                  id="mAuthor"
-                  type="text"
-                  spellCheck={false}
-                  placeholder="可不填"
-                  value={author}
-                  onChange={(e) => setAuthor(e.target.value)}
-                  {...preserveTypedValue(setAuthor)}
-                />
-              </div>
-              <div className="field" style={{ flex: 1 }}>
-                <label htmlFor="mSource">来源</label>
-                <select
-                  id="mSource"
-                  value={source}
-                  onChange={(e) => setSourcePicked(e.target.value as SourceKey)}
-                >
-                  <option value="manual">手动</option>
-                  <option value="generic">网页</option>
-                  <option value="red">小红书</option>
-                  <option value="bili">B站</option>
-                  <option value="douyin">抖音</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="field">
-              <label htmlFor="mUrl">原文链接</label>
-              <input
-                id="mUrl"
-                type="url"
-                spellCheck={false}
-                placeholder="https://…"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                {...preserveTypedValue(setUrl)}
-              />
-            </div>
-
-            <div className="sep" />
-
-            <div className="field">
-              <label htmlFor="noteArea">备注</label>
-              <textarea
-                id="noteArea"
-                placeholder="想记的点：少辣、换食材、准备时间…"
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                {...preserveTypedValue(setNote)}
-              />
-            </div>
+            <RecipeFields
+              prefix="m"
+              titleInvalid={titleBad}
+              value={{ title, steps, author, source, url, note }}
+              onChange={(patch) => {
+                if (patch.title !== undefined) {
+                  setTitle(patch.title);
+                  setTitleBad(false);
+                }
+                if (patch.steps !== undefined) setSteps(patch.steps);
+                if (patch.author !== undefined) setAuthor(patch.author);
+                if (patch.source !== undefined) setSourcePicked(patch.source);
+                if (patch.url !== undefined) setUrl(patch.url);
+                if (patch.note !== undefined) setNote(patch.note);
+              }}
+              cover={
+                photo ? (
+                  /* 选好的截图点一下能看大图；没选图时封面是插画 / 首字，不给点 */
+                  <button
+                    type="button"
+                    className="cover photobtn"
+                    aria-label="查看大图"
+                    onClick={() => setZoom(photo)}
+                  >
+                    <img src={photo} alt="菜谱截图" />
+                  </button>
+                ) : (
+                  <div className="cover">
+                    {cover ? (
+                      <img src={artUrl(cover)} alt="封面" />
+                    ) : (
+                      <span className="mono">{initial(title)}</span>
+                    )}
+                  </div>
+                )
+              }
+            />
           </section>
+            </>
+          )}
         </div>
       </main>
 
-      <div className="actionbar">
-        <button className="btn-primary" disabled={saving} onClick={save}>
-          {saving ? (
-            <>
-              <span className="spinner" aria-hidden /> 正在推送…
-            </>
-          ) : (
-            <>
-              <Icon name="save" style={{ width: 18, height: 18 }} />
-              <span>保存并同步</span>
-            </>
-          )}
-        </button>
-      </div>
+      {/* 底部：单条是「保存并同步」；批量是先认（可停）再「保存 N 道菜」，全都由用户点头才入库 */}
+      {batch ? (
+        <div className="actionbar">
+          <div className="row" style={{ gap: 10 }}>
+            {batchBusy ? (
+              <>
+                <button
+                  className="btn-ghost"
+                  style={{ flex: '0 0 auto', width: 'auto', padding: '0 18px' }}
+                  onClick={() => {
+                    batchStop.current = true;
+                  }}
+                >
+                  停止
+                </button>
+                <button className="btn-primary" disabled>
+                  <span className="spinner" aria-hidden /> 识别中 {batchDone} / {batch.length}
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  className="btn-ghost"
+                  style={{ flex: '0 0 auto', width: 'auto', padding: '0 18px' }}
+                  onClick={() => setBatch(null)}
+                >
+                  取消
+                </button>
+                <button className="btn-primary" disabled={saving} onClick={saveBatch}>
+                  {saving ? (
+                    <>
+                      <span className="spinner" aria-hidden /> 正在推送…
+                    </>
+                  ) : (
+                    <>
+                      <Icon name="save" style={{ width: 18, height: 18 }} />
+                      <span>保存 {batch.length} 道菜</span>
+                    </>
+                  )}
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="actionbar">
+          <button className="btn-primary" disabled={saving} onClick={save}>
+            {saving ? (
+              <>
+                <span className="spinner" aria-hidden /> 正在推送…
+              </>
+            ) : (
+              <>
+                <Icon name="save" style={{ width: 18, height: 18 }} />
+                <span>保存并同步</span>
+              </>
+            )}
+          </button>
+        </div>
+      )}
 
       {/* 看大图：盖在最上层，返回键 / Esc / 点遮罩 / × 都能关（见 useBackClose） */}
-      {zoom && photo && (
-        <PhotoViewer src={photo} alt={title.trim() || '菜谱截图'} onClose={() => setZoom(false)} />
+      {zoom && (
+        <PhotoViewer src={zoom} alt="菜谱截图" onClose={() => setZoom(null)} />
       )}
     </div>
   );
+}
+
+/**
+ * 一条菜谱的编辑区：单条添加和批量里每一张共用它 —— 字段、校验、样式完全一致，
+ * 改一处两边都变。`prefix` 用来给输入框发唯一 id（单条是 `m`，批量是 `b0` / `b1`…）。
+ */
+function RecipeFields({
+  prefix,
+  cover,
+  value,
+  onChange,
+  titleInvalid = false,
+}: {
+  prefix: string;
+  cover: ReactNode;
+  value: RecipeDraft;
+  onChange: (patch: Partial<RecipeDraft>) => void;
+  titleInvalid?: boolean;
+}) {
+  return (
+    <>
+      <div className="prevrow">
+        {cover}
+        <div className={`field${titleInvalid ? ' invalid' : ''}`} style={{ minWidth: 0 }}>
+          <label htmlFor={`${prefix}Title`}>菜名</label>
+          <input
+            id={`${prefix}Title`}
+            type="text"
+            spellCheck={false}
+            placeholder="这道菜叫什么？"
+            value={value.title}
+            onChange={(e) => onChange({ title: e.target.value })}
+            {...preserveTypedValue((v) => onChange({ title: v }))}
+          />
+          <span className="err">总得有个名字才能存</span>
+        </div>
+      </div>
+
+      <div className="field">
+        <label htmlFor={`${prefix}Steps`}>做法</label>
+        <textarea
+          id={`${prefix}Steps`}
+          placeholder="一步一行，换行分开就行"
+          style={{ minHeight: 92 }}
+          value={value.steps}
+          onChange={(e) => onChange({ steps: e.target.value })}
+          {...preserveTypedValue((v) => onChange({ steps: v }))}
+        />
+      </div>
+
+      <div className="row" style={{ gap: 12, alignItems: 'flex-start' }}>
+        <div className="field" style={{ flex: 1 }}>
+          <label htmlFor={`${prefix}Author`}>作者</label>
+          <input
+            id={`${prefix}Author`}
+            type="text"
+            spellCheck={false}
+            placeholder="可不填"
+            value={value.author}
+            onChange={(e) => onChange({ author: e.target.value })}
+            {...preserveTypedValue((v) => onChange({ author: v }))}
+          />
+        </div>
+        <div className="field" style={{ flex: 1 }}>
+          <label htmlFor={`${prefix}Source`}>来源</label>
+          <select
+            id={`${prefix}Source`}
+            value={value.source}
+            onChange={(e) => onChange({ source: e.target.value as SourceKey })}
+          >
+            <option value="manual">手动</option>
+            <option value="generic">网页</option>
+            <option value="red">小红书</option>
+            <option value="bili">B站</option>
+            <option value="douyin">抖音</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="field">
+        <label htmlFor={`${prefix}Url`}>原文链接</label>
+        <input
+          id={`${prefix}Url`}
+          type="url"
+          spellCheck={false}
+          placeholder="https://…"
+          value={value.url}
+          onChange={(e) => onChange({ url: e.target.value })}
+          {...preserveTypedValue((v) => onChange({ url: v }))}
+        />
+      </div>
+
+      <div className="sep" />
+
+      <div className="field">
+        <label htmlFor={`${prefix}Note`}>备注</label>
+        <textarea
+          id={`${prefix}Note`}
+          placeholder="想记的点：少辣、换食材、准备时间…"
+          value={value.note}
+          onChange={(e) => onChange({ note: e.target.value })}
+          {...preserveTypedValue((v) => onChange({ note: v }))}
+        />
+      </div>
+    </>
+  );
+}
+
+/**
+ * 草稿 → 待入库的菜谱：id 先定下来（图片路径 `images/<id>.<ext>` 要跟着它走），
+ * 图的字节先落本机缓存，推送时同步引擎再传到仓库（没连仓库就先只有本机能看）。
+ */
+function recipeInputFrom(draft: RecipeDraft, dataUrl: string) {
+  const id = newId('r');
+  const title = draft.title.trim();
+  const image = dataUrl ? imagePath(id, dataUrlMime(dataUrl)) : '';
+  if (image) rememberPhoto(image, dataUrl);
+  return {
+    id,
+    title,
+    source: draft.source,
+    url: draft.url.trim(),
+    /* 作者留空就真的留空：界面上不占位，别拿「来自剪藏」这种假出处顶替 */
+    author: draft.author.trim(),
+    art: guessArt(title),
+    image,
+    steps: draft.steps.trim(),
+    note: draft.note.trim(),
+  };
 }
