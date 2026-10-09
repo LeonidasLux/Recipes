@@ -313,6 +313,23 @@ textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible {
 .btn-primary:disabled { opacity: 0.5; box-shadow: 0 2px 0 0 color-mix(in oklch, var(--ink) 40%, transparent); border-color: color-mix(in oklch, var(--ink) 45%, transparent); cursor: default; }
 .btn-primary .spinner { width: 16px; height: 16px; border: 2px solid color-mix(in oklch, var(--on-accent) 40%, transparent); border-top-color: currentColor; border-radius: 50%; animation: odspin 0.8s linear infinite; }
 
+/* 危险动作（删除这种）：和主按钮同形，换成红色 */
+.btn-danger {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%; min-height: 52px; padding: 12px 20px;
+  background: var(--danger); color: #fff;
+  border: 2px solid var(--ink); border-radius: 16px;
+  font: inherit; font-size: 16px; font-weight: 700; letter-spacing: 0.01em;
+  box-shadow: 0 3px 0 0 var(--ink); cursor: pointer;
+}
+.btn-danger svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2; flex: 0 0 auto; }
+.btn-danger:hover { background: color-mix(in oklch, var(--danger) 86%, var(--ink)); }
+.btn-danger:active { transform: translateY(2px); box-shadow: 0 1px 0 0 var(--ink); }
+.btn-danger:disabled { opacity: .45; cursor: default; transform: none;
+  box-shadow: 0 2px 0 0 color-mix(in oklch, var(--ink) 40%, transparent);
+  border-color: color-mix(in oklch, var(--ink) 45%, transparent); }
+.btn-danger:disabled:hover { background: var(--danger); }
+
 .btn-ghost {
   display: flex; align-items: center; justify-content: center; gap: 6px;
   width: 100%; min-height: 48px; padding: 10px 16px;

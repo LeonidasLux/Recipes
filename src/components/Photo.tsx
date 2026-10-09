@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useStore } from '../data/store';
 import { artUrl, initial } from '../data/helpers';
 import { getImage, withTimeout } from '../lib/github';
-import { cachedPhoto, rememberPhoto } from '../lib/photo';
+import { cachedPhoto, markPhotosUploaded, rememberPhoto } from '../lib/photo';
 
 /**
  * 菜谱照片（本机缓存优先，必要时去仓库取一张）。
@@ -44,6 +44,8 @@ export function useRecipePhoto(
       .then((f) => {
         if (!alive || !f) return;
         rememberPhoto(path, f.dataUrl);
+        /* 从仓库取到了 = 这张图仓库里确实有：标记一下，本机缓存紧张时它可以被淘汰 */
+        markPhotosUploaded([path]);
         setSrc(f.dataUrl);
       })
       .catch(() => {

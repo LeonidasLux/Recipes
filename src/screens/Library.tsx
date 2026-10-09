@@ -6,7 +6,6 @@ import { useSync } from '../lib/useSync';
 import { TabBar, usePreviewState } from '../components/TabBar';
 import { SkeletonRows, SourceBadge, StateCard, Thumb } from '../components/Bits';
 import { Icon } from '../components/Icons';
-import { anchorDeleteTip, DeleteTip, type DeleteTipState } from '../components/DeleteTip';
 import { preserveTypedValue } from '../lib/inputs';
 import { useBackClose } from '../lib/back';
 import { todayLine } from '../data/helpers';
@@ -29,7 +28,7 @@ const SORTS: Array<{ key: SortKey; label: string }> = [
 ];
 
 export default function Library() {
-  const { db, deleteRecipe } = useStore();
+  const { db, deleteRecipes } = useStore();
   const sync = useSync();
   const { toast } = useToast();
   const preview = usePreviewState();
@@ -40,15 +39,28 @@ export default function Library() {
   /* 排序：字段 + 方向（升序 / 降序）；默认保持收藏先后，不排序 */
   const [sortKey, setSortKey] = useState<SortKey>('default');
   const [asc, setAsc] = useState(false);
-  /* 长按某条菜谱 → 在条目右上角弹删除气泡 */
-  const [tip, setTip] = useState<DeleteTipState | null>(null);
+  /**
+   * 长按某条菜谱 → 进入多选模式（而不是在条目上弹一个删除气泡）：
+   * 集合里装着已勾选的菜谱 id；null = 不在多选模式。
+   * **空集合也是「在多选模式里」**（取消全选、反选到一条不剩时留在原地），
+   * 退出多选只有两条路：点左上角 `×`，或按手机返回键。
+   */
+  const [picked, setPicked] = useState<Set<string> | null>(null);
+  /** 点过「删除」但还没确认（二次点击才真删，防手滑） */
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const pressTimer = useRef<number | null>(null);
-  const longPressed = useRef(false);
+  /**
+   * 长按之后浏览器可能补一次 click（也可能不补 —— 安卓长按链接常常只给 contextmenu）。
+   * 这一次 click 要吞掉，不然刚勾上的那条会被它自己取消掉。
+   * 用「吞一次」而不是「按住一段时间」：下一次真的点按都会先来个 pointerdown，
+   * 那时就复位 —— 否则长按没补 click 时，把用户接下来那一次点按也吃掉了。
+   */
+  const swallowClick = useRef(false);
   /* 最近一次按下的指针类型：只有触摸才算「长按」；鼠标右键不该弹删除气泡 */
   const pressType = useRef('');
 
-  /* 长按弹出的删除提示是遮罩：手机返回键先收起它，而不是退出应用 */
-  useBackClose(tip !== null, closeTip);
+  /* 多选模式也是「可关闭的一层」：手机返回键先退出多选，而不是退出应用 */
+  useBackClose(picked !== null, () => setPicked(null));
 
   /* 进场骨架 → 呈现（与设计源 520ms 一致） */
   useEffect(() => {
@@ -83,15 +95,27 @@ export default function Library() {
 
   const searching = q.trim().length > 0;
 
+  /** 在多选模式里（`picked` 只在多选模式下非 null） */
+  const picking = picked !== null;
+  /** 当前筛出来的这几条是不是都勾上了 */
+  const allPicked = picking && list.length > 0 && list.every((r) => (picked as Set<string>).has(r.id));
+  /** 删除键文案：一条没勾就只写「删除」（此时按钮是禁用的） */
+  const deleteLabel = !picked?.size
+    ? '删除'
+    : confirmDelete
+      ? `再点一次，删除 ${picked.size} 道菜`
+      : `删除 ${picked.size} 道菜`;
+
   function retry() {
     setLoading(true);
     void sync.pull();
     window.setTimeout(() => setLoading(false), 700);
   }
 
-  /* ─── 长按删除 ─────────────────────────────────
-     按下开始计时（450ms），松手 / 划走 / 滚动就取消 —— 普通点按还是进详情。
-     长按弹出后，紧随其后的那次 click 要吞掉，不然会顺带跳进详情页。 */
+  /* ─── 多选删除 ─────────────────────────────────
+     长按一条 → 进多选模式并勾上它；之后点任意条目是「勾选 / 取消勾选」，不再进详情。
+     按下开始计时（450ms），松手 / 划走 / 滚动就取消 —— 普通点按还是进详情；
+     长按之后紧随其后的那次 click 要吞掉，不然会立刻把它自己取消掉。 */
   function cancelPress() {
     if (pressTimer.current !== null) {
       window.clearTimeout(pressTimer.current);
@@ -99,43 +123,101 @@ export default function Library() {
     }
   }
 
-  function startPress(el: HTMLElement, r: Recipe) {
-    longPressed.current = false;
+  /** 进入多选模式（长按，或触摸时系统补的那个 contextmenu） */
+  function startPicking(r: Recipe) {
+    cancelPress();
+    swallowClick.current = true;
+    setConfirmDelete(false);
+    setPicked(new Set([r.id]));
+  }
+
+  function startPress(r: Recipe) {
     cancelPress();
     pressTimer.current = window.setTimeout(() => {
       pressTimer.current = null;
-      longPressed.current = true;
-      setTip(anchorDeleteTip(el, r.id, r.title));
+      startPicking(r);
     }, 450);
   }
 
-  function showTip(el: HTMLElement, r: Recipe) {
-    cancelPress();
-    longPressed.current = true;
-    setTip(anchorDeleteTip(el, r.id, r.title));
+  /** 新一次点按开始：上一次长按留下的「吞一次 click」作废 */
+  function armPress() {
+    swallowClick.current = false;
   }
 
-  function closeTip() {
-    longPressed.current = false;
-    setTip(null);
+  /** 这次 click 是不是长按松手补的？是就吞掉（只吞一次） */
+  function eatLongPressClick(): boolean {
+    if (!swallowClick.current) return false;
+    swallowClick.current = false;
+    return true;
   }
 
-  function removeRecipe(id: string, title: string) {
-    deleteRecipe(id);
-    closeTip();
-    toast(`已删除「${title}」`);
+  /** 勾选 / 取消勾选一条 */
+  function togglePick(id: string) {
+    /* 整行可点：长按进来的那一下补的 click 要吞掉，其余一律当勾选 / 取消勾选 */
+    if (eatLongPressClick()) return;
+    setConfirmDelete(false);
+    setPicked((cur) => {
+      if (!cur) return cur;
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      /* 反选到一条不剩也留在多选模式（用户要接着选，别把人踢出去） */
+      return next;
+    });
+  }
+
+  function exitPicking() {
+    swallowClick.current = false;
+    setConfirmDelete(false);
+    setPicked(null);
+  }
+
+  /** 全选 / 取消全选（只作用于当前筛出来的这几条；取消全选同样留在多选模式里） */
+  function toggleAll() {
+    setConfirmDelete(false);
+    setPicked((cur) => {
+      if (!cur) return cur;
+      const all = list.length > 0 && list.every((r) => cur.has(r.id));
+      return all ? new Set<string>() : new Set(list.map((r) => r.id));
+    });
+  }
+
+  /** 删除勾选的菜谱：第一次点变成「再点一次确认」，第二次才真删 */
+  function removePicked() {
+    if (!picked?.size) return;
+    const ids = [...picked];
+    if (!confirmDelete) {
+      setConfirmDelete(true);
+      return;
+    }
+    deleteRecipes(ids);
+    toast(ids.length === 1 ? '已删除 1 道菜' : `已删除 ${ids.length} 道菜`);
+    exitPicking();
   }
 
   return (
     <div className="app s-library">
-      <header className="topbar">
-        <p className="greeting">{todayLine()}</p>
-        <div className="navrow">
-          <h1 className="ptitle" style={{ margin: 0 }}>
-            我的菜谱库
-          </h1>
-        </div>
-      </header>
+      {picking ? (
+        /* 多选模式：顶栏换成选择条 —— 退出 / 已选几条 / 全选 */
+        <header className="topbar selbar">
+          <button className="icbtn ghost" aria-label="退出多选" onClick={exitPicking}>
+            <Icon name="x" />
+          </button>
+          <b className="selcount">已选 {picked?.size ?? 0} 项</b>
+          <button className="inlinebtn" onClick={toggleAll}>
+            {allPicked ? '取消全选' : '全选'}
+          </button>
+        </header>
+      ) : (
+        <header className="topbar">
+          <p className="greeting">{todayLine()}</p>
+          <div className="navrow">
+            <h1 className="ptitle" style={{ margin: 0 }}>
+              我的菜谱库
+            </h1>
+          </div>
+        </header>
+      )}
 
       <div className="searchwrap">
         <div className="searchbar">
@@ -204,7 +286,7 @@ export default function Library() {
         </nav>
       )}
 
-      <main className="scroll" onScroll={closeTip}>
+      <main className="scroll">
         <section className="pad feed">
           {loading ? (
             <div className="cardlist" style={{ padding: '6px 16px' }}>
@@ -258,60 +340,94 @@ export default function Library() {
                 </div>
               )}
               <div className="cardlist">
-                {list.map((r) => (
-                  <Link
-                    className="dishrow"
-                    key={r.id}
-                    to={`/recipe/${r.id}`}
-                    onPointerDown={(e) => {
-                      pressType.current = e.pointerType ?? '';
-                      startPress(e.currentTarget, r);
-                    }}
-                    onPointerUp={cancelPress}
-                    onPointerLeave={cancelPress}
-                    onPointerCancel={cancelPress}
-                    onContextMenu={(e) => {
-                      /* 这一行是 <a>：安卓上长按链接走的是**系统那条长按路**，平台可能在
-                         我们 450ms 定时器到点之前就把指针序列取消掉，于是「按了半天没反应」。
-                         系统长按（触摸）会补一个 contextmenu，这里接住它弹同一个气泡。
-                         桌面右键（没有触摸指针）不进这条路，免得右键也弹删除。 */
-                      e.preventDefault();
-                      if (pressType.current !== 'touch') return;
-                      showTip(e.currentTarget, r);
-                    }}
-                    onClick={(e) => {
-                      if (!longPressed.current) return;
-                      /* 长按已经弹了删除提示，这一次 click 不算「点开详情」，
-                         但提示要留着 —— 用户还得点里面的删除 */
-                      longPressed.current = false;
-                      e.preventDefault();
-                      e.stopPropagation();
-                    }}
-                  >
-                    <span className="thumb">
-                      <Thumb art={r.art || null} image={r.image} title={r.title} />
-                    </span>
-                    <span className="body">
-                      <span className="title">{r.title}</span>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                        <SourceBadge source={r.source} />
-                        <span className="cnt">点过 {r.orderCount ?? 0} 次</span>
-                        {r.note && (
-                          <span className="note" style={{ flex: 1 }}>
-                            {r.note}
-                          </span>
-                        )}
+                {list.map((r) => {
+                  const row = (
+                    <>
+                      <span className="thumb">
+                        <Thumb art={r.art || null} image={r.image} title={r.title} />
                       </span>
-                    </span>
-                  </Link>
-                ))}
+                      <span className="body">
+                        <span className="title">{r.title}</span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                          <SourceBadge source={r.source} />
+                          <span className="cnt">点过 {r.orderCount ?? 0} 次</span>
+                          {r.note && (
+                            <span className="note" style={{ flex: 1 }}>
+                              {r.note}
+                            </span>
+                          )}
+                        </span>
+                      </span>
+                      {picking && (
+                        <span className="ck" aria-hidden>
+                          <Icon name="check" />
+                        </span>
+                      )}
+                    </>
+                  );
+
+                  /* 多选模式里整行是个勾选按钮；平时还是一进去就跳详情的链接 */
+                  return picking ? (
+                    <button
+                      type="button"
+                      className={`dishrow pick${picked?.has(r.id) ? ' on' : ''}`}
+                      key={r.id}
+                      aria-pressed={picked?.has(r.id) ?? false}
+                      aria-label={`${r.title}${picked?.has(r.id) ? '（已选）' : ''}`}
+                      onPointerDown={armPress}
+                      onClick={() => togglePick(r.id)}
+                    >
+                      {row}
+                    </button>
+                  ) : (
+                    <Link
+                      className="dishrow"
+                      key={r.id}
+                      to={`/recipe/${r.id}`}
+                      onPointerDown={(e) => {
+                        pressType.current = e.pointerType ?? '';
+                        armPress();
+                        startPress(r);
+                      }}
+                      onPointerUp={cancelPress}
+                      onPointerLeave={cancelPress}
+                      onPointerCancel={cancelPress}
+                      onContextMenu={(e) => {
+                        /* 这一行是 <a>：安卓上长按链接走的是**系统那条长按路**，平台可能在
+                           我们 450ms 定时器到点之前就把指针序列取消掉，于是「按了半天没反应」。
+                           系统长按（触摸）会补一个 contextmenu，这里接住它进多选模式（勾上这条）。
+                           桌面右键（没有触摸指针）不进这条路，免得右键也进多选。 */
+                        e.preventDefault();
+                        if (pressType.current !== 'touch') return;
+                        startPicking(r);
+                      }}
+                      onClick={(e) => {
+                        if (!eatLongPressClick()) return;
+                        /* 长按已经进了多选模式，这一次 click 不算「点开详情」 */
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }}
+                    >
+                      {row}
+                    </Link>
+                  );
+                })}
               </div>
             </>
           )}
         </section>
       </main>
 
-      {tip && <DeleteTip tip={tip} onDelete={() => removeRecipe(tip.id, tip.title)} onClose={closeTip} />}
+      {/* 多选模式：底部一条删除条（第一次点变确认，第二次才真删） */}
+      {picking && (
+        <div className="actionbar">
+          {/* 一条没勾时按钮只是摆着（禁用态），不至于让人以为点了能删 */}
+          <button className="btn-danger" disabled={!picked?.size} onClick={removePicked}>
+            <Icon name="trash" style={{ width: 18, height: 18 }} />
+            <span>{deleteLabel}</span>
+          </button>
+        </div>
+      )}
 
       <TabBar active="library" />
     </div>

@@ -43,6 +43,7 @@ import {
   GithubError,
   deleteFile,
   getFileSha,
+  getImageIndex,
   getJson,
   getImage,
   imageMimeOf,
@@ -67,6 +68,8 @@ import {
   forgetPhoto,
   imageExtFor,
   isPhotoDataUrl,
+  isPhotoUploaded,
+  markPhotosUploaded,
   photoToDataUrl,
   rememberPhoto,
 } from '../src/lib/photo';
@@ -371,6 +374,8 @@ interface FakeGithub {
   putBodies: Array<{ path: string; content?: string }>;
   /** 被 DELETE 掉的文件路径（删菜谱要顺手删图） */
   deletes: string[];
+  /** 每次 DELETE 带的 sha（验证删图用的是目录清单里的 sha，而不是先下载一遍图） */
+  deleteShas: Array<{ path: string; sha?: string }>;
   /** 识图请求的正文（假 GitHub 顺带当 DeepSeek 用时记的） */
   aiBodies: string[];
   /** 每次 fetch 的 cache 选项 —— 用来验证读仓库绕过了浏览器 HTTP 缓存 */
@@ -402,11 +407,14 @@ function installFakeGithub(opts: {
   aiTitles?: string[];
   /** 每次识图先等这么久（虚拟时钟下的毫秒数）：用来测「识别中」的中间态与「停止」 */
   aiDelayMs?: number;
+  /** 让 Git Trees（读 images/ 清单）失败，用来测退回「逐张问」的老路 */
+  treeFails?: boolean;
 }): FakeGithub {
   const calls: string[] = [];
   const puts: Array<{ path: string; sha?: string }> = [];
   const putBodies: Array<{ path: string; content?: string }> = [];
   const deletes: string[] = [];
+  const deleteShas: Array<{ path: string; sha?: string }> = [];
   const fetches: Array<{ method: string; path: string; cache?: string }> = [];
   /** 识图请求的正文（断言「一次一张图」用） */
   const aiBodies: string[] = [];
@@ -444,6 +452,20 @@ function installFakeGithub(opts: {
       aiCount++;
       if (opts.aiDelayMs) await new Promise((r) => setTimeout(r, opts.aiDelayMs));
       return json({ choices: [{ message: { content: JSON.stringify({ title, author: '阿珍', steps: '1. 焯水' }) } }] });
+    }
+
+    /* Git Trees：仓库里 images/ 的清单（只给路径 + sha，不含图的正文） */
+    if (url.includes('/git/trees/')) {
+      if (opts.treeFails) return json({ message: 'Server Error' }, 500);
+      const tree = Object.entries(shaState)
+        .filter(([, sha]) => sha !== undefined)
+        .map(([name, sha]) => ({
+          path: name.startsWith('images/') ? name : `${name}.json`,
+          mode: '100644',
+          type: 'blob',
+          sha,
+        }));
+      return json({ sha: 'sha-tree', tree, truncated: false });
     }
 
     if (method === 'PUT') {
@@ -499,7 +521,9 @@ function installFakeGithub(opts: {
         });
       }
       if (method === 'DELETE') {
+        const delBody = JSON.parse(String(init?.body ?? '{}')) as { sha?: string };
         deletes.push(name);
+        deleteShas.push({ path: name, sha: delBody.sha });
         delete shaState[name];
         delete images[name];
         return json({ content: { sha: 'sha-deleted' } });
@@ -509,7 +533,7 @@ function installFakeGithub(opts: {
     return json({ message: 'unexpected call' }, 500);
   }) as typeof fetch;
 
-  return { calls, puts, putBodies, deletes, aiBodies, fetches, restore: () => void (globalThis.fetch = prev) };
+  return { calls, puts, putBodies, deletes, deleteShas, aiBodies, fetches, restore: () => void (globalThis.fetch = prev) };
 }
 
 const FAKE_CFG = { repo: 'owner/repo', token: 'ghp_012345678901234567890123456789012345' };
@@ -2283,6 +2307,48 @@ async function githubChecks() {
     gh.restore();
   }
 
+  console.log('\n[github · images 目录清单]');
+  {
+    const ds = stubFetch([
+      {
+        match: /\/git\/trees\//,
+        reply: () =>
+          jsonRes({
+            sha: 'tree',
+            tree: [
+              { path: 'recipes.json', mode: '100644', type: 'blob', sha: 'sha-r' },
+              { path: 'images', mode: '040000', type: 'tree', sha: 'sha-dir' },
+              { path: 'images/r1.png', mode: '100644', type: 'blob', sha: 'sha-1' },
+              { path: 'images/r2.jpg', mode: '100644', type: 'blob', sha: 'sha-2' },
+              { path: 'other/r3.png', mode: '100644', type: 'blob', sha: 'sha-3' },
+            ],
+            truncated: false,
+          }),
+      },
+    ]);
+    const idx = await getImageIndex(FAKE_CFG.repo, 'main', FAKE_CFG.token);
+    check(
+      idx.size === 2 && idx.get('images/r1.png') === 'sha-1' && idx.get('images/r2.jpg') === 'sha-2',
+      '★ 只收 images/ 下的 blob（带 sha）：目录本身与别处的文件不要',
+      JSON.stringify([...idx]),
+    );
+    check(ds.calls[0].url.includes('/git/trees/main?recursive=1'), '一次 recursive 请求拿全，不下载图片正文');
+    check(ds.calls[0].method === 'GET', '是个 GET');
+    ds.restore();
+  }
+  {
+    /* 空仓库（还没有任何提交）没有树：当「一张图都没有」，不是错误 */
+    const ds = stubFetch([{ match: /.*/, reply: () => jsonRes({ message: 'Git Repository is empty.' }, 409) }]);
+    check((await getImageIndex(FAKE_CFG.repo, 'main', FAKE_CFG.token)).size === 0, '空仓库 → 空清单');
+    ds.restore();
+  }
+  {
+    const ds = stubFetch([{ match: /.*/, reply: () => jsonRes({ message: 'boom' }, 500) }]);
+    const e = await githubErrOf(() => getImageIndex(FAKE_CFG.repo, 'main', FAKE_CFG.token));
+    check(e !== null, '★ 接口真的坏了 → 抛 GithubError，调用方据此退回逐张查的老办法');
+    ds.restore();
+  }
+
   console.log('\n[github · putJson]');
   {
     const gh = stubFetch([{ match: /.*/, method: 'PUT', reply: () => jsonRes({ content: { sha: 'new-sha' } }) }]);
@@ -2577,10 +2643,48 @@ async function photoChecks() {
     check(cachedPhoto('images/a.png') === SHOT_DATA_URL, '★ 记下之后取回来还是那张图');
     rememberPhoto('不是 data URL', '图片');
     check(cachedPhoto('不是 data URL') === null, '不是 data URL 的不进缓存');
-    const stored = JSON.parse(localStorage.getItem('jishiben-photos-v1') ?? '{}') as Record<string, string>;
-    check(stored['images/a.png'] === SHOT_DATA_URL, '★ 缓存单独放一个 key（不塞进主库 DB）');
+    const stored = JSON.parse(localStorage.getItem('jishiben-photos-v2') ?? '{}') as Record<
+      string,
+      { d?: string; up?: boolean }
+    >;
+    check(stored['images/a.png']?.d === SHOT_DATA_URL, '★ 缓存单独放一个 key（不塞进主库 DB）');
+    check(stored['images/a.png']?.up === false, '刚存进来的图还算「没上传」');
+    check(isPhotoUploaded('images/a.png') === false, '查询：还没上传');
+    markPhotosUploaded(['images/a.png']);
+    check(isPhotoUploaded('images/a.png') === true, '★ 标记上传后就知道仓库里有了');
+    check(
+      (JSON.parse(localStorage.getItem('jishiben-photos-v2') ?? '{}') as Record<string, { up?: boolean }>)['images/a.png']?.up === true,
+      '标记也落了盘（重启之后不用重新核对）',
+    );
     forgetPhoto('images/a.png');
     check(cachedPhoto('images/a.png') === null, '删掉菜谱后缓存也清干净');
+    check(isPhotoUploaded('images/a.png') === false, '忘掉之后标记也没了');
+  }
+  {
+    /* 缓存不够用时，先淘汰「仓库里已经有了」的 —— 还没上传的丢了就真没了 */
+    localStorage.clear();
+    const mb = (n: number) => `data:image/jpeg;base64,${'A'.repeat(n * 1_400_000)}`;
+    rememberPhoto('images/old-pending.png', mb(1)); /* 最老、但还没传上去 */
+    rememberPhoto('images/up-1.png', mb(1));
+    markPhotosUploaded(['images/up-1.png']);
+    rememberPhoto('images/up-2.png', mb(1));
+    markPhotosUploaded(['images/up-2.png']);
+    rememberPhoto('images/new-pending.png', mb(1)); /* 最新、也还没传上去 */
+    const kept = JSON.parse(localStorage.getItem('jishiben-photos-v2') ?? '{}') as Record<string, unknown>;
+    check(
+      'images/old-pending.png' in kept && 'images/new-pending.png' in kept,
+      '★ 还没上传的图不会被挤掉（两张都在）',
+      Object.keys(kept).join(' | '),
+    );
+    check(
+      !('images/up-1.png' in kept) || !('images/up-2.png' in kept),
+      '★ 放不下时优先淘汰「仓库里已有」的那些（丢了还能取回来）',
+      Object.keys(kept).join(' | '),
+    );
+    forgetPhoto('images/old-pending.png');
+    forgetPhoto('images/up-1.png');
+    forgetPhoto('images/up-2.png');
+    forgetPhoto('images/new-pending.png');
   }
 
   console.log('\n[照片 · 仓库路径]');
@@ -3448,6 +3552,166 @@ async function syncChecks() {
     gh.restore();
   }
 
+  console.log('\n[同步 · 照片：确认「在不在仓库」不再下载整张图]');
+  localStorage.clear();
+  {
+    /* 用户实际踩的坑：本机缓存里有图的字节、仓库里也已经有同一张图（上次会话传的），
+       于是每次推送都逐张去问「仓库里有没有」—— 那个接口回的正文就是整张图，
+       几张截图就几 MB，手机上一次同步拖到超时（重试又快，因为内存里记下了）。
+       现在只该拉一次 images/ 目录清单（路径 + sha，不含图）。 */
+    const gh = installFakeGithub({
+      recipes: { schema: 3, updatedAt: 'x', recipes: [] },
+      orders: { schema: 3, updatedAt: 'x', orders: [] },
+      profiles: { schema: 3, updatedAt: 'x', profiles: { a: { nickname: '小辉', updatedAt: 'x' }, b: { nickname: '', updatedAt: '—' } } },
+      images: { 'images/r1.png': SHOT_B64, 'images/r2.png': SHOT_B64 },
+    });
+    useDb((db) => {
+      db.recipes = [
+        { ...db.recipes[0], id: 'r1', title: '带图的一', image: 'images/r1.png' },
+        { ...db.recipes[1], id: 'r2', title: '带图的二', image: 'images/r2.png' },
+      ];
+    });
+    rememberPhoto('images/r1.png', SHOT_DATA_URL);
+    rememberPhoto('images/r2.png', SHOT_DATA_URL);
+
+    const m = await mount('/library');
+    await m.longPress('.dishrow');
+    await m.clickEl(m.$$('.cardlist .dishrow')[0]); /* 长按松手补的那次 click */
+    await m.click('.actionbar .btn-danger');
+    await m.click('.actionbar .btn-danger');
+    await m.wait(800);
+    await m.wait(1200);
+
+    const imgReads = gh.calls.filter((c) => c.startsWith('GET') && c.includes('/contents/images/'));
+    check(imgReads.length === 0, '★ 不再为了「在不在仓库」下载整张图', imgReads.join(' | '));
+    const trees = gh.calls.filter((c) => c.includes('/git/trees/'));
+    check(trees.length === 1, '★ 只拉一次 images/ 目录清单', String(trees.length));
+    check(
+      gh.puts.filter((p) => p.path.includes('images/')).length === 0,
+      '★ 仓库里已有的图不会重传（清单里认出来了）',
+      gh.puts.map((p) => p.path).join(' | '),
+    );
+    check(gh.deletes.includes('images/r1.png'), '★ 删掉那张孤儿图');
+    check(
+      gh.deleteShas.find((d) => d.path === 'images/r1.png')?.sha === 'sha-images/r1.png-init',
+      '★ 删图用的 sha 来自目录清单（没有先下载一遍）',
+      JSON.stringify(gh.deleteShas),
+    );
+    check(readDb().recipes.length === 1, '本地也只剩一条', String(readDb().recipes.length));
+    await m.close();
+    gh.restore();
+  }
+  {
+    /* 拉不到清单（老仓库 / 接口异常）时退回逐张问的老办法，不能让同步整个失败 */
+    localStorage.clear();
+    const gh = installFakeGithub({
+      recipes: { schema: 3, updatedAt: 'x', recipes: [] },
+      images: { 'images/r1.png': SHOT_B64 },
+      treeFails: true,
+    });
+    useDb((db) => {
+      db.recipes = [{ ...db.recipes[0], id: 'r1', title: '带图的一', image: 'images/r1.png' }];
+    });
+    rememberPhoto('images/r1.png', SHOT_DATA_URL);
+    /* 删掉唯一一条 → 触发推送：清单拉不到，就退回「逐张读 sha」的老办法 */
+    const m = await mount('/library');
+    await m.longPress('.dishrow');
+    await m.clickEl(m.$$('.cardlist .dishrow')[0]);
+    await m.click('.actionbar .btn-danger');
+    await m.click('.actionbar .btn-danger');
+    check(m.html().includes('已删除 1 道菜'), '删除提示照常');
+    await m.wait(800);
+    await m.wait(1200);
+    check(gh.deletes.includes('images/r1.png'), '清单拉不到也照常删掉那张图');
+    check(!m.html().includes('刚被改过'), '★ 没有因为清单失败而报同步冲突');
+    check(!readDb().config?.lastSyncError, '本机也没留下同步错误', String(readDb().config?.lastSyncError));
+    await m.close();
+    gh.restore();
+  }
+  console.log('\n[同步 · 仓库里缺图时会把本机那张补传上去]');
+  localStorage.clear();
+  {
+    /* 用户实际遇到的情况：仓库 recipes.json 里 3 条菜谱、每条都指着自己的图，
+       但 images/ 里只有 2 张（历史上那张没传成功）。本机还留着第三张的字节，
+       下一次推送必须把它补上 —— 「recipes.json 里有这个引用」不等于「图已经到了」。 */
+    const base = seed();
+    const withImages = [
+      { ...base.recipes[0], id: 'r1', title: '一道', image: 'images/r1.png' },
+      { ...base.recipes[1], id: 'r2', title: '二道', image: 'images/r2.png' },
+      { ...base.recipes[2], id: 'r3', title: '三道', image: 'images/r3.png' },
+    ];
+    const gh = installFakeGithub({
+      recipes: { schema: 3, updatedAt: 'x', recipes: withImages },
+      orders: { schema: 3, updatedAt: 'x', orders: [] },
+      profiles: {
+        schema: 3,
+        updatedAt: 'x',
+        profiles: { a: { nickname: '小辉', updatedAt: 'x' }, b: { nickname: '', updatedAt: '—' } },
+      },
+      images: { 'images/r1.png': SHOT_B64, 'images/r2.png': SHOT_B64 },
+    });
+    useDb((db) => {
+      db.recipes = withImages;
+    });
+    rememberPhoto('images/r3.png', SHOT_DATA_URL);
+
+    const m = await mount('/sync');
+    await m.click('.btn-primary'); /* 先拉一次：recipes.json 里三条引用都在 */
+    await m.wait(600);
+    check(readDb().recipes.length === 3, '拉到三条（引用都在）', String(readDb().recipes.length));
+
+    const before = gh.putBodies.length;
+    await m.click('#editNamesBtn');
+    await m.type('#nickPartner', '顺手同步一次');
+    await m.click('#saveNamesBtn');
+    await m.wait(1400);
+    const imgPuts = gh.putBodies.slice(before).filter((p) => p.path.includes('images/'));
+    check(
+      imgPuts.length === 1 && imgPuts[0].path.includes('images/r3.png'),
+      '★ 拉过之后照样把仓库里缺的那张补传（已有的两张不重传）',
+      imgPuts.map((p) => p.path).join(' | ') || '（没有图片 PUT）',
+    );
+    check(
+      !gh.calls.some((c) => c.startsWith('GET') && c.includes('/contents/images/')),
+      '补传时也没下载任何一张图（还是那次目录清单）',
+    );
+    await m.close();
+    gh.restore();
+  }
+  {
+    /* 本机没有、仓库里也没有：这张图是真丢了，要写进日志 + 当场说一句 */
+    localStorage.clear();
+    const base = seed();
+    const gone = [{ ...base.recipes[0], id: 'r1', title: '丢了图的那道', image: 'images/gone.png' }];
+    const gh = installFakeGithub({
+      recipes: { schema: 3, updatedAt: 'x', recipes: gone },
+      orders: { schema: 3, updatedAt: 'x', orders: [] },
+      profiles: {
+        schema: 3,
+        updatedAt: 'x',
+        profiles: { a: { nickname: '小辉', updatedAt: 'x' }, b: { nickname: '', updatedAt: '—' } },
+      },
+    });
+    useDb((db) => {
+      db.recipes = gone;
+    });
+    const m = await mount('/sync');
+    await m.click('.btn-primary');
+    await m.wait(600);
+    await m.click('#editNamesBtn');
+    await m.type('#nickPartner', '触发推送');
+    await m.click('#saveNamesBtn');
+    await m.wait(1400);
+    check(
+      readDb().logs.some((l) => l.text.includes('本机和仓库里都没有')),
+      '★ 写进同步日志，别悄悄带过',
+      readDb().logs[0]?.text,
+    );
+    check(m.html().includes('本机和仓库里都没有'), '也当场提示一句');
+    await m.close();
+    gh.restore();
+  }
+
   console.log('\n[状态容器 · 日志全量保留]');
   localStorage.clear();
   {
@@ -4186,44 +4450,114 @@ async function edgeChecks() {
     check(/\.sk-thumb\s*\{[^}]*width:\s*56px; height:\s*56px/.test(css), '骨架屏缩略图同样 56px');
   }
 
-  console.log('\n[边界 · 菜谱库长按删除]');
+  console.log('\n[边界 · 菜谱库长按进多选，多选删除]');
   localStorage.clear();
   {
     useDb();
     const m = await mount('/library');
     check(m.$$('.cardlist .dishrow').length === 6, '6 条菜谱', `实际 ${m.$$('.cardlist .dishrow').length}`);
-    check(m.$('.tip') === null, '默认没有删除 tooltip');
+    check(m.$('.selbar') === null && m.$('.actionbar') === null, '默认不在多选模式');
 
     /* 按一下就松 → 不算长按 */
     await m.pointerDown('.dishrow');
     await m.wait(150);
     await m.pointerUp('.dishrow');
     await m.wait(600);
-    check(m.$('.tip') === null, '★ 短按不弹删除 tooltip');
+    check(m.$('.selbar') === null, '★ 短按不进多选');
 
     await m.longPress('.dishrow');
-    check(m.$('.tip') !== null, '★ 长按弹出删除 tooltip');
-    check(m.$('.tip .tip-del svg') !== null, 'tooltip 里有删除图标');
+    check(m.$('.selbar') !== null, '★ 长按 → 进多选模式（不再是悬浮删除气泡）');
+    check(m.html().includes('已选 1 项'), '长按的那条已经被勾上', m.text('.selcount'));
+    check(m.$('.tip') === null, '★ 不再弹悬浮删除气泡');
+    check(m.$('.dishrow.pick.on') !== null, '被勾上的那条有选中态');
+    check(m.$('.s-detail') === null, '也没有顺带跳进详情页');
 
-    await m.click('.tip-del');
-    check(m.$('.tip') === null, '删完收起 tooltip');
-    check(readDb().recipes.length === 5, '★ 菜谱从库里删掉', `实际 ${readDb().recipes.length}`);
-    check(!readDb().recipes.some((r) => r.title === '番茄炖牛腩'), '删的是长按的那条');
-    check(readDb().logs.some((l) => l.text.includes('已删除菜谱')), '删除写同步日志');
-    check(m.html().includes('已删除「番茄炖牛腩」'), '给出删除提示');
+    /* 真机上长按松手会补一次 click：这次要吞掉，别把刚勾上的又取消 */
+    await m.clickEl(m.$$('.cardlist .dishrow')[0]);
+    check(m.html().includes('已选 1 项'), '长按之后补的那次 click 被吞掉', m.text('.selcount'));
+
+    /* 再点两条 → 多选 */
+    await m.clickEl(m.$$('.cardlist .dishrow')[1]);
+    await m.clickEl(m.$$('.cardlist .dishrow')[2]);
+    check(m.html().includes('已选 3 项'), '★ 逐条点选可多选', m.text('.selcount'));
+    /* 再点一次取消勾选 */
+    await m.clickEl(m.$$('.cardlist .dishrow')[2]);
+    check(m.html().includes('已选 2 项'), '再点一次取消勾选', m.text('.selcount'));
+    check(m.$('.s-detail') === null, '多选模式下点条目不进详情');
+
+    /* 全选 / 取消全选 */
+    await m.clickByText('.selbar .inlinebtn', '全选');
+    check(m.html().includes('已选 6 项'), '★ 「全选」勾上当前列表全部', m.text('.selcount'));
+    await m.clickByText('.selbar .inlinebtn', '取消全选');
+    check(
+      m.$('.selbar') !== null && m.html().includes('已选 0 项'),
+      '★ 「取消全选」不退出多选，只是没勾任何一条',
+      m.text('.selcount'),
+    );
+    check(
+      (m.$('.actionbar .btn-danger') as HTMLButtonElement).disabled,
+      '★ 一条没勾时删除键不可点（但选择模式还在）',
+    );
+
+    /* 反选到一条不剩也留在多选模式 */
+    await m.clickEl(m.$$('.cardlist .dishrow')[0]);
+    check(m.html().includes('已选 1 项'), '点一条勾上', m.text('.selcount'));
+    await m.clickEl(m.$$('.cardlist .dishrow')[0]);
+    check(
+      m.$('.selbar') !== null && m.html().includes('已选 0 项'),
+      '★ 反选到一条不剩仍在多选模式',
+      m.text('.selcount'),
+    );
+
+    /* 删除要二次确认 */
+    await m.longPress('.dishrow');
+    await m.clickEl(m.$$('.cardlist .dishrow')[0]); /* 长按松手补的那次 click（被吞掉） */
+    await m.clickEl(m.$$('.cardlist .dishrow')[1]);
+    check(m.html().includes('已选 2 项'), '勾上两条', m.text('.selcount'));
+    await m.click('.actionbar .btn-danger');
+    check(readDb().recipes.length === 6, '第一次点删除只是变确认文案', String(readDb().recipes.length));
+    check(m.html().includes('再点一次，删除 2 道菜'), '按钮变成二次确认');
+    await m.click('.actionbar .btn-danger');
+    check(readDb().recipes.length === 4, '★ 二次确认后两条一起删掉', String(readDb().recipes.length));
+    check(!readDb().recipes.some((r) => r.title === '番茄炖牛腩'), '删的是勾选的那两条之一');
+    check(readDb().logs.some((l) => l.text.includes('已删除 2 道菜谱')), '★ 多选删除只写一条日志', readDb().logs[0]?.text);
+    check(m.$('.selbar') === null && m.$('.actionbar') === null, '删完退出多选');
+    check(m.html().includes('已删除 2 道菜'), '给出删除提示');
     await m.close();
   }
   {
-    /* 长按之后紧接着的那次 click 不该顺带跳进详情页 */
+    /* 长按之后紧接着的那次 click 不该把刚勾上的那条又取消掉 */
     useDb();
     const m = await mount('/library');
     await m.pointerDown('.dishrow');
     await m.wait(600);
     await m.clickEl(m.$$('.cardlist .dishrow')[0]);
-    check(m.html().includes('我的菜谱库'), '★ 长按后不会顺带跳进详情页');
-    check(m.$('.tip') !== null, 'tooltip 还开着');
-    await m.click('.tip-mask');
-    check(m.$('.tip') === null, '点别处收起 tooltip');
+    check(m.html().includes('已选 1 项'), '★ 长按后那次 click 被吞掉，仍然是勾 1 条', m.text('.selcount'));
+    check(m.$('.s-detail') === null && m.$('.s-library') !== null, '页面还在菜谱库（没顺带跳详情）');
+    /* 点「退出多选」回到普通列表 */
+    await m.click('.selbar .icbtn');
+    check(m.$('.selbar') === null && m.html().includes('我的菜谱库'), '★ 退出多选回到「我的菜谱库」');
+    await m.close();
+  }
+  {
+    /* 安卓长按链接常常不补 click：下一次正常点按（带 pointerdown）不能被误吞 */
+    useDb();
+    const m = await mount('/library');
+    await m.longPress('.dishrow');
+    check(m.html().includes('已选 1 项'), '长按进多选');
+    await m.pointerDown('.cardlist .dishrow:nth-child(2)', 'touch');
+    await m.pointerUp('.cardlist .dishrow:nth-child(2)');
+    await m.clickEl(m.$$('.cardlist .dishrow')[1]);
+    check(
+      m.html().includes('已选 2 项'),
+      '★ 长按没补 click 时，下一次点另一条照常勾上',
+      m.text('.selcount'),
+    );
+    /* 整行都能点：点第二行的备注文字那块（.body）也照样勾选 */
+    await m.pointerDown('.cardlist .dishrow:nth-child(3) .body', 'touch');
+    await m.pointerUp('.cardlist .dishrow:nth-child(3) .body');
+    await m.clickEl(m.$$('.cardlist .dishrow')[2].querySelector('.body') as HTMLElement);
+    check(m.html().includes('已选 3 项'), '★ 点条目任意位置（不只那个圈）都能勾选', m.text('.selcount'));
     await m.close();
   }
 
@@ -4304,20 +4638,20 @@ async function edgeChecks() {
     await m.close();
   }
 
-  console.log('\n[边界 · 菜谱库长按走系统长按事件也能弹气泡]');
+  console.log('\n[边界 · 菜谱库长按走系统长按事件也进多选]');
   localStorage.clear();
   {
     useDb();
     const m = await mount('/library');
-    /* 桌面右键（没有触摸指针）→ 不弹删除气泡 */
+    /* 桌面右键（没有触摸指针）→ 不进多选 */
     await m.contextMenu('.dishrow');
-    check(m.$('.tip') === null, '★ 鼠标右键不弹删除气泡');
+    check(m.$('.selbar') === null, '★ 鼠标右键不进多选');
     /* 安卓长按 <a> 走系统那条路：指针序列可能被取消，平台随后补一个 contextmenu */
     await m.pointerDown('.dishrow', 'touch');
     await m.pointerUp('.dishrow');
     await m.contextMenu('.dishrow');
-    check(m.$('.tip') !== null, '★ 触摸长按的系统长按事件也能弹出删除气泡');
-    check(m.$('.tip .tip-del') !== null, '气泡里还是那个删除按钮');
+    check(m.$('.selbar') !== null, '★ 触摸长按的系统长按事件也能进多选');
+    check(m.html().includes('已选 1 项'), '而且勾上的就是被长按那条', m.text('.selcount'));
     await m.close();
   }
 
@@ -4587,14 +4921,15 @@ async function backChecks() {
     await m.close();
   }
 
-  console.log('\n[返回键 · 遮罩优先：长按删除提示]');
+  console.log('\n[返回键 · 遮罩优先：菜谱库的多选模式与点单的删除提示]');
   useDb();
   {
     const m = await mount('/library');
     await m.longPress('.dishrow');
-    check(m.$('.tip') !== null, '长按菜谱 → 弹出删除提示');
+    check(m.$('.selbar') !== null, '长按菜谱 → 进多选模式');
     await act(async () => pressBack());
-    check(m.$('.tip') === null && m.$('.s-library') !== null, '★ 返回键先收起提示，不退屏');
+    check(m.$('.selbar') === null && m.$('.s-library') !== null, '★ 返回键先退出多选，不退应用');
+    check(m.html().includes('我的菜谱库'), '退回普通列表（顶栏变回标题）');
     await m.close();
   }
   {

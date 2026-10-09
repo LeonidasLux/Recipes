@@ -10,6 +10,29 @@
 /* ═══════════ 菜谱库 · Feed ═══════════ */
 .s-library .feed { padding-bottom: 18px; }
 .s-library .emptyart svg { width: 40px; height: 40px; }
+
+/* 多选模式：顶栏换成选择条（退出 / 已选几条 / 全选），条目右侧出现勾选圈。
+   整行都是勾选目标（不是只能点那个圈）。 */
+.s-library .selbar { display: flex; align-items: center; gap: 10px; padding-top: 8px; padding-bottom: 8px; }
+.s-library .selbar .selcount { flex: 1; min-width: 0; font-size: 17px; }
+.s-library .selbar .inlinebtn { flex: 0 0 auto; }
+/* 行变成 <button>：抹掉浏览器给按钮的默认底色 / 边框，位置留给勾选圈的第三列（不能再折行） */
+.s-library .dishrow.pick {
+  grid-template-columns: 56px 1fr 26px;
+  width: 100%; text-align: left; font: inherit; color: inherit;
+  background: none; border: 0; border-bottom: 1.5px solid var(--border); cursor: pointer;
+}
+.s-library .dishrow.pick:last-child { border-bottom: 0; }
+.s-library .dishrow.pick.on { background: color-mix(in oklch, var(--accent) 16%, transparent); }
+.s-library .dishrow.pick.on:first-child { border-radius: 14px 14px 0 0; }
+.s-library .dishrow.pick.on:last-child { border-radius: 0 0 14px 14px; }
+.s-library .dishrow.pick.on:only-child { border-radius: 14px; }
+.s-library .dishrow .ck { width: 24px; height: 24px; border-radius: 50%;
+  border: 2px solid color-mix(in oklch, var(--muted) 45%, transparent); background: var(--surface);
+  display: grid; place-items: center; }
+.s-library .dishrow .ck svg { width: 14px; height: 14px; stroke: transparent; fill: none; stroke-width: 3; }
+.s-library .dishrow.pick.on .ck { background: var(--accent); border-color: var(--ink); box-shadow: 0 1px 0 0 var(--ink); }
+.s-library .dishrow.pick.on .ck svg { stroke: var(--ink); }
 /* 同上：固定高度的纵向 flex 里，搜索框不该被列表挤扁 */
 .s-library .searchwrap { flex: 0 0 auto; padding: 0 18px 2px; }
 .s-library .searchbar { display: flex; align-items: center; gap: 6px;

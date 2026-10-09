@@ -19,6 +19,7 @@ import {
   RECIPES_PATH,
   deleteFile,
   getFileSha,
+  getImageIndex,
   getJson,
   getImage,
   putImage,
@@ -26,7 +27,7 @@ import {
   verifyRepo,
   withTimeout,
 } from './github';
-import { cachedPhoto, forgetPhoto } from './photo';
+import { cachedPhoto, forgetPhoto, isPhotoUploaded, markPhotosUploaded } from './photo';
 
 interface SyncValue {
   /** 'off' 未连接 · 'idle' 待同步 · 'busy' 同步中 · 'ok' 已同步 · 'err' 失败 */
@@ -61,7 +62,11 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   const lastPushed = useRef<{ recipes?: string; orders?: string; profiles?: string }>({});
   /** 已推送到的 rev；与 store.rev 不一致 = 有本地改动待推 */
   const pushedRev = useRef(0);
-  /** 已经确认仓库里有（或本机没有字节、不需要管）的照片路径 —— 别每次推送都重扫一遍 */
+  /**
+   * 这一次会话里已确认「仓库里有」的照片路径。
+   * 真源是 photo.ts 里那份**持久化**的「已上传」标记（`isPhotoUploaded`）——
+   * 内存这份只是给「Quota 写不进去」兜底，重启后靠持久化那份接着免检。
+   */
   const knownImages = useRef<Set<string>>(new Set());
   /**
    * 上一轮菜谱引用到的照片：多出来的就是孤儿文件（删菜谱 / 换图留下的），顺手清掉。
@@ -115,12 +120,13 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       if (pulledOrders) lastPushed.current.orders = JSON.stringify(pulledOrders);
       if (pulledProfiles) lastPushed.current.profiles = JSON.stringify(pulledProfiles);
 
-      /* 拉下来的菜谱引用的照片就当仓库里已经有了（它们本来就是从仓库读出来的），
-         免得下一次推送又逐张去核对 / 重传 */
+      /* 拉下来的菜谱引用的照片**不当作「仓库里一定有了」** —— recipes.json 里写着路径
+         不等于那个文件真的在（历史上就出现过「菜谱有 3 条、图只有 2 张」）。是不是真有，
+         推送时用一次 images/ 目录清单核对（很便宜），该补传的补传。 */
       if (pulledRecipes) {
-        const paths = new Set(pulledRecipes.map((r) => r.image).filter((p): p is string => Boolean(p)));
-        paths.forEach((p) => knownImages.current.add(p));
-        prevImages.current = paths;
+        prevImages.current = new Set(
+          pulledRecipes.map((r) => r.image).filter((p): p is string => Boolean(p)),
+        );
       }
 
       if (!rf && !of && !pf) return 'empty';
@@ -144,38 +150,93 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   /* ─── 照片：一张图一个文件 ───────────────────
      菜谱 JSON 里只记路径（`images/r_xxx.jpg`），图本身单独传。
      先传图再推 JSON —— 否则对方拉到一条引用着还不存在的图片的菜谱。
-     本机没有字节的图（对方传的）不动它，删掉菜谱留下的孤儿图顺手清掉。 */
+     本机没有字节的图（对方传的）不动它，删掉菜谱留下的孤儿图顺手清掉。
+
+     要紧的一条：**别为了「仓库里有没有这张图」去下载整张图**。contents 接口回的
+     正文就是整张图的 base64，几张手机截图就是好几 MB —— 手机上一次同步能拖到
+     超时（表现为「一直同步失败，重试又好了」，因为重试时内存里已经记下了）。
+     这里改成一次 Git Trees 请求拿 `images/` 清单（只有路径 + sha）。 */
   const pushImages = useCallback(async (cfg: SyncConfig, recipes: RemoteRecipes['recipes']): Promise<void> => {
     const wanted = new Set(recipes.map((r) => r.image).filter((p): p is string => Boolean(p)));
     const stale = [...prevImages.current].filter((p) => !wanted.has(p));
     if (!wanted.size && !stale.length) return;
 
+    /* 这张图确认在仓库里了：内存记一份，同时写进本机缓存（重启后也不用再核对） */
+    const known = (path: string) => knownImages.current.has(path) || isPhotoUploaded(path);
+    const markKnown = (paths: string[]) => {
+      paths.forEach((p) => knownImages.current.add(p));
+      markPhotosUploaded(paths);
+    };
+    /** 本机没有字节、清单里也没有：两边都没有，这张图是真丢了，得让用户知道 */
+    const lost: string[] = [];
+
     /* 图比 JSON 大得多，单独给一个更宽的超时（传一张 800 KB 的图可能要几秒） */
-    const { signal, done } = withTimeout(30000);
+    const { signal, done } = withTimeout(45000);
     try {
+      /* 要不要拉清单：还有没核对过的图（本机有字节的，或本机没有但仓库里可能有的），
+         或者有要删的孤儿图（删之前得有它的 sha）。都没有就别多发这一个请求 */
+      const unchecked = [...wanted].filter((p) => !known(p));
+      const needIndex = stale.length > 0 || unchecked.length > 0;
+      let index: Map<string, string> | null = null;
+      if (needIndex) {
+        try {
+          index = await getImageIndex(cfg.repo, cfg.branch, cfg.token, signal);
+        } catch {
+          /* 拉不到清单（老仓库 / 权限 / 截断）就退回逐张问的老办法，别让同步整个失败 */
+          index = null;
+        }
+      }
+
       for (const path of wanted) {
-        if (knownImages.current.has(path)) continue;
+        if (known(path)) continue;
         const dataUrl = cachedPhoto(path);
-        /* 本机没存到这张图的字节：不去猜仓库里有没有，标记一下别再检查 */
         if (!dataUrl) {
-          knownImages.current.add(path);
+          /* 本机没有字节（对方的图，或本机缓存被清过）：仓库里有就认了，
+             两边都没有就是真丢了 —— 别悄悄带过，菜谱里还指着它 */
+          if (index) {
+            if (index.has(path)) {
+              imageShas.current[path] = index.get(path) as string;
+              markKnown([path]);
+            } else {
+              lost.push(path);
+            }
+          } else {
+            const exists = await getImage(cfg.repo, path, cfg.branch, cfg.token, signal);
+            if (exists) {
+              imageShas.current[path] = exists.sha;
+              markKnown([path]);
+            } else {
+              lost.push(path);
+            }
+          }
           continue;
         }
-        const exists = await getImage(cfg.repo, path, cfg.branch, cfg.token, signal);
-        if (exists) {
-          imageShas.current[path] = exists.sha;
-          knownImages.current.add(path);
-          continue;
+        if (index) {
+          const sha = index.get(path);
+          if (sha) {
+            /* 仓库里已经有了（多半是上次会话传的）：记下 sha 就行，别再传一遍 */
+            imageShas.current[path] = sha;
+            markKnown([path]);
+            continue;
+          }
+        } else {
+          const exists = await getImage(cfg.repo, path, cfg.branch, cfg.token, signal);
+          if (exists) {
+            imageShas.current[path] = exists.sha;
+            markKnown([path]);
+            continue;
+          }
         }
         imageShas.current[path] = await putImage(
           cfg.repo, path, cfg.branch, cfg.token, dataUrl,
           `记食本：上传菜谱图片 ${path}`, undefined, signal,
         );
-        knownImages.current.add(path);
+        markKnown([path]);
       }
 
       for (const path of stale) {
         const sha = imageShas.current[path]
+          ?? index?.get(path)
           ?? await getFileSha(cfg.repo, path, cfg.branch, cfg.token, signal);
         if (!sha) continue;
         await deleteFile(cfg.repo, path, cfg.branch, cfg.token, sha, `记食本：删除菜谱图片 ${path}`, signal);
@@ -185,6 +246,12 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       done();
     }
     prevImages.current = wanted;
+    /* 两边都没有的图：写进同步日志 + 说一句，别让用户以为都传上去了 */
+    if (lost.length) {
+      const text = `有 ${lost.length} 张照片本机和仓库里都没有（菜谱还在，图要重新传）：${lost.join('、')}`;
+      storeRef.current.logSync('err', text);
+      toast(text, false);
+    }
   }, []);
 
   /* ─── 推送 ─────────────────────────────────── */

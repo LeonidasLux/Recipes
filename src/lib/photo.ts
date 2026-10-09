@@ -23,8 +23,10 @@ const MAX_SIDE = 1800;
 const QUALITIES = [0.85, 0.7, 0.55];
 
 /** 本机缓存的总量上限（localStorage 一般只有 5 MB，留出主库的位置） */
-const CACHE_KEY = 'jishiben-photos-v1';
-const CACHE_LIMIT_BYTES = 3_000_000;
+const CACHE_KEY = 'jishiben-photos-v2';
+/** v1 只存 data URL、没有「已上传」标记，读进来当「没传过」处理（宁可多留，不可弄丢） */
+const CACHE_KEY_V1 = 'jishiben-photos-v1';
+const CACHE_LIMIT_BYTES = 3_500_000;
 
 /* ─── data URL 小工具（纯函数，好测）───────────── */
 
@@ -148,17 +150,40 @@ export async function photoToDataUrl(file: Blob): Promise<string> {
 
 /* ─── 本机缓存（只存本机，不进仓库）──────────── */
 
-let cache: Map<string, string> | null = null;
+/**
+ * 缓存里的一条：图的字节 + 「仓库里已经有这张图了吗」。
+ *
+ * 这个标记是**淘汰顺序的依据**：已上传的丢了也能从仓库取回来，没上传的丢了就真没了
+ * （老版本正是按「谁最老丢谁」淘汰 —— 几张截图就把还没传上去的那张挤掉了，
+ * 仓库里于是少一张图，而菜谱里还指着它）。
+ */
+interface PhotoEntry {
+  /** data URL */
+  d: string;
+  /** 已确认仓库里有这张图 */
+  up: boolean;
+}
 
-function loadCache(): Map<string, string> {
+let cache: Map<string, PhotoEntry> | null = null;
+
+function loadCache(): Map<string, PhotoEntry> {
   if (cache) return cache;
   cache = new Map();
   try {
     const raw = localStorage.getItem(CACHE_KEY);
     if (raw) {
-      const obj = JSON.parse(raw) as Record<string, string>;
+      const obj = JSON.parse(raw) as Record<string, Partial<PhotoEntry>>;
       for (const [k, v] of Object.entries(obj ?? {})) {
-        if (typeof v === 'string' && isPhotoDataUrl(v)) cache.set(k, v);
+        if (v && typeof v.d === 'string' && isPhotoDataUrl(v.d)) cache.set(k, { d: v.d, up: v.up === true });
+      }
+    } else {
+      /* 老版本（v1）只有 data URL：当成「没传过」，先保住它们 */
+      const old = localStorage.getItem(CACHE_KEY_V1);
+      if (old) {
+        const obj = JSON.parse(old) as Record<string, string>;
+        for (const [k, v] of Object.entries(obj ?? {})) {
+          if (typeof v === 'string' && isPhotoDataUrl(v)) cache.set(k, { d: v, up: false });
+        }
       }
     }
   } catch {
@@ -167,19 +192,26 @@ function loadCache(): Map<string, string> {
   return cache;
 }
 
-/** 把缓存写回 localStorage；超配额就丢掉最早的那几张再试 */
+/**
+ * 写回 localStorage：**先保「还没上传」的**（那些丢不起），再放「仓库里已有」的。
+ * 同一档里从新到旧收，放不下的老图就不留了（要用时再从仓库取回来）。
+ */
 function persistCache(): void {
-  const entries = [...(cache ?? new Map<string, string>())];
+  const entries = [...(cache ?? new Map<string, PhotoEntry>())];
+  const kept = new Map<string, PhotoEntry>();
   let used = 0;
-  const kept: Array<[string, string]> = [];
-  /* 从新到旧收，超过上限的老图就不留了（下回用到再取） */
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const [k, v] = entries[i];
-    const size = dataUrlBytes(v);
-    if (used + size > CACHE_LIMIT_BYTES) continue;
-    used += size;
-    kept.unshift([k, v]);
-  }
+  const take = (onlyUploaded: boolean) => {
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const [k, v] = entries[i];
+      if (v.up !== onlyUploaded || kept.has(k)) continue;
+      const size = dataUrlBytes(v.d);
+      if (used + size > CACHE_LIMIT_BYTES) continue;
+      used += size;
+      kept.set(k, v);
+    }
+  };
+  take(false); /* 第一轮：还没传上去的（丢不起） */
+  take(true); /* 第二轮：仓库里已经有的（丢了还能取） */
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify(Object.fromEntries(kept)));
   } catch {
@@ -194,7 +226,13 @@ function persistCache(): void {
 /** 本机缓存里的这张图（没有就返回 null，调用方决定要不要去仓库取） */
 export function cachedPhoto(path: string): string | null {
   if (!path) return null;
-  return loadCache().get(path) ?? null;
+  return loadCache().get(path)?.d ?? null;
+}
+
+/** 这张图是不是已经确认在仓库里了（确认过 = 本机这份丢了也不要紧） */
+export function isPhotoUploaded(path: string): boolean {
+  if (!path) return false;
+  return loadCache().get(path)?.up === true;
 }
 
 /** 记下一张图的字节（新增 / 换图 / 从仓库拉回来时都走这里） */
@@ -202,8 +240,21 @@ export function rememberPhoto(path: string, dataUrl: string): void {
   if (!path || !isPhotoDataUrl(dataUrl)) return;
   const c = loadCache();
   c.delete(path);
-  c.set(path, dataUrl);
+  c.set(path, { d: dataUrl, up: false });
   persistCache();
+}
+
+/** 记下「这些图仓库里已经有了」：之后本机缓存不够用时，优先淘汰它们 */
+export function markPhotosUploaded(paths: string[]): void {
+  const c = loadCache();
+  let changed = false;
+  for (const p of paths) {
+    const e = c.get(p);
+    if (!e || e.up) continue;
+    c.set(p, { d: e.d, up: true });
+    changed = true;
+  }
+  if (changed) persistCache();
 }
 
 /** 这张图不要了（删除菜谱时顺手清掉） */

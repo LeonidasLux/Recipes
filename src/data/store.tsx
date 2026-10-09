@@ -140,6 +140,8 @@ export interface StoreValue {
   updateRecipe(id: string, patch: { title?: string; url?: string; image?: string; steps?: string; note?: string }): void;
   /** 删菜谱（内容改动，会触发推送）；订单里的菜名是快照，不受影响 */
   deleteRecipe(id: string): void;
+  /** 一次删多道菜谱（菜谱库多选删除用）：一次提交、一条日志 */
+  deleteRecipes(ids: string[]): void;
   /** 下单（内容改动，会触发推送）；单里的菜各记一次「点单次数」 */
   addOrder(input: { meal: Meal; items: OrderItem[]; note?: string }): Order;
   /** 删订单（内容改动，会触发推送）；点单 / 掌勺两边都会同步消失，单里菜谱的点单次数退回 */
@@ -168,6 +170,11 @@ export interface StoreValue {
     profiles?: Profiles;
     config?: SyncConfig;
   }): void;
+  /**
+   * 往本机同步日志里写一条（只留本机、不触发推送）。
+   * 给同步引擎留痕用 —— 比如「有张照片本机和仓库里都没有」这种要让人看见的事。
+   */
+  logSync(kind: LogEntry['kind'], text: string): void;
   setSyncState(status: SyncStatus, error?: string | null, at?: string): void;
 }
 
@@ -203,6 +210,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<StoreValue>(() => {
+    /**
+     * 删菜谱：单条与多选共用这一段 —— 一次提交、一条日志。
+     * 多选删除不该留下 N 条「已删除菜谱」，同步日志是给人看的，不是流水账。
+     */
+    const removeRecipes = (ids: string[]) => {
+      const gone = new Set(ids);
+      if (!gone.size) return;
+      commit((db) => {
+        const names = db.recipes.filter((x) => gone.has(x.id)).map((x) => x.title);
+        if (!names.length) return db;
+        db.recipes = db.recipes.filter((x) => !gone.has(x.id));
+        pushLog(
+          db,
+          'ok',
+          names.length === 1
+            ? `已删除菜谱：${names[0]}`
+            : `已删除 ${names.length} 道菜谱${names.length <= 3 ? `：${names.join('、')}` : ''}`,
+        );
+        return db;
+      });
+    };
+
     return {
       db: state.db,
       rev: state.rev,
@@ -250,14 +279,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         });
       },
 
+      deleteRecipes: removeRecipes,
+
       deleteRecipe(id) {
-        commit((db) => {
-          const r = db.recipes.find((x) => x.id === id);
-          if (!r) return db;
-          db.recipes = db.recipes.filter((x) => x.id !== id);
-          pushLog(db, 'ok', `已删除菜谱：${r.title}`);
-          return db;
-        });
+        removeRecipes([id]);
       },
 
       addOrder(input) {
@@ -446,6 +471,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
       setSyncState(status, error = null, at) {
         dispatch({ type: 'sync', status, error, at });
+      },
+
+      logSync(kind, text) {
+        commitSilent((db) => {
+          pushLog(db, kind, text);
+          return db;
+        });
       },
     };
   }, [state.db, state.rev, state.sync, commit, commitSilent, pushLog]);

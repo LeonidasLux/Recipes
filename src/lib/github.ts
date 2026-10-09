@@ -256,6 +256,46 @@ export async function putImage(
   return body.content?.sha ?? '';
 }
 
+/* ─── 仓库里的 images/ 清单 ───────────────────────
+   「这张图仓库里有没有」以前是逐张 getImage 去问的 —— 而 contents 接口回的
+   正文就是**整张图的 base64**，几张手机截图就是好几 MB，手机上一次同步能拖到
+   超时。改用 Git Trees 接口：一次请求拿到整棵树的路径 + blob sha，
+   不用下载图片本身，顺带还给了删图要用的 sha。 */
+
+/**
+ * 列出仓库里 `images/` 下的文件：`路径 → blob sha`。
+ *
+ * @returns 路径 → sha；仓库还没有提交（空仓库）时返回空表
+ */
+export async function getImageIndex(
+  repo: string,
+  branch: string,
+  token: string,
+  signal?: AbortSignal,
+): Promise<Map<string, string>> {
+  const url = `${API}/repos/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`;
+  let res: Response;
+  try {
+    res = await fetch(url, { ...NO_CACHE, headers: authHeaders(token), signal });
+  } catch (e) {
+    throw networkError(e);
+  }
+  /* 空仓库（还没有任何提交）没有树：当成「一张图都没有」，不是错误 */
+  if (res.status === 404 || res.status === 409) return new Map();
+  if (!res.ok) throw await toGithubError(res, repo);
+
+  const body = (await res.json()) as {
+    tree?: Array<{ path?: string; type?: string; sha?: string }>;
+  };
+  const index = new Map<string, string>();
+  for (const node of body.tree ?? []) {
+    if (node?.type === 'blob' && typeof node.path === 'string' && node.path.startsWith(`${IMAGES_DIR}/`) && node.sha) {
+      index.set(node.path, node.sha);
+    }
+  }
+  return index;
+}
+
 /** 读一个文件的 sha（删图 / 覆盖前要用）；文件不存在返回 null */
 export async function getFileSha(
   repo: string,
