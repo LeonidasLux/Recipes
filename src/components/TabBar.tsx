@@ -26,13 +26,13 @@ export function usePreviewState(): 'populated' | 'empty' | 'error' {
 }
 
 /**
- * 「设置」格图标自带同步状态：已同步（ok / idle）绿、失败（err）红、
- * 同步中（busy）高亮 + 闪烁 + 转圈，未连接保持原色。
+ * 「设置」格图标与菜谱库右上角的同步按钮都自带同步状态：已同步（ok / idle）绿、
+ * 失败（err）红、同步中（busy）高亮 + 闪烁 + 转圈，未连接保持原色。
  *
- * 同步状态只在这枚图标和设置页里体现 —— 其他屏不再挂顶栏 pill，
+ * 同步状态只在这两枚图标和设置页里体现 —— 点单 / 掌勺屏不挂顶栏 pill，
  * 免得点单、掌勺的时候被同步信息分心，但出了问题又能一眼看见。
  */
-function syncTone(connected: boolean, status: SyncStatus): string {
+export function syncTone(connected: boolean, status: SyncStatus): string {
   if (!connected) return '';
   if (status === 'err') return ' sync-err';
   /* 同步中：点第二格 / 切角色会顺手同步一次，靠这枚图标转起来告诉用户「在同步」 */

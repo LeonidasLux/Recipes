@@ -28,7 +28,7 @@ export default function RecipeDetail() {
   const [draft, setDraft] = useState({ title: '', url: '', image: '', steps: '', note: '' });
 
   /* 照片：本机缓存优先，没有就去仓库取一张（取到了写回缓存） */
-  const photo = useRecipePhoto(recipe?.image, { fetch: true });
+  const { src: photo } = useRecipePhoto(recipe?.image, { fetch: true });
 
   /* 大图是遮罩：手机返回键先关它，而不是退出详情页 */
   useBackClose(zoom, () => setZoom(false));

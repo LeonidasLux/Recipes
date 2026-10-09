@@ -170,17 +170,25 @@ export function parseShare(text: string): ParsedShare {
 /**
  * 抓不到真封面（要服务端），但本地有几张卡通插画。
  * 按标题里的关键词配一张——猜错也只是张示意图，用户可以不管。
+ *
+ * **顺序有意义**：具体菜排在前面，最后几行是「大类兜底」（饺子 / 汤 / 饭 / 炒）——
+ * 常见菜名基本都能落到一张像样的图上，只有真认不出来的才是空串（用标题首字占位）。
  */
 const ART_KEYWORDS: Array<[RegExp, string]> = [
-  [/番茄|西红柿|牛腩|炖牛肉/, 'tomato-beef.svg'],
-  [/虾|虾仁/, 'garlic-shrimp.svg'],
-  [/鸡腿|卤味|卤/, 'braised-leg.svg'],
-  [/椰子鸡|椰子|火锅/, 'coconut-chicken.svg'],
-  [/西米|西米露|杨枝甘露/, 'mango-sago.svg'],
-  [/芒果|糯米饭/, 'mango-sticky-rice.svg'],
-  [/三杯鸡|九层塔|台式/, 'three-cup-chicken.svg'],
-  [/蛋糕|芝士|巴斯克|烘焙/, 'basque-cake.svg'],
-  [/面|拌面|葱油|拉面|面条/, 'scallion-noodle.svg'],
+  [/番茄|西红柿|牛腩|炖牛肉|罗宋汤/, 'tomato-beef.svg'],
+  [/虾/, 'garlic-shrimp.svg'],
+  [/卤|鸡腿|鸡爪|猪蹄/, 'braised-leg.svg'],
+  [/椰子鸡|椰子|火锅|打边炉/, 'coconut-chicken.svg'],
+  [/西米|杨枝甘露/, 'mango-sago.svg'],
+  [/芒果|糯米/, 'mango-sticky-rice.svg'],
+  [/三杯|九层塔|台式/, 'three-cup-chicken.svg'],
+  [/蛋糕|芝士|巴斯克|烘焙|面包|吐司|蛋挞/, 'basque-cake.svg'],
+  [/面|粉|米线|拉面|葱油/, 'scallion-noodle.svg'],
+  /* ─── 下面是大类兜底：上面那些具体菜都没命中时，至少给张像样的示意图 ─── */
+  [/饺子|水饺|云吞|馄饨|包子|烧麦|馅/, 'dumpling.svg'],
+  [/汤|羹|粥|炖/, 'soup.svg'],
+  [/饭|米|盖浇|煲仔|炒饭/, 'rice-bowl.svg'],
+  [/炒|鸡丁|肉丝|肉片|青椒|土豆|茄子|豆角|干煸|回锅|家常|小炒/, 'stir-fry.svg'],
 ];
 
 export function guessArt(title: string): string {

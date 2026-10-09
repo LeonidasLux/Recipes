@@ -9,6 +9,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { existsSync, readFileSync } from 'node:fs';
+import { resolve as resolvePath } from 'node:path';
 import { applyVersion, resolveVersion } from './set-version.mjs';
 import { AppShell } from '../src/App';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
@@ -72,7 +73,9 @@ import {
   markPhotosUploaded,
   photoToDataUrl,
   rememberPhoto,
+  subscribePhotoCache,
 } from '../src/lib/photo';
+import { requestPhoto, resetPhotoQueue } from '../src/lib/photoQueue';
 import {
   artUrl,
   dateKey,
@@ -380,6 +383,10 @@ interface FakeGithub {
   aiBodies: string[];
   /** 每次 fetch 的 cache 选项 —— 用来验证读仓库绕过了浏览器 HTTP 缓存 */
   fetches: Array<{ method: string; path: string; cache?: string }>;
+  /** 读图（GET /contents/images/…）的调用次数，按发生顺序 */
+  imageReads(): string[];
+  /** 同时压在手上的读图请求最多几个 —— 验证取图队列的并发上限 */
+  maxImageConcurrency(): number;
   restore(): void;
 }
 
@@ -409,6 +416,11 @@ function installFakeGithub(opts: {
   aiDelayMs?: number;
   /** 让 Git Trees（读 images/ 清单）失败，用来测退回「逐张问」的老路 */
   treeFails?: boolean;
+  /**
+   * 读一张图要花多久（虚拟时钟下的毫秒数）：默认立刻返回。
+   * 取图队列的并发上限 / 插队顺序要能观察到「同时还在跑」才有得断言。
+   */
+  imageDelayMs?: number;
 }): FakeGithub {
   const calls: string[] = [];
   const puts: Array<{ path: string; sha?: string }> = [];
@@ -418,6 +430,10 @@ function installFakeGithub(opts: {
   const fetches: Array<{ method: string; path: string; cache?: string }> = [];
   /** 识图请求的正文（断言「一次一张图」用） */
   const aiBodies: string[] = [];
+  /** 读图的调用顺序 + 当前压在手上的读图数（并发上限断言用） */
+  const imageReadCalls: string[] = [];
+  let inFlightImages = 0;
+  let peakImages = 0;
   let aiCount = 0;
   let putCount = 0;
   let remoteChanged = false;
@@ -514,6 +530,17 @@ function installFakeGithub(opts: {
       if (method === 'GET') {
         if (remoteChanged && opts.getFailAfterConflict) return json({ message: 'Server Error' }, 500);
         if (shaState[name] === undefined) return json({ message: 'Not Found' }, 404);
+        /* 读图：记下调用顺序与「同时有几个在读」（取图队列的并发上限靠它断言） */
+        if (name.startsWith('images/')) {
+          imageReadCalls.push(name);
+          inFlightImages++;
+          peakImages = Math.max(peakImages, inFlightImages);
+          try {
+            if (opts.imageDelayMs) await new Promise((r) => setTimeout(r, opts.imageDelayMs));
+          } finally {
+            inFlightImages--;
+          }
+        }
         /* 图片：正文就是 base64 本身，不再套一层 JSON */
         return json({
           sha: shaState[name],
@@ -533,10 +560,69 @@ function installFakeGithub(opts: {
     return json({ message: 'unexpected call' }, 500);
   }) as typeof fetch;
 
-  return { calls, puts, putBodies, deletes, deleteShas, aiBodies, fetches, restore: () => void (globalThis.fetch = prev) };
+  return {
+    calls,
+    puts,
+    putBodies,
+    deletes,
+    deleteShas,
+    aiBodies,
+    fetches,
+    imageReads: () => [...imageReadCalls],
+    maxImageConcurrency: () => peakImages,
+    restore: () => void (globalThis.fetch = prev),
+  };
 }
 
 const FAKE_CFG = { repo: 'owner/repo', token: 'ghp_012345678901234567890123456789012345' };
+
+/* ─── 假的 IntersectionObserver ─────────────────
+   真机上列表缩略图是「滚到眼前才去仓库取图」的。jsdom 没有这个 API，
+   默认那条分支会退化成「直接取」—— 想验证「没滚到就不拉图」，得把观察者接管过来。 */
+function installFakeIntersectionObserver() {
+  interface FakeObserver {
+    cb: (entries: Array<{ target: Element; isIntersecting: boolean }>) => void;
+    els: Element[];
+    observe(el: Element): void;
+    unobserve(el: Element): void;
+    disconnect(): void;
+    takeRecords(): unknown[];
+  }
+  const observers: FakeObserver[] = [];
+  class FakeIO implements FakeObserver {
+    cb: FakeObserver['cb'];
+    els: Element[] = [];
+    constructor(cb: FakeObserver['cb']) {
+      this.cb = cb;
+      observers.push(this);
+    }
+    observe(el: Element) {
+      this.els.push(el);
+    }
+    unobserve() {}
+    disconnect() {}
+    takeRecords() {
+      return [];
+    }
+  }
+  const prev = (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver;
+  (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = FakeIO;
+  return {
+    /** 观察者数量（一屏几十条菜谱，等图的时候才知道有几个在等） */
+    count: () => observers.length,
+    /** 让第 n 个被观察的元素「滚进视野」 */
+    rollIn(n = 0): Element | null {
+      for (const o of observers) {
+        if (o.els.length === 0) continue;
+        const el = o.els[n] ?? o.els[0];
+        o.cb([{ target: el, isIntersecting: true }]);
+        return el;
+      }
+      return null;
+    },
+    restore: () => void ((globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = prev),
+  };
+}
 
 /* ─── github.ts 单元测试的通用桩 ─── */
 
@@ -1456,28 +1542,43 @@ async function interactionChecks() {
     ds.restore();
   }
 
-  console.log('\n[交互 · 详情页看照片：缓存优先，没缓存才去仓库取]');
+  console.log('\n[交互 · 照片：列表缩略图自己去仓库取，取回来就缓存]');
   localStorage.clear();
+  resetPhotoQueue();
+  forgetPhoto('images/r1.png');
   {
-    /* 另一台手机传的图：本机只有路径，没有字节 */
+    /* 另一台手机传的图 / 刚装好的 App：本机只有路径，没有字节 */
     const gh = installFakeGithub({
       images: { 'images/r1.png': SHOT_B64 },
     });
     useDb((db) => {
       db.recipes[0].image = 'images/r1.png';
     });
+    const imgReads = () => gh.imageReads().filter((p) => p === 'images/r1.png');
+
     const m = await mount('/library');
     check(m.html().includes('番茄炖牛腩'), '菜谱照常列出来');
-    check(!gh.calls.some((c) => c.includes('images/')), '★ 列表不为了缩略图逐张拉图（省流量）');
-    check(!m.html().includes(SHOT_DATA_URL), '没下载前缩略图先用本地插画');
-    await m.close();
+    await m.wait(60);
+    check(imgReads().length === 1, '★ 列表缩略图自己去仓库取一张（新装 / 换机也能看到照片）', gh.imageReads().join(' | '));
+    check(m.html().includes(SHOT_DATA_URL), '★ 取回来缩略图直接换成照片（不用先点进详情页）');
+    check(cachedPhoto('images/r1.png') === SHOT_DATA_URL, '★ 取回来顺手写进本机缓存（之后离线也能看）');
 
+    /* 再进一次列表：已经缓存过，不再重复拉图 */
+    await m.close();
+    const cachedReads = gh.imageReads().length;
+    const m3 = await mount('/library');
+    await m3.wait(60);
+    check(m3.html().includes(SHOT_DATA_URL), '★ 缓存过之后列表缩略图直接用照片');
+    check(gh.imageReads().length === cachedReads, '不再重复拉图', String(gh.imageReads().length));
+    await m3.close();
+
+    /* 详情页那条路不变：没缓存时也去仓库取一张 */
+    const beforeDetail = imgReads().length;
+    forgetPhoto('images/r1.png');
+    resetPhotoQueue();
     const m2 = await mount('/recipe/r1');
     await m2.wait(300);
-    check(
-      gh.calls.some((c) => c.startsWith('GET') && c.includes('images/r1.png')),
-      '★ 进详情页去仓库取这张照片',
-    );
+    check(imgReads().length === beforeDetail + 1, '★ 详情页没缓存时也去仓库取这张照片', gh.imageReads().join(' | '));
     check(m2.html().includes(SHOT_DATA_URL), '★ 详情页把照片显示出来');
     check(cachedPhoto('images/r1.png') === SHOT_DATA_URL, '★ 取回来顺手写进本机缓存（之后离线也能看）');
 
@@ -1500,12 +1601,43 @@ async function interactionChecks() {
     check(m2.$('.photoview') === null, 'Esc 也能关掉');
     await m2.close();
 
-    /* 已经缓存过：再进列表就带上照片，且不再发请求 */
-    const before = gh.calls.length;
-    const m3 = await mount('/library');
-    check(m3.html().includes(SHOT_DATA_URL), '★ 缓存过之后列表缩略图直接用照片');
-    check(gh.calls.length === before, '不再重复拉图');
-    await m3.close();
+    gh.restore();
+  }
+
+  console.log('\n[交互 · 缩略图滚到眼前才去仓库取图（省流量）]');
+  localStorage.clear();
+  resetPhotoQueue();
+  forgetPhoto('images/r2.png');
+  {
+    /* 真机上有 IntersectionObserver：一屏几十条菜谱，只有滚到眼前的才值得拉一张图 */
+    const io = installFakeIntersectionObserver();
+    const gh = installFakeGithub({ images: { 'images/r2.png': SHOT_B64 } });
+    useDb((db) => {
+      db.recipes[1].image = 'images/r2.png';
+    });
+    const m = await mount('/library');
+    await m.wait(60);
+    check(io.count() > 0, '★ 还没照片的缩略图挂上了「进视野」观察', String(io.count()));
+    check(gh.imageReads().length === 0, '★ 还没滚到的不拉图（省流量）', gh.imageReads().join(' | '));
+    check(!m.html().includes(SHOT_DATA_URL), '先用插画 / 首字占位');
+
+    check(io.rollIn() !== null, '有一条缩略图滚进了视野');
+    await m.wait(60);
+    check(
+      gh.imageReads().join(' | ') === 'images/r2.png',
+      '★ 只取滚到眼前的那一张',
+      gh.imageReads().join(' | '),
+    );
+    check(m.html().includes(SHOT_DATA_URL), '★ 取回来就换成照片');
+
+    /* 走出去再回来（重新挂载）不会因为同一张图再取一遍 */
+    await m.close();
+    const reads = gh.imageReads().length;
+    const m2 = await mount('/library');
+    await m2.wait(60);
+    check(gh.imageReads().length === reads, '缓存过的图不会再取一遍', String(gh.imageReads().length));
+    await m2.close();
+    io.restore();
     gh.restore();
   }
 
@@ -2176,7 +2308,8 @@ function parseChecks() {
   check(toDishName('蒜香黄油虾仁') === '蒜香黄油虾仁', '本来就干净的菜名不动它');
   check(toDishName('台式三杯鸡') === '台式三杯鸡', '带「台式」前缀的菜名不会被误剥');
 
-  /* 封面猜测只是示意，别猜错得太离谱就行 */
+  /* 封面猜测只是示意，别猜错得太离谱就行。
+     后 8 条是大类兜底（饺子 / 汤 / 饭 / 炒）—— 这几道以前都掉进「标题首字」。 */
   const art = [
     ['番茄炖牛腩', 'tomato-beef.svg'],
     ['蒜香黄油虾仁', 'garlic-shrimp.svg'],
@@ -2187,10 +2320,20 @@ function parseChecks() {
     ['巴斯克芝士蛋糕', 'basque-cake.svg'],
     ['葱油拌面', 'scallion-noodle.svg'],
     ['芒果糯米饭', 'mango-sticky-rice.svg'],
+    ['宫保鸡丁', 'stir-fry.svg'],
+    ['青椒炒肉丝', 'stir-fry.svg'],
+    ['猪肉白菜饺子馅', 'dumpling.svg'],
+    ['鲜肉小馄饨', 'dumpling.svg'],
+    ['锅巴洋芋饭', 'rice-bowl.svg'],
+    ['蛋炒饭', 'rice-bowl.svg'],
+    ['紫菜蛋花汤', 'soup.svg'],
+    ['皮蛋瘦肉粥', 'soup.svg'],
     ['一个没有关键词的怪名字', ''],
   ] as const;
   for (const [title, want] of art) {
     check(guessArt(title) === want, `封面猜测 · ${title} → ${want || '无（用首字占位）'}`, `实际 ${guessArt(title) || '无'}`);
+    /* 猜出来的插画得真的摆在 public/art 里：文件名打错时当场露馅 */
+    if (want) check(existsSync(resolvePath('public/art', want)), `插画文件在 · ${want}`);
   }
 }
 
@@ -2687,6 +2830,76 @@ async function photoChecks() {
     forgetPhoto('images/new-pending.png');
   }
 
+  console.log('\n[照片 · 取图队列]');
+  {
+    /* 列表里几十条菜谱不能一次全发出去：队列一次最多两路、已缓存的不重取、
+       取不到的先冷却一会儿（离线时别每次重渲染都往仓库发一遍）。 */
+    const qcfg = { repo: FAKE_CFG.repo, branch: 'main', token: FAKE_CFG.token };
+    const qpaths = ['images/q1.png', 'images/q2.png', 'images/q3.png', 'images/q4.png', 'images/qp.png'];
+    localStorage.clear();
+    resetPhotoQueue();
+    for (const p of qpaths) forgetPhoto(p);
+    const gh = installFakeGithub({
+      images: Object.fromEntries(qpaths.map((p) => [p, SHOT_B64])),
+      imageDelayMs: 1000,
+    });
+
+    /* 已经缓存的 / 没连仓库的 / 空路径：都不该排队 */
+    rememberPhoto('images/q1.png', SHOT_DATA_URL);
+    requestPhoto('images/q1.png', qcfg);
+    requestPhoto('images/q2.png', { repo: '', branch: 'main', token: '' });
+    requestPhoto('', qcfg);
+    await settle(50);
+    check(gh.imageReads().length === 0, '★ 已缓存 / 没连仓库 / 空路径都不去取图', gh.imageReads().join(' | '));
+
+    /* 正经取一张：写进缓存、按「已上传」记账 */
+    forgetPhoto('images/q1.png');
+    requestPhoto('images/q1.png', qcfg);
+    await settle(1500);
+    check(cachedPhoto('images/q1.png') === SHOT_DATA_URL, '★ 队列取回来的图写进本机缓存');
+    check(isPhotoUploaded('images/q1.png'), '★ 从仓库取到的图按「已上传」记账（缓存不够时可以先淘汰它）');
+
+    /* 已经缓存的再排一次：不重复取 */
+    const cachedReads = gh.imageReads().length;
+    requestPhoto('images/q1.png', qcfg);
+    await settle(50);
+    check(gh.imageReads().length === cachedReads, '★ 已经缓存的图不再取第二遍', gh.imageReads().join(' | '));
+
+    /* 并发上限 + 插队：一次排 4 张，只放 2 路出去 */
+    const waveStart = gh.imageReads().length;
+    for (const p of ['images/q2.png', 'images/q3.png', 'images/q4.png']) requestPhoto(p, qcfg);
+    await settle(100);
+    check(
+      gh.imageReads().length - waveStart === 2,
+      '★ 一次最多两路并行，其余排队（不把手机流量一次性打满）',
+      gh.imageReads().join(' | '),
+    );
+    requestPhoto('images/qp.png', qcfg, { priority: true }); /* 详情页那种：插到排队的前面 */
+    await settle(4000);
+    check(gh.maxImageConcurrency() === 2, '★ 全程并发不超过 2', String(gh.maxImageConcurrency()));
+    check(
+      gh.imageReads().join(' | ') ===
+        ['images/q1.png', 'images/q2.png', 'images/q3.png', 'images/qp.png', 'images/q4.png'].join(' | '),
+      '★ 插队的那张排在还没开跑的 q4 前面',
+      gh.imageReads().join(' | '),
+    );
+    check(qpaths.every((p) => cachedPhoto(p) === SHOT_DATA_URL), '排队的几张最后都取回来了');
+
+    /* 取不到（仓库里确实没有）：不马上重试 */
+    const missing = () => gh.calls.filter((c) => c.includes('/contents/images/gone.png')).length;
+    requestPhoto('images/gone.png', qcfg);
+    await settle(200);
+    const missReads = missing();
+    check(missReads === 1, '★ 仓库里没有的图只问一次', String(missReads));
+    requestPhoto('images/gone.png', qcfg);
+    await settle(200);
+    check(missing() === missReads, '★ 没取到的图不会马上重试（冷却 60 秒）', String(missing()));
+    check(cachedPhoto('images/gone.png') === null, '取不到就不进缓存（缩略图继续用插画兜底）');
+
+    gh.restore();
+    resetPhotoQueue();
+  }
+
   console.log('\n[照片 · 仓库路径]');
   check(imagePath('r_abc') === 'images/r_abc.jpg', '默认路径 images/<id>.jpg', imagePath('r_abc'));
   check(imagePath('r_abc', 'image/png') === 'images/r_abc.png', '扩展名跟着图片类型走', imagePath('r_abc', 'image/png'));
@@ -2942,6 +3155,15 @@ function helperChecks() {
     check(noCount[0].image === '', '★ 缺 image 的老菜谱补空串', JSON.stringify(noCount[0].image));
     const withImg = normalizeRecipes([{ id: 'r4', image: 'images/r4.png' }]);
     check(withImg[0].image === 'images/r4.png', '已有照片路径的原样保留');
+    /* 手写 / 早期版本加进来的菜谱 art 是空串 → 按菜名重猜一张（一直是首字太难看） */
+    const withArt = normalizeRecipes([
+      { id: 'r7', title: '宫保鸡丁', art: '' },
+      { id: 'r8', title: '一个没有关键词的怪名字', art: '' },
+      { id: 'r9', title: '番茄炖牛腩', art: 'mango-sago.svg' },
+    ]);
+    check(withArt[0].art === 'stir-fry.svg', '★ 空 art 的手写菜谱按菜名补一张插画', withArt[0].art);
+    check(withArt[1].art === '', '猜不出来的还是空串（用首字占位）', JSON.stringify(withArt[1].art));
+    check(withArt[2].art === 'mango-sago.svg', '已经有 art 的不动它', withArt[2].art);
     /* 「来自剪藏」是我们自己写过的「没作者」占位：读到就当成没作者（手写 / 截图识图根本没有剪藏） */
     const legacyAuthor = normalizeRecipes([{ id: 'r5', author: '来自剪藏' }, { id: 'r6', author: '阿珍' }]);
     check(legacyAuthor[0].author === '', '★ 老数据里的「来自剪藏」被清成空串', JSON.stringify(legacyAuthor[0].author));
@@ -4177,6 +4399,108 @@ async function edgeChecks() {
     check(/prefers-reduced-motion[^{]*\{[^}]*\.tab\.sync-busy/.test(css), '系统关了动效时不再闪 / 转');
   }
 
+  console.log('\n[交互 · 菜谱库右上角的同步按钮]');
+  localStorage.clear();
+  {
+    /* 只有菜谱库这一屏有：点单 / 掌勺 / 设置不挂（顶栏结构见下一节） */
+    useDb();
+    const local = readDb();
+    const gh = installFakeGithub({
+      recipes: { schema: 3, updatedAt: 'x', recipes: local.recipes },
+      orders: { schema: 3, updatedAt: 'x', orders: local.orders },
+      profiles: { schema: 3, updatedAt: 'x', profiles: local.profiles },
+    });
+    const m = await mount('/library');
+    await m.wait(900); /* 挂载后的自动推送先落定 */
+    check(m.$('.topbar > .navrow > .syncbtn') !== null, '★ 菜谱库标题行右端有同步按钮');
+    check(m.$('.syncbtn')?.getAttribute('aria-label') === '同步', '按钮叫「同步」（读屏也认得出）');
+    check(m.$('.syncbtn.sync-ok') !== null, '已连仓库 → 图标是「已同步」的绿');
+
+    const before = gh.calls.length;
+    await m.click('.syncbtn');
+    await m.wait(900);
+    const gets = gh.calls.slice(before).filter((c) => c.startsWith('GET'));
+    check(gets.length >= 3, '★ 点一下 → 真的同步了一次（拉三份文件）', `实际 GET ${gets.length} 次`);
+    check(m.html().includes('同步完成'), '★ 手动点的那次同步会明确说一句「同步完成」');
+    check(m.$('.syncbtn.sync-ok') !== null, '同步结束 → 回到「已同步」的绿');
+    await m.close();
+    gh.restore();
+  }
+  {
+    /* 慢响应把「同步中」这一瞬拉长，才断言得到按钮状态 */
+    useDb();
+    const local = readDb();
+    const prevFetch = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo | URL) =>
+      new Promise<Response>((resolve) => {
+        const url = String(input);
+        const data = url.includes('recipes.json')
+          ? { schema: 3, updatedAt: 'x', recipes: local.recipes }
+          : url.includes('orders.json')
+            ? { schema: 3, updatedAt: 'x', orders: local.orders }
+            : { schema: 3, updatedAt: 'x', profiles: local.profiles };
+        window.setTimeout(
+          () =>
+            resolve(
+              new Response(JSON.stringify({ sha: 's', content: utf8b64(JSON.stringify(data)) }), { status: 200 }),
+            ),
+          400,
+        );
+      })) as typeof fetch;
+
+    const m = await mount('/library');
+    await m.wait(900);
+    await m.click('.syncbtn'); /* 不等它结束 */
+    check(m.$('.syncbtn.sync-busy') !== null, '★ 同步中 → 按钮高亮闪烁旋转');
+    check(m.$('.syncbtn.sync-busy svg') !== null, '转的就是那枚同步图标');
+    check(m.$('.syncbtn')?.getAttribute('aria-busy') === 'true', '忙碌状态也告诉读屏（aria-busy）');
+    await m.wait(1200);
+    check(m.$('.syncbtn.sync-busy') === null, '同步结束 → 不再闪');
+    await m.close();
+    globalThis.fetch = prevFetch;
+  }
+  {
+    /* 没连仓库：点它只提醒一句去设置里连上，不发请求 */
+    useDb((db) => {
+      db.config!.repo = '';
+      db.config!.token = '';
+      db.config!.tokenMask = '';
+    });
+    const gh = installFakeGithub({});
+    const m = await mount('/library');
+    await m.wait(300);
+    check(m.$('.syncbtn.sync-ok') === null && m.$('.syncbtn.sync-err') === null, '没连仓库 → 图标不染色');
+    await m.click('.syncbtn');
+    await m.wait(200);
+    check(m.html().includes('还没连接仓库'), '★ 点了就提醒去设置里连上，不静默什么都不做');
+    check(gh.calls.length === 0, '没连仓库时一个请求都不发', gh.calls.join(' | '));
+    await m.close();
+    gh.restore();
+  }
+  {
+    /* 同步失败：按钮跟着变红，和底部「设置」格一致 */
+    useDb();
+    const prevFetch = globalThis.fetch;
+    /* 用真实的失败响应（500）走一遍完整的失败分类 */
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ message: 'boom' }), { status: 500 })) as typeof fetch;
+    const m = await mount('/library');
+    await m.wait(900);
+    await m.click('.syncbtn');
+    await m.wait(900);
+    check(m.$('.syncbtn.sync-err') !== null, '★ 同步失败 → 按钮变红');
+    await m.close();
+    globalThis.fetch = prevFetch;
+  }
+  {
+    /* CSS 那半边（冒烟里样式表是空的，只能读文件验） */
+    const css = readFileSync('src/styles/app.css', 'utf8');
+    check(/\.syncbtn\.sync-busy\s*\{[^}]*syncblink/.test(css), '★ 同步中的同步按钮在闪');
+    check(/\.syncbtn\.sync-busy svg\s*\{[^}]*odspin/.test(css), '★ 同步中的同步按钮在转');
+    check(/\.syncbtn\.sync-err svg\s*\{[^}]*--danger/.test(css), '失败时按钮图标是红的');
+    check(/prefers-reduced-motion[^{]*\{[^}]*\.syncbtn\.sync-busy/.test(css), '系统关了动效时不再闪 / 转');
+  }
+
   console.log('\n[边界 · 四个一级页的顶栏结构一致]');
   useDb();
   {
@@ -4194,6 +4518,11 @@ async function edgeChecks() {
       );
       check(m.$('.topbar .toprow') === null, `${path} 不再有单独的开关行（曾经把标题顶下去）`);
       check(m.$('.topbar .navrow .ptitle') !== null, `${path} 标题就在 navrow 里`);
+      /* 同步按钮只有菜谱库这一屏挂（那个按钮见上一节） */
+      check(
+        path === '/library' ? m.$('.topbar .navrow > .syncbtn') !== null : m.$('.syncbtn') === null,
+        path === '/library' ? '★ 菜谱库标题行右端多一枚同步按钮' : `${path} 不挂同步按钮`,
+      );
       const title = m.$('.ptitle');
       check(
         !/font-size/.test(title?.getAttribute('style') ?? ''),

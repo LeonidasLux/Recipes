@@ -1,5 +1,6 @@
 import type { DB, Order, PersonKey, Profile, Profiles, Recipe, SyncConfig } from './types';
 import { nowStamp, nowStampSec, stamp } from './helpers';
+import { guessArt } from '../lib/share';
 
 export const SCHEMA = 3;
 export const DB_KEY = 'jishiben-db-v1';
@@ -224,6 +225,9 @@ export function normalizeRecipes(raw: unknown): Recipe[] {
     if (typeof r.steps !== 'string') r.steps = '';
     /* 照片字段写于加它之前的老缓存 / 老仓库没有：补空串，别让渲染期读到 undefined */
     if (typeof r.image !== 'string') r.image = '';
+    /* 手写 / 早期版本加进来的菜谱 art 常常是空串（只在「添加」那一刻猜过一次）：
+       按菜名重猜一张，免得列表里一直是个光秃秃的首字。猜不出来仍是空串（首字占位） */
+    if (typeof r.art !== 'string' || !r.art) r.art = guessArt(typeof r.title === 'string' ? r.title : '');
     /* 「来自剪藏」是老早拿来做「没填作者」占位的假出处（手写、截图识图来的菜谱
        根本没有剪藏这回事），读进来一律当成「没作者」—— 顺手把存量数据也修掉 */
     if (r.author === '来自剪藏') r.author = '';

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">
+  <rect x="6" y="6" width="84" height="84" rx="26" fill="#FBF2E0"/>
+  <!-- 饭堆 -->
+  <path d="M26 52c0-11 10-19 22-19s22 8 22 19Z" fill="#FFFCF3" stroke="#3A2A1E" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M32 47c4-6 10-9 16-9s12 3 16 9" fill="none" stroke="#E6D8BC" stroke-width="2.2" stroke-linecap="round"/>
+  <!-- 盖在上面的配菜：一块肉 + 一片青菜 -->
+  <path d="M36 41c-1-4 3-7 7-6 4 1 5 6 1 8-3 2-8 1-8-2Z" fill="#B96A2E" stroke="#3A2A1E" stroke-width="2.4" stroke-linejoin="round"/>
+  <path d="M56 37c4-3 9 0 9 4 0 4-6 6-10 4-3-2-2-6 1-8Z" fill="#5BA866" stroke="#3A2A1E" stroke-width="2.4" stroke-linejoin="round"/>
+  <!-- 碗 -->
+  <path d="M22 52h52c0 14-11 22-26 22S22 66 22 52Z" fill="#FFF9EE" stroke="#3A2A1E" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M31 62c4 5 10 8 17 8s13-3 17-8" fill="none" stroke="#F0E2C8" stroke-width="2.2" stroke-linecap="round"/>
+  <!-- 蒸汽 -->
+  <path d="M42 26c-2 3 2 4 0 7" fill="none" stroke="#3A2A1E" stroke-width="2.4" stroke-linecap="round" opacity=".7"/>
+  <path d="M54 22c-2 3 2 4 0 7" fill="none" stroke="#3A2A1E" stroke-width="2.4" stroke-linecap="round" opacity=".7"/>
+  <circle cx="21" cy="24" r="3.4" fill="#FFB52E"/>
+  <circle cx="79" cy="28" r="3" fill="#FF6B4A"/>
+</svg>

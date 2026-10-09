@@ -166,6 +166,22 @@ interface PhotoEntry {
 
 let cache: Map<string, PhotoEntry> | null = null;
 
+/* ─── 缓存变更通知 ───────────────────────────────
+   列表里的缩略图要能在「图取回来了」之后自己刷新：Photo 组件订阅这里，
+   缓存一写就重渲染（取图队列 photoQueue.ts 取的图也走同一条路）。 */
+
+const listeners = new Set<() => void>();
+
+/** 订阅本机照片缓存的变化（返回取消订阅的函数） */
+export function subscribePhotoCache(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => void listeners.delete(fn);
+}
+
+function notifyPhotoCache(): void {
+  for (const fn of [...listeners]) fn();
+}
+
 function loadCache(): Map<string, PhotoEntry> {
   if (cache) return cache;
   cache = new Map();
@@ -242,6 +258,7 @@ export function rememberPhoto(path: string, dataUrl: string): void {
   c.delete(path);
   c.set(path, { d: dataUrl, up: false });
   persistCache();
+  notifyPhotoCache();
 }
 
 /** 记下「这些图仓库里已经有了」：之后本机缓存不够用时，优先淘汰它们 */
@@ -263,4 +280,5 @@ export function forgetPhoto(path: string): void {
   const c = loadCache();
   if (!c.delete(path)) return;
   persistCache();
+  notifyPhotoCache();
 }

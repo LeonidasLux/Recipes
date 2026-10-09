@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">
+  <rect x="6" y="6" width="84" height="84" rx="26" fill="#FCF4E4"/>
+  <!-- 碗 -->
+  <path d="M20 50h56c0 15-12 24-28 24S20 65 20 50Z" fill="#FFF9EE" stroke="#3A2A1E" stroke-width="3" stroke-linejoin="round"/>
+  <!-- 汤面 -->
+  <ellipse cx="48" cy="52" rx="24" ry="7.5" fill="#EBA25C" stroke="#3A2A1E" stroke-width="2.6"/>
+  <!-- 蛋花 -->
+  <path d="M36 51c3-3 8-3 11 0" fill="none" stroke="#FFD98A" stroke-width="3" stroke-linecap="round"/>
+  <path d="M52 54c3-3 7-2 9 1" fill="none" stroke="#FFD98A" stroke-width="3" stroke-linecap="round"/>
+  <!-- 葱花 -->
+  <circle cx="43" cy="49" r="2.6" fill="#5BA866" stroke="#3A2A1E" stroke-width="1.8"/>
+  <circle cx="57" cy="50" r="2.2" fill="#5BA866" stroke="#3A2A1E" stroke-width="1.8"/>
+  <!-- 蒸汽 -->
+  <path d="M42 30c-2 3 2 4 0 7" fill="none" stroke="#3A2A1E" stroke-width="2.4" stroke-linecap="round" opacity=".7"/>
+  <path d="M54 26c-2 3 2 4 0 7" fill="none" stroke="#3A2A1E" stroke-width="2.4" stroke-linecap="round" opacity=".7"/>
+  <circle cx="22" cy="24" r="3.4" fill="#FFB52E"/>
+  <circle cx="78" cy="78" r="3.2" fill="#4FA46A"/>
+</svg>

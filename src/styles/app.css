@@ -161,6 +161,18 @@ img { -webkit-user-drag: none; }
 .icbtn.ghost { border-color: var(--border); box-shadow: 0 2px 0 0 var(--border); background: transparent; }
 .icbtn:disabled { opacity: 0.45; cursor: default; }
 
+/* 菜谱库标题行右端的同步按钮：点一下同步一次，图标自带状态（与底部「设置」格那枚一套） */
+.syncbtn {
+  width: 38px; height: 38px; flex: 0 0 auto;
+  /* 标题行是 flex-start 对齐：往上提一点，让圆钮的圆心跟标题对齐 */
+  margin-top: -4px;
+}
+.syncbtn svg { width: 19px; height: 19px; }
+.syncbtn.sync-ok svg { stroke: var(--ok); }
+.syncbtn.sync-err svg { stroke: var(--danger); }
+.syncbtn.sync-busy { color: var(--accent-ink); animation: syncblink 1.1s ease-in-out infinite; }
+.syncbtn.sync-busy svg { stroke: var(--accent-ink); animation: odspin 1s linear infinite; }
+
 .icbtn:focus-visible, a:focus-visible, button:focus-visible, input:focus-visible,
 textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible {
   outline: 3px solid color-mix(in oklch, var(--accent-deep) 60%, transparent);
@@ -562,7 +574,8 @@ textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible {
 .heroimg img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
 @media (prefers-reduced-motion: reduce) {
-  .sk::after, .spin, .spinner, .tab.sync-busy, .tab.sync-busy svg { animation: none; }
+  .sk::after, .spin, .spinner, .tab.sync-busy, .tab.sync-busy svg,
+  .syncbtn.sync-busy, .syncbtn.sync-busy svg { animation: none; }
   * { transition-duration: 0.01ms !important; }
 }
 
