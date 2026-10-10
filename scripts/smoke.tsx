@@ -87,6 +87,17 @@ import {
 } from '../src/data/helpers';
 import { backAction, isRootPath, pressBack, trackHistory } from '../src/lib/back';
 import { keepsNativeLongPress } from '../src/lib/gestures';
+import {
+  UpdateError,
+  checkForUpdate,
+  compareVersions,
+  formatBytes,
+  parseLatestRelease,
+  parseVersion,
+  setUpdaterBridgeForTest,
+  setUpdaterPlatformForTest,
+  type UpdateProgress,
+} from '../src/lib/update';
 import type { DB, Order, Profiles, Recipe } from '../src/data/types';
 
 /** 记录时间统一格式：`2026-10-07 09:40` —— 必须带年月日 */
@@ -673,6 +684,34 @@ async function githubErrOf(fn: () => Promise<unknown>): Promise<GithubError | nu
   } catch (e) {
     return e instanceof GithubError ? e : null;
   }
+}
+
+/** 同上，取回 UpdateError（检查更新那几条错误分支用） */
+async function updateErrOf(fn: () => Promise<unknown>): Promise<UpdateError | null> {
+  try {
+    await fn();
+    return null;
+  } catch (e) {
+    return e instanceof UpdateError ? e : null;
+  }
+}
+
+/** 应用内更新的假 Release：版本 1.0.3、附件就是 CI 约定那个名字 */
+function fakeRelease(version = '1.0.3') {
+  const tag = `v${version}`;
+  return {
+    tag_name: tag,
+    body: '自动打包',
+    published_at: '2026-10-10T00:00:00Z',
+    assets: [
+      { name: 'notes.txt', browser_download_url: `https://github.com/L/Recipes/releases/download/${tag}/notes.txt` },
+      {
+        name: `jishiben-${tag}.apk`,
+        browser_download_url: `https://github.com/L/Recipes/releases/download/${tag}/jishiben-${tag}.apk`,
+        size: 7340032,
+      },
+    ],
+  };
 }
 
 /* 真实格式的分享文案，用来驱动添加菜谱的交互测试 */
@@ -4083,6 +4122,217 @@ async function edgeChecks() {
     check(m.$('.aboutsheet') === null, '按 Esc 也能关掉');
     check(m.$('.s-sync') !== null, '★ 关掉弹窗后人还留在设置页');
     await m.close();
+  }
+
+  console.log('\n[边界 · 应用内更新：版本比较与 Release 解析]');
+  {
+    check(compareVersions('1.0.3', '1.0.2') === 1, '★ 新版本比旧版本大');
+    check(compareVersions('v1.0.2', '1.0.2') === 0, '带 v 前缀不影响比较');
+    check(compareVersions('1.0.2', '1.0.10') === -1, '★ 修订号按数字比（1.0.2 < 1.0.10），不按字符串');
+    check(compareVersions('1.1.0', '1.0.9') === 1, '次版本号优先于修订号');
+    check(compareVersions('2.0', '2.0.0') === 0, '缺位按 0 补');
+    check(compareVersions('不知道', '1.0.0') === -1, '解析不出来的当 0.0.0');
+    check((parseVersion('v1.2.3') ?? []).join('.') === '1.2.3', 'parseVersion 去掉 v 前缀');
+    check(parseVersion('abc') === null, 'parseVersion 认不出就返回 null');
+    check(formatBytes(7 * 1024 * 1024) === '7.0 MB', '安装包大小转人话（MB）');
+    check(formatBytes(900 * 1024) === '900 KB', '安装包大小转人话（KB）');
+    check(formatBytes(0) === '大小未知', '没给大小就不瞎写 0 B');
+
+    const rel = parseLatestRelease(fakeRelease());
+    check(rel?.version === '1.0.3' && rel?.tag === 'v1.0.3', '★ 从 Release 里读出版本号（去掉 v）');
+    check(rel?.apkName === 'jishiben-v1.0.3.apk' && rel?.sizeBytes === 7340032, '★ 挑出约定那个 APK 附件');
+    check(rel?.apkUrl.endsWith('/jishiben-v1.0.3.apk') === true, '带上 APK 的下载地址');
+    check(parseLatestRelease({ tag_name: 'v1.0.3', assets: [] }) === null, '★ 没有 APK 附件的 Release 不算数');
+    check(parseLatestRelease({ assets: [{ name: 'a.apk', browser_download_url: 'u' }] }) === null, '没有 tag 的返回不算数');
+    const odd = parseLatestRelease({
+      tag_name: 'v9.9.9',
+      assets: [{ name: 'other.apk', browser_download_url: 'https://x/other.apk' }],
+    });
+    check(odd?.apkName === 'other.apk', '附件名不是约定格式时退回第一个 .apk');
+  }
+
+  console.log('\n[边界 · 应用内更新：查 GitHub Release]');
+  {
+    const gh = stubFetch([{ match: /releases\/latest/, reply: () => jsonRes(fakeRelease()) }]);
+    const found = await checkForUpdate('1.0.2');
+    check(found.hasUpdate && found.latest.version === '1.0.3', '★ 查到更高的版本 → 提示可以更新');
+    check(
+      gh.calls[0]?.url.includes('/repos/LeonidasLux/Recipes/releases/latest') === true,
+      '★ 查的是本项目自己的 Release',
+    );
+    check(gh.calls[0]?.headers.Accept === 'application/vnd.github+json', '带上 GitHub 的 Accept 头');
+    check(gh.calls[0]?.headers.Authorization === undefined, '★ 读公开 Release 不带用户 token');
+    gh.restore();
+
+    const same = stubFetch([{ match: /releases\/latest/, reply: () => jsonRes(fakeRelease('1.0.2')) }]);
+    check((await checkForUpdate('1.0.2')).hasUpdate === false, '★ 与本机同版本 → 不提示更新');
+    same.restore();
+
+    const missing = stubFetch([{ match: /releases\/latest/, reply: () => jsonRes({ message: 'Not Found' }, 404) }]);
+    const notFound = await updateErrOf(() => checkForUpdate('1.0.2'));
+    check(notFound?.kind === 'notfound', '★ 还没有 Release → 归类为「还没发布」');
+    check((notFound?.message ?? '').includes('还没找到'), '给出中文的「还没找到」');
+    missing.restore();
+
+    const noApk = stubFetch([
+      {
+        match: /releases\/latest/,
+        reply: () => jsonRes({ tag_name: 'v1.0.4', assets: [{ name: 'a.zip', browser_download_url: 'u' }] }),
+      },
+    ]);
+    const bad = await updateErrOf(() => checkForUpdate('1.0.2'));
+    check(bad?.kind === 'format', '★ Release 里没有 APK → 报「没有附件」，不会去装个 zip');
+    noApk.restore();
+
+    const broken = stubFetch([
+      {
+        match: /releases\/latest/,
+        reply: () => {
+          throw new TypeError('network down');
+        },
+      },
+    ]);
+    const down = await updateErrOf(() => checkForUpdate('1.0.2'));
+    check(down?.kind === 'network', '★ 连不上 GitHub → 归类为网络问题');
+    check((down?.message ?? '').includes('检查网络'), '中文提示检查网络');
+    broken.restore();
+  }
+
+  console.log('\n[边界 · 应用内更新：设置页「关于」里直接升级]');
+  {
+    /* 网页版：没有安装这条路，只留一句说明 */
+    useDb();
+    const web = await mount('/sync');
+    await web.click('#aboutBtn');
+    check(web.$('.aboutsheet') !== null, '网页版也能打开「关于」');
+    check(web.$('.ab-upd') === null && web.$('#appUpdateInstallBtn') === null, '★ 网页版不摆「下载并安装」');
+    check((web.$('.ab-hint')?.textContent ?? '').includes('刷新'), '★ 网页版说明「刷新就是最新版」');
+    check(!web.html().includes('有新版本'), '★ 网页版不查 Release（刷新就是最新版）');
+    await web.close();
+  }
+
+  /* 真机那条路：jsdom 里不是 Android，用测试口子把平台与原生桥换成「Android + 假插件」 */
+  {
+    useDb();
+    const bridgeCalls: string[] = [];
+    setUpdaterPlatformForTest('android');
+    setUpdaterBridgeForTest({
+      async canInstall() {
+        bridgeCalls.push('canInstall');
+        return true;
+      },
+      async openInstallSettings() {
+        bridgeCalls.push('openSettings');
+      },
+      async downloadAndInstall(url: string, onProgress: (p: UpdateProgress) => void) {
+        bridgeCalls.push(`download ${url}`);
+        onProgress({ received: 2 * 1024 * 1024, total: 7 * 1024 * 1024, percent: 28 });
+        return '/data/cache/jishiben-update.apk';
+      },
+    });
+    const gh = stubFetch([{ match: /releases\/latest/, reply: () => jsonRes(fakeRelease()) }]);
+    try {
+      const m = await mount('/sync');
+      check(m.html().includes('有新版本 v1.0.3'), '★ 进设置页就顺手查一次，「关于」那一行挂出「有新版本」');
+      await m.click('#aboutBtn');
+      await settle(60);
+      check(m.html().includes('发现新版本'), '★ 手机上打开「关于」自动查一次，发现新版本');
+      check(m.html().includes('v1.0.3'), '写清是哪个版本（v1.0.3）');
+      check(bridgeCalls.length === 0, '还没点「下载并安装」，一个字节都没下');
+
+      await m.click('#appUpdateInstallBtn');
+      await settle(60);
+      check(bridgeCalls.includes('canInstall'), '★ 先问系统允不允许装包');
+      check(
+        bridgeCalls.includes('download https://github.com/L/Recipes/releases/download/v1.0.3/jishiben-v1.0.3.apk'),
+        '★ 下载的是 Release 里那个 APK 地址',
+        bridgeCalls.join(' | '),
+      );
+      check(m.html().includes('已交给系统安装器'), '★ 下完把包交给系统安装器');
+      await m.close();
+    } finally {
+      gh.restore();
+      setUpdaterBridgeForTest(null);
+      setUpdaterPlatformForTest(null);
+    }
+  }
+
+  /* 系统没开「安装未知应用」：先引导去开开关，不白下几 MB */
+  {
+    useDb();
+    let allowed = false;
+    const bridgeCalls: string[] = [];
+    setUpdaterPlatformForTest('android');
+    setUpdaterBridgeForTest({
+      async canInstall() {
+        bridgeCalls.push(`canInstall ${allowed}`);
+        return allowed;
+      },
+      async openInstallSettings() {
+        bridgeCalls.push('openSettings');
+      },
+      async downloadAndInstall() {
+        bridgeCalls.push('download');
+        return 'x';
+      },
+    });
+    const gh = stubFetch([{ match: /releases\/latest/, reply: () => jsonRes(fakeRelease()) }]);
+    try {
+      const m = await mount('/sync');
+      await m.click('#aboutBtn');
+      await settle(60);
+      await m.click('#appUpdateInstallBtn');
+      await settle(60);
+      check(m.html().includes('安装未知应用'), '★ 系统没允许装包 → 先引导去开开关');
+      check(!bridgeCalls.includes('download'), '★ 没授权就一个字节都不下');
+
+      await m.click('#appUpdatePermBtn');
+      await settle(20);
+      check(bridgeCalls.includes('openSettings'), '★ 点「去系统设置」→ 打开系统那个开关页');
+
+      /* 用户在系统里开好了开关再回来 */
+      allowed = true;
+      await m.click('#appUpdateRetryBtn');
+      await settle(60);
+      check(bridgeCalls.includes('canInstall true'), '★ 「我开好了」会重新问一次系统');
+      check(bridgeCalls.includes('download'), '★ 这次才真的下载');
+      check(m.html().includes('已交给系统安装器'), '接着交给系统安装器');
+      await m.close();
+    } finally {
+      gh.restore();
+      setUpdaterBridgeForTest(null);
+      setUpdaterPlatformForTest(null);
+    }
+  }
+
+  /* 查不到就给出中文原因，还能重试 */
+  {
+    useDb();
+    setUpdaterPlatformForTest('android');
+    setUpdaterBridgeForTest({
+      async canInstall() {
+        return true;
+      },
+      async openInstallSettings() {},
+      async downloadAndInstall() {
+        return 'x';
+      },
+    });
+    const gh = stubFetch([{ match: /releases\/latest/, reply: () => jsonRes({ message: 'Not Found' }, 404) }]);
+    try {
+      const m = await mount('/sync');
+      check(!m.html().includes('有新版本'), '★ 查不到新版本就不挂提示，静静待在设置页');
+      await m.click('#aboutBtn');
+      await settle(60);
+      check((m.$('.ab-upd-t')?.textContent ?? '').includes('还没找到'), '★ 还没有 Release → 弹窗里说清原因');
+      check(m.$('#appUpdateRetryBtn') === null, '没查到版本时不摆「重试」（没什么可重试的）');
+      check(m.$('#appUpdateCheckBtn') !== null, '给一个「重新检查」');
+      await m.close();
+    } finally {
+      gh.restore();
+      setUpdaterBridgeForTest(null);
+      setUpdaterPlatformForTest(null);
+    }
   }
 
   console.log('\n[边界 · 掌勺点菜弹出菜品详情]');

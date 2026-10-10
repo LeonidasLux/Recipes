@@ -153,6 +153,13 @@ const PATHS = {
       <path d="M8 8V6a4 4 0 0 1 8 0v2" />
     </>
   ),
+  download: (
+    <>
+      <path d="M12 4v10" />
+      <path d="m8 10 4 4 4-4" />
+      <path d="M5 20h14" />
+    </>
+  ),
 
   /* 身份 */
   roleOrderer: <path d="M8 4v4M8 8H4v4h4v4h4v-4h4V8h-4V4Z" fill="none" />,

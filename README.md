@@ -251,6 +251,25 @@ Release 里挂的是 debug 签名的包 —— 和本机 `npm run apk` 出来的
 固定的是**调试密钥**，它是公开的、不防篡改：拿到这份 keystore 的人能签出同包名的包。
 要更强的保护就换成自己的正式密钥并且**不把密钥入库**（见下面的「Debug 包 vs Release 包」）。
 
+### 手机上的版本可以应用内更新
+
+装过一次带这个功能的包之后，以后就不必再跑到 GitHub 下载了：进 **设置** 页就会顺手查一次
+最新 Release（有新版本时「关于记食本」那一行挂一枚「有新版本」小标签），点开弹窗还会再查一次。
+
+- 有新版本 → 「下载并安装」：APK 直接下到应用里，再交给系统安装器（第一次会引导你去打开
+  系统的「安装未知应用」开关；装完系统会重开应用，那就是新版本）。
+- 已经是最新 → 只显示版本号。
+- 查不动（还没发布 / 网络不通 / GitHub 限流）→ 给出中文原因，可以「重新检查」。
+
+比大小的依据是 Release 的 tag 与 `package.json` 的 `version`：**同一个 version 重出的包
+（只有 `versionCode` 变了）不算新版本**，想推更新就得让 version 往上走（平时说一句「提交」
+会自动把 patch 位 +1）。网页版（PWA）没有这一步 —— 刷新就是最新版，弹窗里只留一句说明。
+
+实现：`src/lib/update.ts`（查 Release、比版本、给中文错误）＋ 手写的本地 Capacitor 插件
+`android/app/src/main/java/com/leonidaslux/jishiben/AppUpdaterPlugin.java`（下载 APK 到应用
+缓存目录、进度回传、FileProvider 拉起系统安装器）；`AndroidManifest.xml` 里声明了
+`REQUEST_INSTALL_PACKAGES`，Android 8 起还要用户在系统里允许「安装未知应用」。
+
 ### 改了图标之后
 
 ```bash
@@ -433,6 +452,7 @@ src/
 │   ├── ai.ts                DeepSeek Chat Completions 客户端（AI 识别 + 截图识图 + Key 工具）
 │   ├── photo.ts             菜谱照片：读文件 → 压成 data URL → 本机缓存
 │   ├── photoQueue.ts        照片取图队列：一次最多两路并行、滚到眼前才取、失败冷却
+│   ├── update.ts            应用内更新：查 GitHub Release、比版本号、调原生插件装包
 │   └── useSync.tsx          同步引擎：提交即推送、只推变化的文件、轮询拉取、冲突重试
 ├── components/
 │   ├── Icons.tsx            图标库（逐条转写原型 SVG path）
@@ -441,6 +461,7 @@ src/
 │   ├── SyncButton.tsx       菜谱库右上角的同步按钮（点一下立刻同步一次）
 │   ├── TabBar.tsx           随身份切换的底部导航 + ?view / ?state 演示参数
 │   ├── RoleSwitch.tsx       点单 / 掌勺顶栏右端的角色开关
+│   ├── AboutSheet.tsx       「关于」弹层：版本号 + Android 应用内更新
 │   └── Toast.tsx            Toast 容器
 └── screens/
     ├── Setup.tsx            1 首次设置（昵称 / 身份 / token / 仓库 / JSON 导入）
@@ -459,6 +480,7 @@ scripts/                     （开发工具，不参与打包）
 └── dump.tsx                 把某屏的真实 HTML 打出来做结构目检
 
 .github/workflows/android-apk.yml   提交到 main 后自动打包 APK 并出 Release
+android/app/src/main/java/…/AppUpdaterPlugin.java   本地 Capacitor 插件：下载 APK + 拉起系统安装器
 ```
 
 ### 设计走查参数

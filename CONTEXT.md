@@ -14,7 +14,7 @@
 - **提交即同步**：本地内容改动后自动推送回仓库；后台按间隔轮询拉取对方改动。
 - 没有自建后端，浏览器 / Android WebView 直接调用 GitHub Contents API（`api.github.com`）。
 
-**技术栈**：React 19 + TypeScript 5.8 + Vite 6 + react-router-dom 7（HashRouter）+ Capacitor 6（Android，`@capacitor/app` 负责手机返回键，见 §6 / §11）。样式为手写 CSS，无 UI 框架。验证靠自研 jsdom 冒烟脚本与 TypeScript/类名对账。
+**技术栈**：React 19 + TypeScript 5.8 + Vite 6 + react-router-dom 7（HashRouter）+ Capacitor 6（Android，`@capacitor/app` 负责手机返回键、写在工程里的本地插件 `AppUpdaterPlugin` 负责应用内更新，见 §6 / §11）。样式为手写 CSS，无 UI 框架。验证靠自研 jsdom 冒烟脚本与 TypeScript/类名对账。
 
 ## 2. 数据模型（`src/data/types.ts`）
 
@@ -227,7 +227,8 @@ GitHub Contents API：
 - 后台自动拉取开关（读 `autoPull` / `intervalSec`）。
 - 昵称编辑：我 / 另一半两个名字都能改，保存后随仓库同步；清空表示未设置。输入框同样走 `preserveTypedValue`（见「通用输入行为」）。
 - 「我是谁」切换（本机是 `a` / `b` 中的哪一位），只改本机身份、随即对调页面上的称呼（不再决定底部菜单）。
-- **关于**：一行「关于记食本」入口（整行可点，右侧一枚 › ），点开弹 `AboutSheet` —— 整屏遮罩 + 居中卡片。**现在只展示版本号**：应用名「记食本」+「版本 x.y.z」（如 `1.0.1` / `1.1.2`）。版本号来自根目录 `package.json` 的 `version`（`src/lib/version.ts` 的 `APP_VERSION`，唯一来源，不手写常量），与打包时 `scripts/set-version.mjs` 写进 `android/app/build.gradle` 的 versionName 同一个值 —— 本机与 CI 出的包都是这个号，**不带 `-build.<n>` 之类的后缀**。设置页本体不铺版本号，只在弹层里看。点遮罩 / 点 × / 按 Esc / 按手机返回键都能关（返回键是 `useBackClose` 登记的那层遮罩，先关它、不退屏，见 §6）。
+- **关于**：一行「关于记食本」入口（整行可点，右侧一枚 › ），点开弹 `AboutSheet` —— 整屏遮罩 + 居中卡片。里面摆**版本号**（应用名「记食本」+「版本 x.y.z」，如 `1.0.1` / `1.1.2`；来自根目录 `package.json` 的 `version`（`src/lib/version.ts` 的 `APP_VERSION`，唯一来源，不手写常量），与打包时 `scripts/set-version.mjs` 写进 `android/app/build.gradle` 的 versionName 同一个值 —— 本机与 CI 出的包都是这个号，**不带 `-build.<n>` 之类的后缀**；设置页本体不铺版本号，只在弹层里看）；**Android 上还挂着「应用内更新」**（见本条下面的「应用内更新」）。点遮罩 / 点 × / 按 Esc / 按手机返回键都能关（返回键是 `useBackClose` 登记的那层遮罩，先关它、不退屏，见 §6）。
+- **应用内更新（Android）**：包挂在 GitHub 的 Release 上，手工更新要「开浏览器 → 找最新 Release → 下载 → 点安装」，所以把这几步收进设置页：**进这一页就顺手查一次**最新 Release（`https://api.github.com/repos/LeonidasLux/Recipes/releases/latest`，公开仓库、**不带 token**；比的是 Release 的 tag 与本机版本）—— 查到更高版本时「关于记食本」那一行挂一枚「有新版本 vX.Y.Z」小标签（查不到 / 查不动就静静待着，不打扰），点开弹窗**再查一次**，结果分三种：「正在检查更新…」/「发现新版本 vX.Y.Z」+「下载并安装」/「已是最新版本」+「再检查一次」；查不动时给中文原因（还没找到 / 没有 APK 附件 / 网络不通 / GitHub 限流）+「重新检查」。点「下载并安装」的次序是**先问系统「安装未知应用」授权**（没开就不下载，先给「去系统设置」+「我开好了」），再下载（进度条 + 「已下载 x / y（n%）」），下完把 APK 交给系统安装器，提示「已交给系统安装器」。**网页版没有这条路**（刷新就是最新版），不挂标签、弹层里只留一句说明。机制与权限见 §11。
 - 最近同步日志：**全量保留**（不再截断），默认折叠成一个「最近同步」折叠条（右侧显示总条数）；展开后列表固定高度可滚动，滚到底自动再加载 20 条，给出「已显示 N / 总数」与「已全部加载」提示；err 高亮。
 - 已连接时提供「断开并清除本地缓存」（需二次点击确认）；未连接时提供「去首次设置」。
 
@@ -242,7 +243,7 @@ GitHub Contents API：
 - 顶栏同步 pill（`LiveSyncPill.tsx` / `Bits.SyncPill`）**已移除**：设置页顶栏只留标题，同步状态由顶栏下面的五态面板 + 底部「设置」格图标承担（见 §6）。**「手动同步一次」的入口有两处**：菜谱库标题行右端的同步按钮（`SyncButton.tsx`，见 §7）和设置页的「立即同步」；两处都走同一个 `syncNow`。
 - `TabBar.tsx`：底部导航（`[菜谱库][点单 / 掌勺][＋添加][设置]`，第二格读 `config.view`；角色是掌勺时第二格右上角挂「还有几单没做完」的数字红点）+ `usePreviewState`。`RoleSwitch.tsx`：贴在点单 / 掌勺屏顶栏**标题行右端**的角色开关，右上角那枚数字红点与第二格共用同一个数（`helpers.ts` 的 `openCookCount()`）。原 `DaySwitch.tsx` 的页内切换已移除 —— 角色切换现在就在第二格那块屏上。
 - `SyncButton.tsx`：菜谱库标题行右端的同步按钮（点一下 `syncNow`，图标自带同步状态色，见 §7）。状态色用的 `syncTone()` 与底部「设置」格共用（从 `TabBar.tsx` 导出）。
-- `AboutSheet.tsx`：设置页「关于记食本」点开的弹层（`.aboutsheet` / `.ab-mask` / `.ab-card`，与 `DishSheet` 同层 z-index 30），现在只展示版本号；版本号常量在 `src/lib/version.ts`（读 `package.json` 的 `version`）。
+- `AboutSheet.tsx`：设置页「关于记食本」点开的弹层（`.aboutsheet` / `.ab-mask` / `.ab-card`，与 `DishSheet` 同层 z-index 30）。里面是版本号（`src/lib/version.ts` 读 `package.json` 的 `version`）+ **Android 的应用内更新块**（`.ab-upd` / `.ab-upd-t` / `.ab-upd-d` / `.ab-upd-row` / `.ab-bar` / `.ab-hint`，行为见 §7、机制见 §11）。
 - **四个一级页共用同一套顶栏**：`header.topbar > p.greeting + div.navrow > h1.ptitle`（菜谱库 / 设置就是这两行；点单 / 掌勺只在 `navrow` 右端多挂一枚 `RoleSwitch`）。所以日期行的位置、日期到标题的间距、标题字号（统一由 `.ptitle` 给，单页不再用内联 `font-size` 改小）四屏完全一致；曾经那层把开关单独放一行的 `.toprow` 已删除 —— 它会把标题整体顶下去、跟另外两屏错位。
 - `src/lib/back.tsx`：手机返回键的接管层。`BackGuard`（包住 `Routes`，见 §6）负责接线与决策，`backAction()` / `trackHistory()` / `isRootPath()`（配 `ROOT_PATHS`，一级页名单）是纯函数，`useBackClose(open, close)` 给遮罩层登记「返回键先关我」，`usePageBack(fallback)` 给二级页的返回按钮 / 保存、删除收尾用，`pressBack()` 是统一入口（真机由 `@capacitor/app` 的 `backButton` 事件触发，冒烟测试直接调它）。
 - `src/lib/gestures.ts`：长按手势的统一处理（不让长按选中文字 / 弹系统菜单），`keepsNativeLongPress()` 是纯函数、`installLongPressGuard()` 在 `AppShell` 里装一次（见 §7「长按与选中」）。
@@ -298,6 +299,12 @@ GitHub Contents API：
 - Release 里挂的是 **debug 签名**的包，而且**签名固定**：debug keystore 就是仓库里的 `android/app/debug.keystore`（口令是工具链默认的 `android` / `androiddebugkey`，`android/app/build.gradle` 的 `signingConfigs.debug` 显式指向它）。固定之前每个 runner 都会现生成一份调试密钥，签名各不相同，手机上覆盖安装会报「与已安装应用签名不同」；现在本机与 CI 的包签名一致，能互相覆盖。**代价**：调试密钥是公开、不防篡改的，拿到它的人可以签出同包名的包；要更强的保护得换正式密钥 + 不入库（见 README「Debug 包 vs Release 包」）。
 - 权限：只有 `contents: write`（建 Release 用 `github.token`）；仓库里不落任何 token（见 `AGENTS.md` §6）。
 
+### 应用内更新的覆盖（`src/lib/update.ts`）
+
+- 纯函数：`parseVersion`（去掉 `v` 前缀与后缀）/ `compareVersions`（按数字比，`1.0.2 < 1.0.10`；缺位补 0；认不出来的当 `0.0.0`）/ `formatBytes`（MB / KB / 「大小未知」）/ `parseLatestRelease`（从 Release 里读 tag 与版本号、挑出约定命名的 `jishiben-<tag>.apk`；**没有 APK 附件的 Release 不算数**；附件名不是约定格式时退回第一个 `.apk`）。
+- 查 Release：查的是本项目自己的 `LeonidasLux/Recipes`、带 `Accept: application/vnd.github+json` 且**不带用户 token**；与本机同版本不算新版本；404 → 「还没找到」、没有 APK → 「没有附件」、请求抛错 → 网络问题（都是中文文案）。
+- 界面两条路：网页版不摆「下载并安装」、不挂「有新版本」标签、只说「刷新就是最新版」；真机那条路（jsdom 里不是 Android，用 `setUpdaterPlatformForTest` / `setUpdaterBridgeForTest` 把平台换成 Android + 假原生桥）验证：进设置页先挂出「有新版本 vX.Y.Z」标签 → 点开「关于」再查一次 → 发现新版本 → 点「下载并安装」时**先问系统权限、再下载、再交给安装器**；系统没开「安装未知应用」时**一个字节都不下**、只引导去开开关，「我开好了」会重新问一次；查不到版本时不挂标签、不给「重试」、只给「重新检查」。
+
 ## 11. PWA 与 Android
 
 - PWA：`npm run build` 后把 `dist/` 部署到任意静态托管（HashRouter 无需 rewrite）；Android Chrome / iOS Safari 可「添加到主屏幕」，参数见 `public/manifest.webmanifest` 与 `index.html`。
@@ -309,9 +316,12 @@ GitHub Contents API：
 - 自动打包：提交到 `main` 后由 `.github/workflows/android-apk.yml` 在 GitHub 上跑 `npm run apk` 并出一个 Release（细节见 §10）；CI 里 Gradle 发行包换回官方源（runner 在境外），Maven 仍走阿里云镜像。
 - 图标由 `scripts/make-icons.mjs` 生成（PWA + 各密度 launcher）：**单一来源是首次设置页顶部那张插画 `public/art/sync-pot.svg`** —— 脚本自带一个极简 SVG 光栅化（只认 rect / circle / path 的 M L H V C S Z，遇到别的命令直接报错），把插画烘成 PNG；`public/icon.svg` 直接复制同一张插画。maskable / 圆形图标垫满插画自带的奶油底（`#FFF3DC`）并把图形缩进安全区，自适应图标前景层用透明底 + 去掉插画自带的那块圆角底（背景色由 `values/ic_launcher_background.xml` 提供同样的奶油色），拼起来和原插画一致。
 
+- **应用内更新**（设置 →「关于记食本」，界面见 §7）：查最新 Release 是纯 Web 逻辑（`src/lib/update.ts`）；下载与安装是**手写的本地 Capacitor 插件** `android/app/src/main/java/com/leonidaslux/jishiben/AppUpdaterPlugin.java`（`@CapacitorPlugin(name = "AppUpdater")`，在 `MainActivity.onCreate` 里 `registerPlugin` 注册 —— 本地插件不进 `cap sync` 的插件清单，也不引额外 npm 依赖）。插件做三件事：① `canInstall` 问系统有没有「安装未知应用」的授权（Android 8 起必须；`AndroidManifest.xml` 里声明 `REQUEST_INSTALL_PACKAGES`，真正的开关归用户在系统设置里，`openInstallSettings` 用 `ACTION_MANAGE_UNKNOWN_APP_SOURCES` 把用户送过去）；② `downloadAndInstall` 把 APK 下到应用缓存目录（固定文件名 `jishiben-update.apk`，先写 `.part` 再改名 —— 中途断网不会把半截包当成完整的；下完先看头两个字节是不是 `PK`，挡住「下回来一个 HTML 错误页」；进度用 `progress` 事件回传）；③ 用 FileProvider 的 `content://`（authority `${applicationId}.fileprovider`，`res/xml/file_paths.xml` 里的 `cache-path` 已经放开缓存目录）配 `ACTION_VIEW` + `application/vnd.android.package-archive` 拉起系统安装器 —— Android 7 起不允许把 `file://` 交给别的应用。**装完系统会换掉应用进程，重新打开就是新版本**；签名固定成仓库里那份 debug keystore（见上面「签名固定」那条），新包才能直接覆盖安装。
+
 ## 12. 已知限制
 
 - 没配 AI Key 时，「识别」就是**纯本地解析分享文案**（不抓页面，平台无 CORS）。
+- **应用内更新只在 Android 包里有**：网页版刷新就是最新版，弹窗里只留一句说明。而且**得先手动装一次带这个功能的包**，之后才能在应用里直接升级。比大小的依据是 `package.json` 的 version（对照 Release 的 tag），所以**同一个 version 重出的包（只有 `versionCode` 变了）不算新版本** —— 要推更新就得让 version 往上走（每次「提交」自动 patch +1，见 `AGENTS.md` §8）。装包时系统还会弹确认框，并且要先在系统里允许「安装未知应用」。
 - 标题「只留菜名」是启发式：带标点的分享文案截得很干净（「西红柿炒鸡蛋，你就像我这样做…」→「西红柿炒鸡蛋」），但**长而不带标点**的句子仍可能留长；配了 AI 时由模型按提示词兜成菜名。
 - AI 识别需要用户自备 DeepSeek API Key；没配 Key、关掉 AI、或 AI 请求失败时一律退回本地启发式解析，只拆得出标题那一档。模型会按提示词要求「只抄不编」，但输出仍是概率性的，所以结果只作预填、始终可改。
 - DeepSeek Key 与 GitHub token 一样只存 `localStorage`（仅本机语义），设置页里只显示掩码；要更强保护需走原生凭据库（未实现）。识别时文案会发给 `api.deepseek.com` —— 这是 AI 识别的固有代价，介意就别开 AI。

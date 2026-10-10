@@ -1,4 +1,4 @@
-import { useState, type UIEvent } from 'react';
+import { useEffect, useState, type UIEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { useStore } from '../data/store';
 import { useSync } from '../lib/useSync';
@@ -9,6 +9,7 @@ import { Icon } from '../components/Icons';
 import { AboutSheet } from '../components/AboutSheet';
 import { maskToken, normalizeToken, tokenShapeError } from '../lib/github';
 import { aiKeyShapeError, maskAiKey, normalizeAiKey, verifyAiKey } from '../lib/ai';
+import { checkForUpdate, isAppUpdaterAvailable } from '../lib/update';
 import { preserveTypedValue } from '../lib/inputs';
 import { useBackClose } from '../lib/back';
 import { nicknameOf, partnerOf, PERSON_KEYS } from '../data/helpers';
@@ -30,6 +31,25 @@ export default function SyncScreen() {
   /* 「关于」弹层：整屏遮罩，手机返回键先关它，而不是退出应用（见 src/lib/back.tsx） */
   const [about, setAbout] = useState(false);
   useBackClose(about, () => setAbout(false));
+
+  /* Android：进设置页就顺手查一次有没有新版本，「关于」那一行挂个提示。
+     查不动（离线 / 限流 / 还没发布）就安静，不打扰用户。 */
+  const updatable = isAppUpdaterAvailable();
+  const [updateVersion, setUpdateVersion] = useState('');
+  useEffect(() => {
+    if (!updatable) return;
+    let alive = true;
+    checkForUpdate()
+      .then((r) => {
+        if (alive && r.hasUpdate) setUpdateVersion(r.latest.version);
+      })
+      .catch(() => {
+        /* 检查更新失败不弹提示：真要点更新时，弹窗里会给中文原因 */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [updatable]);
 
   const cfg = db.config;
   const me: PersonKey = cfg?.me === 'b' ? 'b' : 'a';
@@ -526,6 +546,11 @@ export default function SyncScreen() {
             <button id="aboutBtn" type="button" className="kvrow aboutrow" onClick={() => setAbout(true)}>
               <span className="k">关于记食本</span>
               <span className="v aboutval">
+                {updateVersion !== '' && (
+                  <span className="pill syncing" style={{ fontSize: 11 }}>
+                    有新版本 v{updateVersion}
+                  </span>
+                )}
                 <Icon name="chevronRight" />
               </span>
             </button>

@@ -519,6 +519,21 @@ textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible {
 .ab-close svg { width: 17px; height: 17px; stroke: currentColor; fill: none; stroke-width: 2.2; }
 .ab-name { margin: 0; font-family: var(--font-display); font-size: 22px; line-height: 1.2; }
 .ab-ver { margin: 8px 0 0; font-family: var(--font-mono); font-size: 13.5px; color: var(--muted); }
+/* 应用内更新（Android 才出现）：检查 / 下载 / 交给系统安装器 */
+.ab-upd { margin-top: 14px; padding-top: 14px; display: flex; flex-direction: column; gap: 8px;
+  border-top: 1.5px dashed color-mix(in oklch, var(--ink) 22%, transparent); }
+.ab-upd-t { margin: 0; font-size: 14px; font-weight: 700; }
+.ab-upd-t.ok { color: var(--ok); }
+.ab-upd-t.err { color: var(--danger); }
+.ab-upd-d { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.ab-upd-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.ab-upd-row .btn-sticker, .ab-upd-row .btn-primary { flex: 1 1 auto; min-height: 44px; }
+.ab-upd-btn { justify-content: center; }
+.ab-bar { height: 8px; border-radius: 999px; overflow: hidden;
+  background: color-mix(in oklch, var(--ink) 12%, transparent); }
+.ab-bar i { display: block; height: 100%; border-radius: 999px; background: var(--accent);
+  transition: width .2s ease; }
+.ab-hint { margin: 12px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
 
 /* ─── Toast（提交/同步反馈）────────────────── */
 .toast {
