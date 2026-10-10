@@ -286,6 +286,9 @@ textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible {
 .btn-primary:active { transform: translateY(2px); box-shadow: 0 1px 0 0 var(--ink); }
 .btn-primary:disabled { opacity: 0.5; box-shadow: 0 2px 0 0 color-mix(in oklch, var(--ink) 40%, transparent); border-color: color-mix(in oklch, var(--ink) 45%, transparent); cursor: default; }
 .btn-primary .spinner { width: 16px; height: 16px; border: 2px solid color-mix(in oklch, var(--on-accent) 40%, transparent); border-top-color: currentColor; border-radius: 50%; animation: odspin 0.8s linear infinite; }
+/* 主按钮里的图标必须自己定尺寸：`<svg>` 不给宽高会按浏览器的 300×150 摆，
+   一放进去就把按钮撑成一大块（「下载并安装」那枚踩过）。与 .btn-sticker / .btn-danger 同一套尺寸 */
+.btn-primary svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2; flex: 0 0 auto; }
 
 /* 危险动作（删除这种）：和主按钮同形，换成红色 */
 .btn-danger {

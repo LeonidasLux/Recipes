@@ -4258,6 +4258,12 @@ async function edgeChecks() {
       check(m.html().includes('发现新版本'), '★ 手机上打开「关于」自动查一次，发现新版本');
       check(m.html().includes(`v${NEXT_VERSION}`), `写清是哪个版本（v${NEXT_VERSION}）`);
       check(bridgeCalls.length === 0, '还没点「下载并安装」，一个字节都没下');
+      /* 按钮里的下载图标：尺寸只能靠样式表给（jsdom 不算布局），
+         这里先钉住「图标确实挂在按钮里」，尺寸那条在下面的样式断言里验 */
+      check(
+        m.$('#appUpdateInstallBtn svg') !== null && m.$$('#appUpdateInstallBtn svg').length === 1,
+        '★ 「下载并安装」按钮里就一枚下载图标（尺寸由 .btn-primary svg 给）',
+      );
 
       await m.click('#appUpdateInstallBtn');
       await settle(60);
@@ -4692,6 +4698,10 @@ async function edgeChecks() {
     check(
       !/\.s-cook \.topbar \.navrow\s*\{[^}]*align-items:\s*flex-end/.test(css),
       '掌勺屏标题块下面还有一行小字，开关留在顶端对标题，不跟着往下坠',
+    );
+    check(
+      /\.btn-primary svg\s*\{[^}]*width:\s*18px[^}]*height:\s*18px/.test(appCss),
+      '★ 主按钮里的图标有固定尺寸（不然 svg 按浏览器默认的 300×150 摆，会把按钮撑成一大块）',
     );
   }
 
