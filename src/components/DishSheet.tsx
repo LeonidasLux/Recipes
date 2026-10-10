@@ -1,12 +1,11 @@
 import { useEffect } from 'react';
-import { SourceBadge } from './Bits';
 import { Cover } from './Photo';
 import { Icon } from './Icons';
 import { initial } from '../data/helpers';
 import type { DB, OrderItem } from '../data/types';
 
 /**
- * 掌勺页点一道菜弹出来的详情：能看清这道菜长什么样、谁发的、我记过什么备注、原文在哪。
+ * 掌勺页点一道菜弹出来的详情：能看清这道菜长什么样、我记过什么备注、原文在哪。
  *
  * 点遮罩、点右上角 × 、按 Esc 都能关掉。临时加的菜（点单时手输的）菜谱库里没有，
  * 就只显示菜名 + 一句说明，不硬凑一个「查看原文」。
@@ -42,13 +41,6 @@ export function DishSheet({ item, db, onClose }: { item: OrderItem; db: DB; onCl
         {recipe ? (
           <>
             <div className="ds-meta">
-              <SourceBadge source={recipe.source} />
-              {recipe.author.trim() !== '' && (
-                <>
-                  <span className="meta">{recipe.author}</span>
-                  <span className="meta">·</span>
-                </>
-              )}
               <span className="meta">{recipe.updatedAt} 更新</span>
             </div>
 

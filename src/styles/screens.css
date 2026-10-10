@@ -51,7 +51,7 @@
 .s-library .matchline { display: flex; align-items: center; justify-content: space-between; margin: 10px 2px 2px; }
 .s-library .matchline .sclear { width: auto; padding: 4px 10px; font-size: 12.5px;
   color: var(--accent-ink); font-weight: 600; }
-/* 排序条：比来源 chips 矮一档，窄屏放不下就横向滚 */
+/* 排序条：紧凑的一行，窄屏放不下就横向滚 */
 .s-library .sortbar { display: flex; align-items: center; flex: 0 0 auto; gap: 7px; overflow-x: auto;
   padding: 0 18px 10px; scrollbar-width: none; }
 .s-library .sortbar::-webkit-scrollbar { display: none; }
@@ -94,7 +94,6 @@
 /* 做法：手动加的菜谱主要靠这段，保留换行，读起来才像步骤 */
 .s-detail .steps-text { margin: 0; font-size: 14px; line-height: 1.65; white-space: pre-wrap; }
 .s-detail .openlink { color: var(--accent-ink); font-weight: 600; text-decoration: none; }
-.s-detail .meta-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 2px; }
 /* 封面是真人上传的照片时整块可点（点开看大图）：右下角给个「可放大」的小标记，
    插画只是示意图，不套这层按钮 */
 .s-detail .photobtn { position: absolute; inset: 0; padding: 0; border: 0; background: none; cursor: zoom-in; }
@@ -145,7 +144,7 @@
 .s-add .shotrow .btn-primary { flex: 1 1 auto; width: auto; min-height: 46px; font-size: 15px; }
 .s-add .hintline { margin: 0; font-size: 11.5px; color: var(--muted); }
 
-/* 菜谱本身：封面 + 菜名一行，下面依次是做法 / 作者 / 来源 / 链接，最后一条分隔线隔开备注 */
+/* 菜谱本身：封面 + 菜名一行，下面依次是做法 / 原文链接，最后一条分隔线隔开备注 */
 .s-add .prevrow { display: grid; grid-template-columns: 84px 1fr; gap: 14px; align-items: center; }
 .s-add .cover { width: 84px; height: 84px; border-radius: 18px; overflow: hidden; border: 2px solid var(--ink);
   background: var(--accent-soft); display: grid; place-items: center; }
@@ -290,7 +289,6 @@
 .s-order .odetail .dit .da img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .s-order .odetail .dit .da .mono { font-family: var(--font-display); font-size: 15px; color: var(--accent-ink); }
 .s-order .odetail .dit .dn { font-size: 14px; font-weight: 500; }
-.s-order .odetail .dit .src { font-size: 11.5px; }
 .s-order .odetail .onote { font-size: 12.5px; color: var(--accent-ink); background: var(--accent-soft); padding: 8px 10px; border-radius: 10px; margin-top: 6px; }
 .s-order .odetail .foot { font-size: 11.5px; color: var(--muted); margin-top: 8px; display: flex; align-items: center; gap: 5px; }
 .s-order .odetail .foot svg { width: 12px; height: 12px; stroke: var(--ok); fill: none; stroke-width: 2.4; }

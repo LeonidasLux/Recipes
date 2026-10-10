@@ -125,9 +125,7 @@ export interface StoreValue {
   /* 本地改动（提交即同步：每次都会触发推送） */
   addRecipe(input: {
     title: string;
-    source: Recipe['source'];
     url: string;
-    author: string;
     art: string;
     /** 照片在仓库里的路径（空串 = 没有）；图先让同步引擎上传，路径随菜谱一起落库 */
     image: string;
@@ -245,9 +243,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const rec: Recipe = {
           id: input.id ?? newId('r'),
           title: input.title,
-          source: input.source,
           url: input.url,
-          author: input.author,
           art: input.art,
           image: input.image,
           steps: input.steps,

@@ -3,7 +3,7 @@
 
    为什么要有这一层：分享文案长短不一，小红书的长文案里往往混着食材、
    步骤、话题标签和一堆表情。启发式解析（share.ts）只能挑出标题，做法
-   基本抓不到；DeepSeek 能把同一段文案整理成「菜名 / 作者 / 做法 / 小贴士」。
+   基本抓不到；DeepSeek 能把同一段文案整理成「菜名 / 做法 / 小贴士」。
 
    截图也是同一条路：用户给一张菜谱截图，deepseek-flash 直接识图，把图里的
    菜名 / 食材 / 步骤读出来 —— 请求体里放 `image_url` content 块（data URL）。
@@ -55,7 +55,6 @@ export class DeepseekError extends Error {
 /** AI 识别出来的一条菜谱（只含文案里确实写了的内容） */
 export interface AiRecipe {
   title: string;
-  author: string;
   steps: string;
   note: string;
 }
@@ -68,12 +67,9 @@ export const SYSTEM_PROMPT = [
   '  也要去掉「保姆级 / 教程 / 配方 / 食谱 / 分享 / 合集 / 来了」这类营销词。',
   '  例如「西红柿炒鸡蛋，你就像我这样做，真的很下饭！」抽成「西红柿炒鸡蛋」，「【电饭煲卤鸡腿，脱骨那种】」抽成「电饭煲卤鸡腿」，',
   '  「酸甜爽脆的腌萝卜保姆级教程来了」抽成「酸甜爽脆的腌萝卜」。',
-  '- "author"：原作者或账号名。若给了「原链接页面线索」，**优先用它里面的「作者候选」** —— 那是链接页面上真实出现的账号名；线索里没有再看文案。都没有才留空。',
   '- "steps"：做法。把文案里写到的食材、用量和步骤整理成多行纯文本，每步一行；没有就空串。',
   '- "note"：文中的小贴士或注意事项（火候、替换食材、保存等）；没有就空串。',
-  '若给了「原链接页面线索」，它只是抓来的页面片段、可能有噪音：作者以它为准；菜名 / 做法只在文案没写到时才参考它。仍不要编造。',
-  '若「原链接页面线索」是一个搜索 / 列表页（很多条结果），`title` 就取**第一条结果**里的菜名（同样只留菜品名）。',
-  '若用户给的是菜谱截图 / 照片（图片），就以**图里真实出现的文字**为准：菜名、作者 / 账号、食材用量、做法步骤、小贴士都照着图上抄；图里没写的字段一律留空。',
+  '若用户给的是菜谱截图 / 照片（图片），就以**图里真实出现的文字**为准：菜名、食材用量、做法步骤、小贴士都照着图上抄；图里没写的字段一律留空。',
   '只输出 JSON，不要解释。',
 ].join('\n');
 
@@ -89,18 +85,14 @@ export interface AiMessage {
 
 export function buildAiMessages(
   text: string,
-  page?: string,
   image?: string,
 ): AiMessage[] {
   const shot = (image ?? '').trim();
   const parts: string[] = [];
   if (text.trim()) parts.push(`下面这段分享文案，请抽取成 json：\n\n${text}`);
   else if (!shot) parts.push('用户只给了一个链接，没有配任何文案。请抽取成 json：');
-  if (page?.trim()) {
-    parts.push(`原链接页面线索（第三方抓取的页面片段，可能有噪音，仅作补充）：\n${page.trim()}`);
-  }
   if (shot) {
-    parts.push('这张截图是用户从菜谱平台截的图，请把图里的菜名、作者 / 账号、食材用量、做法步骤、小贴士抽成 json。');
+    parts.push('这张截图是用户从菜谱平台截的图，请把图里的菜名、食材用量、做法步骤、小贴士抽成 json。');
   }
   const userText = parts.join('\n\n') || '请抽取成 json：';
   return [
@@ -215,25 +207,23 @@ export function normalizeAiRecipe(raw: unknown): AiRecipe {
   const title = toDishName(str(o.title) || str(o['菜名']) || str(o['标题']));
   return {
     title,
-    author: (str(o.author) || str(o['作者'])).slice(0, 30),
     steps: str(o.steps) || str(o['做法']) || str(o['步骤']),
     note: str(o.note) || str(o['备注']) || str(o['小贴士']),
   };
 }
 
 /**
- * 把分享文案 / 菜谱截图（可带一段「原链接页面线索」）交给 DeepSeek，
- * 抽成一条结构化菜谱。页面线索由 `reader.ts` 抓取并压缩，没开「读原链接」时就不传；
+ * 把分享文案 / 菜谱截图交给 DeepSeek，抽成一条结构化菜谱。
  * `image` 是图片的 data URL（`photo.ts` 压过的那份），走 deepseek-flash 的识图。
  */
 export async function recognizeRecipe(
   apiKey: string,
   text: string,
-  opts: { page?: string; image?: string; signal?: AbortSignal } = {},
+  opts: { image?: string; signal?: AbortSignal } = {},
 ): Promise<AiRecipe> {
   const payload = {
     model: AI_MODEL,
-    messages: buildAiMessages(text, opts.page, opts.image),
+    messages: buildAiMessages(text, opts.image),
     response_format: { type: 'json_object' },
     stream: false,
     temperature: 0,

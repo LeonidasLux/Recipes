@@ -4,7 +4,7 @@ import { useStore } from '../data/store';
 import { useToast } from '../components/Toast';
 import { TabBar, usePreviewState } from '../components/TabBar';
 import { RoleSwitch } from '../components/RoleSwitch';
-import { SkeletonRows, SourceBadge, StateCard, StatusChip, Thumb } from '../components/Bits';
+import { SkeletonRows, StateCard, StatusChip, Thumb } from '../components/Bits';
 import { Icon } from '../components/Icons';
 import { anchorDeleteTip, DeleteTip, type DeleteTipState } from '../components/DeleteTip';
 import { initial, isTodayOrder, itemCover, mealLabel, orderCover, orderItems, orderMain, orderSummary, todayLine } from '../data/helpers';
@@ -175,12 +175,12 @@ export default function OrderScreen() {
 
   const canSend = selected.length > 0 && !sending;
 
-  /* 挑选网格：搜索词命中菜名 / 备注 / 作者，与菜谱库那套同一口径 */
+  /* 挑选网格：搜索词命中菜名 / 备注，与菜谱库那套同一口径 */
   const pickSearching = pickQ.trim().length > 0;
   const pickList = useMemo(() => {
     const lq = pickQ.trim().toLowerCase();
     if (!lq) return db.recipes;
-    return db.recipes.filter((r) => `${r.title} ${r.note} ${r.author}`.toLowerCase().includes(lq));
+    return db.recipes.filter((r) => `${r.title} ${r.note}`.toLowerCase().includes(lq));
   }, [db.recipes, pickQ]);
 
   return (
@@ -281,7 +281,7 @@ export default function OrderScreen() {
                   type="text"
                   autoComplete="off"
                   spellCheck={false}
-                  placeholder="搜菜名、备注或作者"
+                  placeholder="搜菜名或备注"
                   aria-label="搜索菜谱库"
                   value={pickQ}
                   onChange={(e) => setPickQ(e.target.value)}
@@ -501,7 +501,6 @@ function OrderCard({
 
       <div className="odetail">
         {items.map((it, i) => {
-          const r = db.recipes.find((x) => x.id === it.recipeId);
           const cover = itemCover(it, db);
           return (
             <div className="dit" key={`${it.recipeId ?? 'm'}-${i}`}>
@@ -513,7 +512,6 @@ function OrderCard({
                 )}
               </div>
               <div className="dn">{it.dishName}</div>
-              <div>{r && <SourceBadge source={r.source} />}</div>
             </div>
           );
         })}

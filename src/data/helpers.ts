@@ -7,7 +7,6 @@ import type {
   PersonKey,
   Profiles,
   Recipe,
-  SourceKey,
   SyncConfig,
   ViewRole,
 } from './types';
@@ -49,41 +48,6 @@ export function nowStamp(): string {
 export function nowStampSec(): string {
   const d = new Date();
   return `${stamp(d)}:${pad(d.getSeconds())}`;
-}
-
-/* ─── 来源徽章 ───────────────────────────────── */
-
-export interface SrcMeta {
-  label: string;
-  cls: string;
-}
-
-const SRC_MAP: Record<SourceKey, SrcMeta> = {
-  red: { label: '小红书', cls: 'sred' },
-  bili: { label: 'B站', cls: 'sbili' },
-  douyin: { label: '抖音', cls: 'sdou' },
-  generic: { label: '网页', cls: 'sgeneric' },
-  manual: { label: '手动', cls: 'smanual' },
-};
-
-export function srcMeta(key: SourceKey): SrcMeta {
-  return SRC_MAP[key] ?? SRC_MAP.generic;
-}
-
-/** 来源小点的颜色变量（列表内联色用） */
-export function srcColorVar(key: SourceKey): string {
-  switch (key) {
-    case 'red':
-      return 'var(--src-red)';
-    case 'bili':
-      return 'var(--src-bili)';
-    case 'douyin':
-      return 'var(--src-douyin)';
-    case 'manual':
-      return 'var(--ink)';
-    default:
-      return 'var(--muted)';
-  }
 }
 
 /* ─── 订单状态 ───────────────────────────────── */

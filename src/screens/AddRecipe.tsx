@@ -7,18 +7,14 @@ import { artUrl, initial, newId } from '../data/helpers';
 import { imagePath } from '../lib/github';
 import { dataUrlMime, photoToDataUrl, rememberPhoto } from '../lib/photo';
 import { useBackClose, usePageBack } from '../lib/back';
-import { detectSource, guessArt, parseShare } from '../lib/share';
+import { guessArt, parseShare } from '../lib/share';
 import { aiTimeout, DeepseekError, recognizeRecipe } from '../lib/ai';
-import { compactPage, isFetchableUrl, readPageHtml } from '../lib/reader';
 import { preserveTypedValue } from '../lib/inputs';
-import type { SourceKey } from '../data/types';
 
 /** 一条菜谱的草稿字段（单条表单与批量里每一张共用同一套） */
 interface RecipeDraft {
   title: string;
   steps: string;
-  author: string;
-  source: SourceKey;
   url: string;
   note: string;
 }
@@ -58,12 +54,9 @@ export default function AddRecipe() {
   const [rawInvalid, setRawInvalid] = useState(false);
 
   const [title, setTitle] = useState('');
-  const [author, setAuthor] = useState('');
   const [url, setUrl] = useState('');
   const [steps, setSteps] = useState('');
   const [note, setNote] = useState('');
-  /** 用户自己挑过的来源；没挑过就按链接 / 文案自动认 */
-  const [sourcePicked, setSourcePicked] = useState<SourceKey | null>(null);
   /** 点过保存但还没菜名（这时才把「菜名」标红） */
   const [titleBad, setTitleBad] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -90,12 +83,6 @@ export default function AddRecipe() {
   const batchDone = batch?.filter((it) => it.state === 'ready' || it.state === 'fail').length ?? 0;
 
   const cover = guessArt(title);
-  /**
-   * 来源：用户挑过就听用户的，否则按链接认（小红书 / B站 / 抖音 / 网页）；
-   * 既没链接也没挑过 = 手写的，记「手动」。所以这里不需要在识别时再手动 setSource。
-   */
-  const detected = detectSource(url.trim()) ?? detectSource(raw.trim());
-  const source: SourceKey = sourcePicked ?? detected ?? 'manual';
   /* 设置页填了 DeepSeek Key 且开着 AI，识别才会走联网的 AI */
   const aiKey = db.config?.aiKey ?? '';
   const aiReady = (db.config?.aiOn ?? true) && aiKey !== '';
@@ -165,7 +152,7 @@ export default function AddRecipe() {
       dataUrl: '',
       state: 'wait',
       error: '',
-      draft: { title: '', steps: '', author: '', source: 'manual', url: '', note: '' },
+      draft: { title: '', steps: '', url: '', note: '' },
     }));
     batchStop.current = false;
     setBatchTriedSave(false);
@@ -195,8 +182,6 @@ export default function AddRecipe() {
           draft: {
             title: ai.title,
             steps: ai.steps,
-            author: ai.author,
-            source: 'manual',
             url: '',
             note: ai.note,
           },
@@ -238,8 +223,7 @@ export default function AddRecipe() {
       return;
     }
 
-    /* 先用本地解析打底：链接与来源按域名判断，永远比 AI 猜得准。
-       只给了一张截图时没有文案可解析，来源按「手动」记（见上面的 source）。 */
+    /* 先用本地解析打底：链接交给本地解析抽，永远比 AI 猜得准。 */
     let link = url.trim();
     /* setTitle 是异步的，这里的 toast 判断得用刚解析出来的这份 */
     let localTitle = title.trim();
@@ -247,7 +231,6 @@ export default function AddRecipe() {
       const r = parseShare(text);
       localTitle = r.title;
       setTitle(r.title);
-      setAuthor(r.author);
       setUrl(r.url);
       link = r.url;
       setTitleBad(false);
@@ -261,37 +244,23 @@ export default function AddRecipe() {
       return;
     }
 
-    /* 配了 Key 就走 AI：菜名、作者、做法一起拆（有截图就带上截图识图）；
+    /* 配了 Key 就走 AI：菜名、做法一起拆（有截图就带上截图识图）；
        失败回退到刚打底的本地解析 */
     setAiBusy(true);
     try {
-      /* 文案里有链接就先抓一次页面，作为作者 / 账号的补充线索（抓不到就跳过） */
-      let page = '';
-      if (isFetchableUrl(link)) {
-        const rt = aiTimeout(25000);
-        try {
-          page = compactPage(await readPageHtml(link, rt.signal), link);
-        } catch {
-          /* 抓不到（反爬 / 登录墙 / 超时）就只按文案识别，不打断 */
-        } finally {
-          rt.done();
-        }
-      }
-
       const at = aiTimeout(25000);
       let ai;
       try {
-        ai = await recognizeRecipe(aiKey, text, { page, image: shot, signal: at.signal });
+        ai = await recognizeRecipe(aiKey, text, { image: shot, signal: at.signal });
       } finally {
         at.done();
       }
       /* AI 抽不出来时，本地解析的标题（比如搜索链接的搜索词）不会被清掉 */
       if (ai.title) setTitle(ai.title);
-      if (ai.author) setAuthor(ai.author);
       if (ai.steps) setSteps(ai.steps);
       /* 备注不覆盖用户已经写下的内容 */
       if (ai.note) setNote((n) => (n.trim() ? n : ai.note));
-      toast(ai.author ? 'AI 已识别（含作者），确认一下' : ai.title || ai.steps ? 'AI 已识别，确认一下' : 'AI 没拆出更多信息，手填一下');
+      toast(ai.title || ai.steps ? 'AI 已识别，确认一下' : 'AI 没拆出更多信息，手填一下');
     } catch (e) {
       toast(e instanceof DeepseekError ? e.message : 'AI 识别失败，已用本地解析', false);
     } finally {
@@ -307,10 +276,7 @@ export default function AddRecipe() {
       return;
     }
     setSaving(true);
-    const input = recipeInputFrom(
-      { title, steps, author, source, url, note },
-      photo,
-    );
+    const input = recipeInputFrom({ title, steps, url, note }, photo);
     window.setTimeout(() => {
       addRecipe(input);
       toast('已保存 · 已同步');
@@ -467,15 +433,13 @@ export default function AddRecipe() {
             <RecipeFields
               prefix="m"
               titleInvalid={titleBad}
-              value={{ title, steps, author, source, url, note }}
+              value={{ title, steps, url, note }}
               onChange={(patch) => {
                 if (patch.title !== undefined) {
                   setTitle(patch.title);
                   setTitleBad(false);
                 }
                 if (patch.steps !== undefined) setSteps(patch.steps);
-                if (patch.author !== undefined) setAuthor(patch.author);
-                if (patch.source !== undefined) setSourcePicked(patch.source);
                 if (patch.url !== undefined) setUrl(patch.url);
                 if (patch.note !== undefined) setNote(patch.note);
               }}
@@ -624,35 +588,6 @@ function RecipeFields({
         />
       </div>
 
-      <div className="row" style={{ gap: 12, alignItems: 'flex-start' }}>
-        <div className="field" style={{ flex: 1 }}>
-          <label htmlFor={`${prefix}Author`}>作者</label>
-          <input
-            id={`${prefix}Author`}
-            type="text"
-            spellCheck={false}
-            placeholder="可不填"
-            value={value.author}
-            onChange={(e) => onChange({ author: e.target.value })}
-            {...preserveTypedValue((v) => onChange({ author: v }))}
-          />
-        </div>
-        <div className="field" style={{ flex: 1 }}>
-          <label htmlFor={`${prefix}Source`}>来源</label>
-          <select
-            id={`${prefix}Source`}
-            value={value.source}
-            onChange={(e) => onChange({ source: e.target.value as SourceKey })}
-          >
-            <option value="manual">手动</option>
-            <option value="generic">网页</option>
-            <option value="red">小红书</option>
-            <option value="bili">B站</option>
-            <option value="douyin">抖音</option>
-          </select>
-        </div>
-      </div>
-
       <div className="field">
         <label htmlFor={`${prefix}Url`}>原文链接</label>
         <input
@@ -694,10 +629,7 @@ function recipeInputFrom(draft: RecipeDraft, dataUrl: string) {
   return {
     id,
     title,
-    source: draft.source,
     url: draft.url.trim(),
-    /* 作者留空就真的留空：界面上不占位，别拿「来自剪藏」这种假出处顶替 */
-    author: draft.author.trim(),
     art: guessArt(title),
     image,
     steps: draft.steps.trim(),

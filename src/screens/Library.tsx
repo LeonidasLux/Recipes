@@ -5,20 +5,12 @@ import { useToast } from '../components/Toast';
 import { useSync } from '../lib/useSync';
 import { TabBar, usePreviewState } from '../components/TabBar';
 import { SyncButton } from '../components/SyncButton';
-import { SkeletonRows, SourceBadge, StateCard, Thumb } from '../components/Bits';
+import { SkeletonRows, StateCard, Thumb } from '../components/Bits';
 import { Icon } from '../components/Icons';
 import { preserveTypedValue } from '../lib/inputs';
 import { useBackClose } from '../lib/back';
 import { todayLine } from '../data/helpers';
-import type { Recipe, SourceKey } from '../data/types';
-
-const FILTERS: Array<{ key: SourceKey | 'all'; label: string }> = [
-  { key: 'all', label: '全部' },
-  { key: 'red', label: '小红书' },
-  { key: 'bili', label: 'B站' },
-  { key: 'douyin', label: '抖音' },
-  { key: 'manual', label: '手动' },
-];
+import type { Recipe } from '../data/types';
 
 /** 排序字段：默认（收藏先后）/ 点单次数 / 更新时间 */
 type SortKey = 'default' | 'count' | 'updated';
@@ -34,7 +26,6 @@ export default function Library() {
   const { toast } = useToast();
   const preview = usePreviewState();
 
-  const [active, setActive] = useState<SourceKey | 'all'>('all');
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(true);
   /* 排序：字段 + 方向（升序 / 降序）；默认保持收藏先后，不排序 */
@@ -69,20 +60,11 @@ export default function Library() {
     return () => window.clearTimeout(t);
   }, []);
 
-  const counts = useMemo(() => {
-    const c: Record<string, number> = { all: db.recipes.length };
-    db.recipes.forEach((r) => {
-      c[r.source] = (c[r.source] ?? 0) + 1;
-    });
-    return c;
-  }, [db.recipes]);
-
   const list = useMemo(() => {
     const lq = q.trim().toLowerCase();
     const filtered = db.recipes.filter((r) => {
-      if (active !== 'all' && r.source !== active) return false;
       if (!lq) return true;
-      return `${r.title} ${r.note} ${r.author}`.toLowerCase().includes(lq);
+      return `${r.title} ${r.note}`.toLowerCase().includes(lq);
     });
     if (sortKey === 'default') return filtered;
     const dir = asc ? 1 : -1;
@@ -92,7 +74,7 @@ export default function Library() {
       if (a.updatedAt === b.updatedAt) return 0;
       return (a.updatedAt < b.updatedAt ? -1 : 1) * dir;
     });
-  }, [db.recipes, active, q, sortKey, asc]);
+  }, [db.recipes, q, sortKey, asc]);
 
   const searching = q.trim().length > 0;
 
@@ -229,7 +211,7 @@ export default function Library() {
             type="text"
             autoComplete="off"
             spellCheck={false}
-            placeholder="搜菜名、备注或作者"
+            placeholder="搜菜名或备注"
             aria-label="搜索菜谱"
             value={q}
             onChange={(e) => setQ(e.target.value)}
@@ -242,24 +224,6 @@ export default function Library() {
           )}
         </div>
       </div>
-
-      <nav className="chips" aria-label="按来源筛选">
-        {FILTERS.map((f) => {
-          const n = counts[f.key] ?? 0;
-          if (f.key !== 'all' && !n) return null;
-          return (
-            <button
-              key={f.key}
-              className={`chip${active === f.key ? ' on' : ''}`}
-              onClick={() => setActive(f.key)}
-              aria-pressed={active === f.key}
-            >
-              {f.label}
-              <span className="n">{n}</span>
-            </button>
-          );
-        })}
-      </nav>
 
       {/* 排序：点单次数 / 更新时间都能升序、降序；默认保持收藏先后 */}
       {db.recipes.length > 0 && (
@@ -352,7 +316,6 @@ export default function Library() {
                       <span className="body">
                         <span className="title">{r.title}</span>
                         <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                          <SourceBadge source={r.source} />
                           <span className="cnt">点过 {r.orderCount ?? 0} 次</span>
                           {r.note && (
                             <span className="note" style={{ flex: 1 }}>

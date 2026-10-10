@@ -21,7 +21,7 @@ export function emptyProfiles(): Profiles {
   };
 }
 
-/** 首次打开时的示例数据 —— 与设计源 seed() 一致，菜名/作者/备注都是真实内容 */
+/** 首次打开时的示例数据 —— 与设计源 seed() 一致，菜名/备注都是真实内容 */
 export function seed(): DB {
   const t = nowStamp();
   return {
@@ -50,9 +50,7 @@ export function seed(): DB {
       {
         id: 'r1',
         title: '番茄炖牛腩',
-        source: 'red',
         url: 'https://xhslink.com/a/tomato-beef',
-        author: '爱做饭的阿珍',
         art: 'tomato-beef.svg',
         image: '',
         note: '高压锅 40 分钟更省事；八角可放可不放，不放汤色更清。',
@@ -64,9 +62,7 @@ export function seed(): DB {
       {
         id: 'r2',
         title: '溏心蛋葱油拌面',
-        source: 'bili',
         url: 'https://b23.tv/scallion-noodle',
-        author: '深夜食堂阿伟',
         art: 'scallion-noodle.svg',
         image: '',
         note: '葱油一次多熬一点，密封冷藏能存两周。',
@@ -78,9 +74,7 @@ export function seed(): DB {
       {
         id: 'r3',
         title: '椰子鸡火锅',
-        source: 'douyin',
         url: 'https://v.douyin.com/coconut-chicken',
-        author: '海南小厨娘',
         art: 'coconut-chicken.svg',
         image: '',
         note: '两只椰青取水打底，不用再加一滴清水。',
@@ -92,9 +86,7 @@ export function seed(): DB {
       {
         id: 'r4',
         title: '巴斯克芝士蛋糕',
-        source: 'red',
         url: 'https://xhslink.com/a/basque-cake',
-        author: '丸子的烘焙日记',
         art: 'basque-cake.svg',
         image: '',
         note: '奶油奶酪要室温软化，面糊过筛两遍更细腻。',
@@ -106,9 +98,7 @@ export function seed(): DB {
       {
         id: 'r5',
         title: '台式三杯鸡',
-        source: 'red',
         url: 'https://xhslink.com/a/three-cup-chicken',
-        author: '台味阿宏',
         art: 'three-cup-chicken.svg',
         image: '',
         note: '九层塔要关火再放，香气差很多。',
@@ -120,9 +110,7 @@ export function seed(): DB {
       {
         id: 'r6',
         title: '芒果糯米饭',
-        source: 'douyin',
         url: 'https://v.douyin.com/mango-sticky-rice',
-        author: '曼谷的夏天',
         art: 'mango-sticky-rice.svg',
         image: '',
         note: '椰浆里加一小撮盐再淋，甜而不腻。',
@@ -213,12 +201,18 @@ export function normalizeProfiles(raw: unknown): Profiles {
  *   · `createdAt`：老缓存 / 老仓库（写于加这个字段之前）没有，用 `updatedAt` 顶上；
  *   · `steps`（做法）：同样可能缺，补空串。
  *   · `orderCount`（点单次数）：同样可能缺（或不是数字），补 0。
+ * 另外把已经不再记录的 `author` / `source`（来源平台）从存量数据里摘掉 ——
+ * 这两个字段连同相关逻辑一起删了，留着只会让老缓存 / 老仓库一路带下去。
  * 其余字段仍然不做补全 —— 缺了只是显示为空，不会崩。
  */
 export function normalizeRecipes(raw: unknown): Recipe[] {
   const recipes = Array.isArray(raw) ? (raw as Recipe[]) : [];
   recipes.forEach((r) => {
     if (!r || typeof r !== 'object') return;
+    /* 不再记录作者 / 来源平台：读进来就从对象上摘掉，别让它们跟着同步出去 */
+    const legacy = r as Recipe & { author?: unknown; source?: unknown };
+    delete legacy.author;
+    delete legacy.source;
     if (typeof r.createdAt !== 'string' || !r.createdAt) {
       r.createdAt = typeof r.updatedAt === 'string' && r.updatedAt ? r.updatedAt : '—';
     }
@@ -228,9 +222,6 @@ export function normalizeRecipes(raw: unknown): Recipe[] {
     /* 手写 / 早期版本加进来的菜谱 art 常常是空串（只在「添加」那一刻猜过一次）：
        按菜名重猜一张，免得列表里一直是个光秃秃的首字。猜不出来仍是空串（首字占位） */
     if (typeof r.art !== 'string' || !r.art) r.art = guessArt(typeof r.title === 'string' ? r.title : '');
-    /* 「来自剪藏」是老早拿来做「没填作者」占位的假出处（手写、截图识图来的菜谱
-       根本没有剪藏这回事），读进来一律当成「没作者」—— 顺手把存量数据也修掉 */
-    if (r.author === '来自剪藏') r.author = '';
     if (typeof r.orderCount !== 'number' || !Number.isFinite(r.orderCount) || r.orderCount < 0) {
       r.orderCount = 0;
     }

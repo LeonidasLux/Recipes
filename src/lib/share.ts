@@ -10,15 +10,11 @@
    解析结果只是预填，不替用户做决定。宁可留空，也不编造。
    ============================================================ */
 
-import type { SourceKey } from '../data/types';
-
 export interface ParsedShare {
   /** 文案里找到的第一个链接；没有则为空串 */
   url: string;
-  source: SourceKey;
   /** 解析出的标题，可能是空串（那就交给用户手填） */
   title: string;
-  author: string;
   /** 标题取自链接里的搜索词（keyword / q / …）—— AI 不该把它换成搜索结果里某条视频的名字 */
   fromSearch: boolean;
 }
@@ -45,9 +41,6 @@ const BOILERPLATE: RegExp[] = [
   /^\s*(?:发表于|发布于|编辑于)\s*.{0,20}$/gm,
   /^\s*网页链接\s*$/gm,
 ];
-
-/** 抖音文案里的「看看【xxx的作品】」—— 顺手把作者捞出来 */
-const DOUYIN_AUTHOR = /[【\[]\s*([^】\]]{1,20}?)\s*的?作品\s*[】\]]/;
 
 const URL_RE = /https?:\/\/[^\s，。！？、；：「」『』（）()【】\[\]<>"']+/i;
 
@@ -77,21 +70,6 @@ export function searchKeyword(raw: string): string {
     /* 不是链接，就没有搜索词 */
   }
   return '';
-}
-
-/** 按域名判断来源 */
-export function detectSource(raw: string): SourceKey | null {
-  const url = extractUrl(raw) || raw.trim();
-  let host: string;
-  try {
-    host = new URL(url.toLowerCase()).hostname;
-  } catch {
-    return null;
-  }
-  if (host.includes('xiaohongshu') || host.includes('xhslink')) return 'red';
-  if (host.includes('bilibili') || host.includes('b23.tv')) return 'bili';
-  if (host.includes('douyin') || host.includes('iesdouyin')) return 'douyin';
-  return 'generic';
 }
 
 /* 表情里还漏了 ‼ ❗ 这类「加粗标点」和一个不可见的选择符，一起当噪音清掉 */
@@ -151,10 +129,6 @@ function pickTitle(text: string): string {
 
 export function parseShare(text: string): ParsedShare {
   const url = extractUrl(text);
-  const source = detectSource(text) ?? 'generic';
-
-  /* 抖音文案里的作者最好拿；其它平台只能留空 */
-  const author = text.match(DOUYIN_AUTHOR)?.[1]?.trim() ?? '';
 
   /* 只有一条链接、没有别的文字：没有标题可解，老实留空；
      但若这条链接是个搜索页，链接里的搜索词本身就是标题 */
@@ -162,7 +136,7 @@ export function parseShare(text: string): ParsedShare {
   const keyword = leftover.length >= 2 ? '' : searchKeyword(text);
   const title = leftover.length >= 2 ? pickTitle(text) : toDishName(keyword);
 
-  return { url, source, title, author, fromSearch: keyword !== '' };
+  return { url, title, fromSearch: keyword !== '' };
 }
 
 /* ─── 封面插画猜测 ───────────────────────────── */

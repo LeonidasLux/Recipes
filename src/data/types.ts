@@ -1,7 +1,5 @@
 ﻿/* 数据模型 —— 与设计源 recipe-app-plan.md §8 一致 */
 
-/** manual = 手动加的（没有来源平台）；generic = 其他网页 */
-export type SourceKey = 'red' | 'bili' | 'douyin' | 'generic' | 'manual';
 /** 两个人：a / b。角色（点菜 / 掌勺）不再绑定到人，而是由每张订单的方向决定 */
 export type PersonKey = 'a' | 'b';
 export type OrderStatus = 'pending' | 'accepted' | 'done';
@@ -12,9 +10,7 @@ export type ViewRole = 'order' | 'cook';
 export interface Recipe {
   id: string;
   title: string;
-  source: SourceKey;
   url: string;
-  author: string;
   /** 本地插画资源名，如 tomato-beef.svg；空串则用首字占位 */
   art: string;
   /**

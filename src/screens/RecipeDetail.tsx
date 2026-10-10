@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useStore } from '../data/store';
 import { useToast } from '../components/Toast';
-import { SourceBadge, StateCard } from '../components/Bits';
+import { StateCard } from '../components/Bits';
 import { useRecipePhoto } from '../components/Photo';
 import { PhotoViewer } from '../components/PhotoViewer';
 import { Icon } from '../components/Icons';
@@ -294,11 +294,6 @@ export default function RecipeDetail() {
             ) : (
               <>
                 <section className="pad" style={{ paddingTop: 16 }}>
-                  <div className="meta-row">
-                    <SourceBadge source={recipe.source} />
-                    {/* 没填作者就不占位：以前会兜一句「来自剪藏」，手写 / 识图来的菜谱根本不成立 */}
-                    {recipe.author.trim() !== '' && <span className="meta">{recipe.author}</span>}
-                  </div>
                   <h1 className="ptitle" style={{ fontSize: 27, marginTop: 10 }}>
                     {recipe.title}
                   </h1>

@@ -15,7 +15,7 @@ import { applyVersion, resolveVersion } from './set-version.mjs';
 import { AppShell } from '../src/App';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
 import { DB_KEY, emptyProfiles, migrate, normalizeOrders, normalizeProfiles, normalizeRecipes, SCHEMA, seed } from '../src/data/seed';
-import { detectSource, extractUrl, guessArt, parseShare, searchKeyword, toDishName } from '../src/lib/share';
+import { extractUrl, guessArt, parseShare, searchKeyword, toDishName } from '../src/lib/share';
 import {
   aiKeyShapeError,
   buildAiMessages,
@@ -35,12 +35,6 @@ function aiText(m: AiMessage): string {
     ? m.content
     : m.content.map((p) => (p.type === 'text' ? p.text : '')).join('\n');
 }
-import {
-  compactPage,
-  isFetchableUrl,
-  ReaderError,
-  readPageHtml,
-} from '../src/lib/reader';
 import {
   GithubError,
   deleteFile,
@@ -89,7 +83,6 @@ import {
   orderSummary,
   partnerOf,
   recipeInOpenOrder,
-  srcMeta,
   statusMeta,
 } from '../src/data/helpers';
 import { backAction, isRootPath, pressBack, trackHistory } from '../src/lib/back';
@@ -468,7 +461,7 @@ function installFakeGithub(opts: {
       const title = (opts.aiTitles ?? [])[aiCount] ?? '';
       aiCount++;
       if (opts.aiDelayMs) await new Promise((r) => setTimeout(r, opts.aiDelayMs));
-      return json({ choices: [{ message: { content: JSON.stringify({ title, author: '阿珍', steps: '1. 焯水' }) } }] });
+      return json({ choices: [{ message: { content: JSON.stringify({ title, steps: '1. 焯水' }) } }] });
     }
 
     /* Git Trees：仓库里 images/ 的清单（只给路径 + sha，不含图的正文） */
@@ -690,15 +683,6 @@ const BILI_SHARE = '【电饭煲卤鸡腿，脱骨那种】 https://b23.tv/xyz78
 const AI_KEY = 'sk-0123456789abcdef0123456789abcdef';
 const AI_SHARE =
   '番茄牛腩巨好吃！食材：牛腩500g、番茄3个。做法：1 焯水 2 炖40分钟。 http://xhslink.com/a/ai-test 复制本条信息，打开【小红书】App查看精彩内容！';
-/** 假的小红书笔记页：作者名一处写在 meta、一处写在内嵌 JSON、一处写在作者块 */
-const PAGE_HTML = `<html><head><title>番茄牛腩 - 小红书</title>
-<meta property="og:description" content="酸甜开胃，一锅搞定">
-<meta name="author" content="爱做饭的阿珍">
-<script>window.__INITIAL_STATE__={"user":{"nickname":"阿珍的厨房"}};</script>
-</head><body>
-<div class="author-name">爱做饭的阿珍</div>
-<p>牛腩冷水下锅焯水，番茄去皮炒出沙，加热水小火炖 40 分钟。</p>
-</body></html>`;
 /** 只贴一条 B站搜索链接（用户实际反馈的那种输入） */
 const BILI_SEARCH =
   'https://search.bilibili.com/all?vt=04531052&keyword=%E6%9D%91%E9%A9%B4&from_source=web_search&spm_id_from=333.1007&search_source=5';
@@ -818,15 +802,13 @@ async function renderChecks() {
     '我的菜谱库',
     '番茄炖牛腩',
     '溏心蛋葱油拌面',
-    '小红书',
-    'B站',
-    '搜菜名、备注或作者',
+    '搜菜名或备注',
     '点单',
   ], ['已同步', '本地模式', '同步中']);
   await expectIn(
     '3 菜谱详情（r5 不在任何单里）',
     '/recipe/r5',
-    ['菜谱详情', '台式三杯鸡', '我的备注', '九层塔要关火再放', '查看原文', '去点单 · 带上这道菜', '台味阿宏'],
+    ['菜谱详情', '台式三杯鸡', '我的备注', '九层塔要关火再放', '查看原文', '去点单 · 带上这道菜'],
   );
   await expectIn(
     '3b 已在未完成单里的菜 → CTA 禁用',
@@ -1056,11 +1038,7 @@ async function interactionChecks() {
     await m.click('.actionbar .btn-primary');
     await m.wait(1000);
     const added = readDb().recipes[0];
-    check(
-      added?.title === '西红柿炒鸡蛋' && added.source === 'red',
-      '保存 → 新菜谱进库（菜名 / 来源正确）',
-      JSON.stringify(added),
-    );
+    check(added?.title === '西红柿炒鸡蛋', '保存 → 新菜谱进库（菜名正确）', JSON.stringify(added));
     check(added?.art === 'tomato-beef.svg', '按标题配了张封面插画', `实际「${added?.art}」`);
     check(readDb().recipes.length === 7, '菜谱数 +1', `实际 ${readDb().recipes.length}`);
     await m.close();
@@ -1074,7 +1052,6 @@ async function interactionChecks() {
     await m.click('#recognizeBtn');
     await m.wait(100);
     check(m.value('#mTitle') === '', '★ 只贴链接 → 标题留空，不编造');
-    check(m.value('#mSource') === 'red', '但来源认出来了（小红书）');
     check(
       !(m.$('.actionbar .btn-primary') as HTMLButtonElement).disabled,
       '保存键一直可点（点完才说缺什么，而不是给个点不动的灰按钮）',
@@ -1117,19 +1094,19 @@ async function interactionChecks() {
     await m.click('.actionbar .btn-primary');
     await m.wait(1000);
     const added = readDb().recipes[0];
-    check(added?.title === '电饭煲卤鸡腿' && added.source === 'bili', '★ 保存成功，新菜谱进库');
+    check(added?.title === '电饭煲卤鸡腿', '★ 保存成功，新菜谱进库');
     check(readDb().recipes.length === 7, '菜谱数 +1', `实际 ${readDb().recipes.length}`);
     await m.close();
   }
 
-  console.log('\n[交互 · 手动添加菜谱（可无来源）]');
+  console.log('\n[交互 · 手动添加菜谱]');
   useDb();
   {
     const m = await mount('/add');
     /* 手填不藏在「手动添加」按钮后面：字段一直摆着，直接写就行（少一层展开收起） */
     check(m.$('#mTitle') !== null && m.$('#mSteps') !== null, '★ 一进来就能直接填菜名和做法');
     check(m.$('#manualBtn') === null, '没有多余的「手动添加」按钮');
-    check(m.value('#mSource') === 'manual', '★ 没贴链接时来源默认就是「手动」', m.value('#mSource'));
+    check(m.$('#mAuthor') === null && m.$('#mSource') === null, '★ 表单里不再有「作者 / 来源」两格');
     check(m.$('[aria-label="查看大图"]') === null, '★ 没选截图时封面是插画 / 首字，不给点（示意图放大没意义）');
     check(
       m.html().indexOf('粘贴小红书') < m.html().indexOf('id="mTitle"'),
@@ -1143,36 +1120,17 @@ async function interactionChecks() {
     await m.wait(1000);
     const added = readDb().recipes[0];
     check(added?.title === '外婆的梅干菜扣肉', '★ 手动添加保存成功');
-    check(added?.source === 'manual', '★ 没有平台来源，记为「手动」', `实际 ${added?.source}`);
     check(added?.steps === '1. 梅干菜泡软\n2. 五花肉焯水\n3. 上锅蒸 1 小时', '★ 做法落库', JSON.stringify(added?.steps));
     check(added?.note === '蒸久一点更糯', '备注落库');
     check(
-      added?.url === '' && added?.author === '',
-      '★ 没填链接 / 作者就是空串，不拿「来自剪藏」这种假出处顶替',
-      `url=${added?.url} author=${added?.author}`,
+      added?.url === '',
+      '★ 没填链接就是空串（不再有作者 / 来源字段）',
+      `url=${added?.url}`,
     );
-    await m.close();
-  }
-  {
-    /* 手动加的菜同样能从列表筛出来 */
-    useDb((db) => {
-      db.recipes.unshift({
-        id: 'r9',
-        title: '外婆的梅干菜扣肉',
-        source: 'manual',
-        url: '',
-        author: '来自剪藏',
-        art: '',
-        steps: '上锅蒸 1 小时',
-        note: '',
-        createdAt: '刚刚',
-        updatedAt: '刚刚',
-      });
-    });
-    const m = await mount('/library');
-    await m.clickByText('.chip', '手动');
-    check(m.$$('.dishrow').length === 1, '★ 按「手动」筛选只剩手写的那条', `实际 ${m.$$('.dishrow').length}`);
-    check(m.html().includes('外婆的梅干菜扣肉'), '筛出来的就是它');
+    check(
+      !('author' in (added ?? {})) && !('source' in (added ?? {})),
+      '★ 落库的菜谱里没有 author / source 字段',
+    );
     await m.close();
   }
 
@@ -1220,7 +1178,6 @@ async function interactionChecks() {
   });
   {
     const ds = stubFetch([
-      { match: /^https:\/\/r\.jina\.ai\//, reply: () => new Response(PAGE_HTML) },
       {
         match: /api\.deepseek\.com\/chat\/completions/,
         method: 'POST',
@@ -1231,7 +1188,6 @@ async function interactionChecks() {
                 message: {
                   content: JSON.stringify({
                     title: '番茄牛腩',
-                    author: '爱做饭的阿珍',
                     steps: '1. 牛腩冷水下锅焯水\n2. 小火炖 40 分钟',
                     note: '八角可放可不放',
                   }),
@@ -1262,6 +1218,10 @@ async function interactionChecks() {
       (chatCalls[0].body as { thinking?: { type?: string } })?.thinking?.type === 'disabled',
       '★ 识别关掉思考模式（照着抄的活儿，快且省 token）',
     );
+    check(
+      ds.calls.every((c) => !c.url.startsWith('https://r.jina.ai/')),
+      '★ 不再去读原链接（唯一用途是补作者，已随字段一起删掉）',
+    );
 
     check(m.value('#mTitle') === '番茄牛腩', '★ AI 的菜名填进输入框', `实际「${m.value('#mTitle')}」`);
     check(
@@ -1269,10 +1229,8 @@ async function interactionChecks() {
       '★ AI 把做法也拆出来填进「做法」',
       JSON.stringify(m.value('#mSteps')),
     );
-    check(m.value('#mAuthor') === '爱做饭的阿珍', 'AI 的作者填进去', `实际「${m.value('#mAuthor')}」`);
     check(m.value('#mNote') === '八角可放可不放', 'AI 的小贴士填进备注');
     check(m.value('#mUrl') === 'http://xhslink.com/a/ai-test', '链接仍以本地解析为准（AI 不改 URL）');
-    check(m.value('#mSource') === 'red', '来源按域名判断，不受 AI 影响');
 
     /* AI 拆出来的做法落库后能在详情页看到 */
     await m.click('.actionbar .btn-primary');
@@ -1342,7 +1300,7 @@ async function interactionChecks() {
         reply: () =>
           jsonRes({
             choices: [
-              { message: { content: '{"title":"红烧肉","author":"阿珍","steps":"1. 焯水后炒糖色","note":"小火慢炖"}' } },
+              { message: { content: '{"title":"红烧肉","steps":"1. 焯水后炒糖色","note":"小火慢炖"}' } },
             ],
           }),
       },
@@ -1372,7 +1330,6 @@ async function interactionChecks() {
     check(sent.includes(SHOT_DATA_URL), '★ 选完截图自动识图，整张图交给了 DeepSeek');
     check(m.value('#mTitle') === '红烧肉', '★ 识图结果把菜名填进表单', m.value('#mTitle'));
     check(m.value('#mSteps') === '1. 焯水后炒糖色', '做法也填进去了');
-    check(m.value('#mSource') === 'manual', '★ 只给截图没给链接 → 来源记成「手动」', m.value('#mSource'));
     check(!sent.includes('r.jina.ai'), '没有链接就不去读页面');
 
     /* 存库：菜谱里记的是仓库图片路径，图的字节先落在本机缓存里等推送 */
@@ -1696,7 +1653,7 @@ async function interactionChecks() {
     gh.restore();
   }
 
-  console.log('\n[交互 · 识别时读取原链接]');
+  console.log('\n[交互 · 识别不再读原链接]');
   useDb((db) => {
     db.config!.aiKey = AI_KEY;
     db.config!.aiKeyMask = maskAiKey(AI_KEY);
@@ -1704,74 +1661,47 @@ async function interactionChecks() {
   });
   {
     const ds = stubFetch([
-      { match: /^https:\/\/r\.jina\.ai\//, reply: () => new Response(PAGE_HTML, { status: 200, headers: { 'content-type': 'text/html' } }) },
       {
         match: /chat\/completions/,
         method: 'POST',
-        reply: () => jsonRes({ choices: [{ message: { content: '{"title":"番茄牛腩","author":"阿珍的厨房","steps":"1. 焯水"}' } }] }),
+        reply: () => jsonRes({ choices: [{ message: { content: '{"title":"番茄牛腩","steps":"1. 焯水"}' } }] }),
       },
     ]);
 
     const m = await mount('/add');
-    check(!m.html().includes('会先打开原链接'), '★ 改动原理不再写成段落（读原链接是「识别」的内部行为，不打扰用户）');
+    check(!m.html().includes('会先打开原链接'), '★ 界面上没有「读原链接」这类说明（这条逻辑已删）');
     await m.type('#shareInput', AI_SHARE);
     await m.click('#recognizeBtn');
     await m.wait(500);
 
-    const readerCall = ds.calls.find((c) => c.url.startsWith('https://r.jina.ai/'));
-    check(readerCall !== undefined, '★ 真的经 r.jina.ai 去读了原链接');
     check(
-      readerCall?.url === 'https://r.jina.ai/http://xhslink.com/a/ai-test',
-      '读的就是文案里那个链接',
-      readerCall?.url,
+      !ds.calls.some((c) => c.url.startsWith('https://r.jina.ai/')),
+      '★ 识别带链接的文案时也不再读原链接（r.jina.ai 依赖已删）',
     );
-    check(readerCall?.headers['x-respond-with'] === 'html', '要的是整页 HTML（作者名在里面）');
-
     const aiCall = ds.calls.find((c) => c.method === 'POST' && c.url.includes('chat/completions'));
-    check(aiCall !== undefined, '读完链接照常走 AI');
+    check(aiCall !== undefined, '文案照常交给 AI');
     check(
-      JSON.stringify(aiCall?.body).includes('阿珍的厨房'),
-      '★ 页面线索（含作者）被带进了给 AI 的提示词',
+      !JSON.stringify(aiCall?.body).includes('页面线索'),
+      '给 AI 的提示词里没有页面线索（已经没有这一步了）',
     );
-    check(m.value('#mAuthor') === '阿珍的厨房', '★ 作者填进输入框', `实际「${m.value('#mAuthor')}」`);
-    await m.close();
-    ds.restore();
-  }
-  {
-    /* 抓不到页面（反爬 / 登录墙）：不报错，照着文案识别 */
-    const ds = stubFetch([
-      { match: /^https:\/\/r\.jina\.ai\//, reply: () => jsonRes({ message: 'blocked' }, 403) },
-      {
-        match: /chat\/completions/,
-        method: 'POST',
-        reply: () => jsonRes({ choices: [{ message: { content: '{"title":"番茄牛腩","author":"文案里的作者"}' } }] }),
-      },
-    ]);
-    const m = await mount('/add');
-    await m.type('#shareInput', AI_SHARE);
-    await m.click('#recognizeBtn');
-    await m.wait(500);
-    check(ds.calls.some((c) => c.url.includes('chat/completions')), '★ 读链接失败也照样走 AI');
-    check(m.value('#mAuthor') === '文案里的作者', '作者就用 AI 从文案里抽到的');
     check(m.value('#mTitle') === '番茄牛腩', '识别照常完成');
     await m.close();
     ds.restore();
   }
   {
-    /* 文案里没有链接：没东西可读，就不该去碰 r.jina.ai */
+    /* 文案里没有链接：照样只把文案交给 AI */
     useDb((db) => {
       db.config!.aiKey = AI_KEY;
       db.config!.aiOn = true;
     });
     const ds = stubFetch([
-      { match: /^https:\/\/r\.jina\.ai\//, reply: () => new Response(PAGE_HTML) },
       { match: /chat\/completions/, method: 'POST', reply: () => jsonRes({ choices: [{ message: { content: '{"title":"番茄牛腩"}' } }] }) },
     ]);
     const m = await mount('/add');
     await m.type('#shareInput', '番茄牛腩 做法看这里，先焯水再炖 40 分钟');
     await m.click('#recognizeBtn');
     await m.wait(400);
-    check(!ds.calls.some((c) => c.url.includes('r.jina.ai')), '★ 文案里没有链接就不去读页面');
+    check(!ds.calls.some((c) => c.url.includes('r.jina.ai')), '★ 全程不碰 r.jina.ai');
     check(ds.calls.some((c) => c.url.includes('chat/completions')), '照样走 AI');
     await m.close();
     ds.restore();
@@ -1785,7 +1715,6 @@ async function interactionChecks() {
     await m.click('#recognizeBtn');
     await m.wait(100);
     check(m.value('#mTitle') === '村驴', '★ 搜索链接 → 用搜索词当菜名', `实际「${m.value('#mTitle')}」`);
-    check(m.value('#mSource') === 'bili', '来源认成 B站', m.value('#mSource'));
     check(!(m.$('.actionbar .btn-primary') as HTMLButtonElement).disabled, '有标题了，保存键可用');
     await m.close();
   }
@@ -1796,13 +1725,12 @@ async function interactionChecks() {
   });
   {
     const ds = stubFetch([
-      { match: /^https:\/\/r\.jina\.ai\//, reply: () => new Response('<html><head><title>村驴-哔哩哔哩_bilibili</title></head><body>村驴</body></html>') },
       {
         match: /chat\/completions/,
         method: 'POST',
         reply: () =>
           jsonRes({
-            choices: [{ message: { content: '{"title":"酸甜爽脆的腌萝卜保姆级教程来了‼️","author":"村驴"}' } }],
+            choices: [{ message: { content: '{"title":"酸甜爽脆的腌萝卜保姆级教程来了‼️"}' } }],
           }),
       },
     ]);
@@ -1812,7 +1740,7 @@ async function interactionChecks() {
     await m.wait(500);
     const aiCall = ds.calls.find((c) => c.method === 'POST' && c.url.includes('chat/completions'));
     check(aiCall !== undefined, '搜索链接照样走 AI');
-    check(JSON.stringify(aiCall?.body).includes('页面线索'), '把页面线索交给了 AI');
+    check(!ds.calls.some((c) => c.url.includes('r.jina.ai')), '搜索链接也不再去读页面');
     check(
       m.value('#mTitle') === '酸甜爽脆的腌萝卜',
       '★ 模型给的是整句视频标题（带「保姆级教程来了」）→ 最终只留菜品名',
@@ -1824,11 +1752,10 @@ async function interactionChecks() {
   {
     /* 模型抽不出菜名（返回空）→ 兜底的搜索词顶上 */
     const ds = stubFetch([
-      { match: /^https:\/\/r\.jina\.ai\//, reply: () => new Response('<html><head><title>村驴</title></head><body>村驴</body></html>') },
       {
         match: /chat\/completions/,
         method: 'POST',
-        reply: () => jsonRes({ choices: [{ message: { content: '{"title":"","author":"村驴"}' } }] }),
+        reply: () => jsonRes({ choices: [{ message: { content: '{"title":""}' } }] }),
       },
     ]);
     const m = await mount('/add');
@@ -1840,7 +1767,7 @@ async function interactionChecks() {
     ds.restore();
   }
 
-  console.log('\n[交互 · 搜索与筛选]');
+  console.log('\n[交互 · 搜索]');
   useDb();
   {
     const m = await mount('/library');
@@ -1853,15 +1780,6 @@ async function interactionChecks() {
     await m.type('.searchbar input', 'zzz');
     if (!m.html().includes('没找到')) fail('无结果空态', '没有出现空态');
     else ok('搜不到 → 给出无结果空态');
-    await m.close();
-  }
-
-  {
-    const m = await mount('/library');
-    await m.click('.chips .chip:nth-child(2)'); // 小红书
-    const rows = m.$$('.dishrow').length;
-    if (rows !== 3) fail('按平台筛选', `小红书应为 3 道，实际 ${rows}`);
-    else ok('按小红书筛选 → 只剩 3 道');
     await m.close();
   }
 
@@ -2230,42 +2148,42 @@ function parseChecks() {
     {
       name: '小红书（标题在链接前）',
       text: '西红柿炒鸡蛋，你就像我这样做，真的很下饭！ http://xhslink.com/a/tomato-egg 复制本条信息，打开【小红书】App查看精彩内容！',
-      want: { source: 'red', url: 'http://xhslink.com/a/tomato-egg', title: '西红柿炒鸡蛋' },
+      want: { url: 'http://xhslink.com/a/tomato-egg', title: '西红柿炒鸡蛋' },
     },
     {
       name: '小红书（你给的短链 + 带话题和表情）',
       text: '蒜香黄油虾仁🦐 新手也不会翻车 #家常菜# #快手菜# https://xhslink.cn/o/7cNiFbAw2if 复制本条信息，打开【小红书】App查看精彩内容！',
-      want: { source: 'red', url: 'https://xhslink.cn/o/7cNiFbAw2if', title: '蒜香黄油虾仁' },
+      want: { url: 'https://xhslink.cn/o/7cNiFbAw2if', title: '蒜香黄油虾仁' },
     },
     {
-      name: '抖音（顺手拆出作者）',
+      name: '抖音（剥掉「看看【xx的作品】」尾巴，只留菜名）',
       text: '7.43 复制打开抖音，看看【糖水小铺的作品】椰香芒果西米露 https://v.douyin.com/abc123/',
-      want: { source: 'douyin', url: 'https://v.douyin.com/abc123/', title: '椰香芒果西米露', author: '糖水小铺' },
+      want: { url: 'https://v.douyin.com/abc123/', title: '椰香芒果西米露' },
     },
     {
       name: 'B站（标题裹在【】里）',
       text: '【电饭煲卤鸡腿，脱骨那种】 https://b23.tv/xyz789',
-      want: { source: 'bili', url: 'https://b23.tv/xyz789', title: '电饭煲卤鸡腿' },
+      want: { url: 'https://b23.tv/xyz789', title: '电饭煲卤鸡腿' },
     },
     {
       name: '只贴一个链接 → 不编造标题',
       text: 'https://xhslink.cn/o/7cNiFbAw2if',
-      want: { source: 'red', url: 'https://xhslink.cn/o/7cNiFbAw2if', title: '' },
+      want: { url: 'https://xhslink.cn/o/7cNiFbAw2if', title: '' },
     },
     {
       name: '不认识的站点',
       text: '奶奶的梅干菜扣肉做法 https://example.com/recipe/42',
-      want: { source: 'generic', url: 'https://example.com/recipe/42', title: '奶奶的梅干菜扣肉' },
+      want: { url: 'https://example.com/recipe/42', title: '奶奶的梅干菜扣肉' },
     },
     {
       name: '只贴一条 B站搜索链接 → 用搜索词当标题',
       text: 'https://search.bilibili.com/all?vt=04531052&keyword=%E6%9D%91%E9%A9%B4&from_source=web_search',
-      want: { source: 'bili', title: '村驴', fromSearch: true },
+      want: { title: '村驴', fromSearch: true },
     },
     {
       name: '只贴一条百度搜索链接 → 用 wd 当标题',
       text: 'https://www.baidu.com/s?wd=%E7%95%AA%E8%8C%84%E7%89%9B%E8%85%A9',
-      want: { source: 'generic', title: '番茄牛腩', fromSearch: true },
+      want: { title: '番茄牛腩', fromSearch: true },
     },
     {
       name: '搜索链接后面还带文案 → 用文案的标题，不是搜索词',
@@ -2287,14 +2205,9 @@ function parseChecks() {
     }
   }
 
-  console.log('\n[链接提取与来源识别]');
+  console.log('\n[链接提取]');
   check(extractUrl('没有链接的纯文字') === '', '没有链接 → 空串');
   check(extractUrl('看这个 https://a.com/1 和 https://b.com/2') === 'https://a.com/1', '多个链接只取第一个');
-  check(detectSource('https://www.xiaohongshu.com/explore/1') === 'red', 'xiaohongshu.com → 小红书');
-  check(detectSource('https://b23.tv/xyz') === 'bili', 'b23.tv → B站');
-  check(detectSource('https://v.douyin.com/abc/') === 'douyin', 'douyin → 抖音');
-  check(detectSource('https://example.com/recipe') === 'generic', '其它站点 → 网页');
-  check(detectSource('这不是一个链接') === null, '不是链接 → null');
 
   console.log('\n[链接里的搜索词]');
   check(
@@ -2578,20 +2491,15 @@ async function aiChecks() {
     check(/不要编造|绝对不要编造/.test(aiText(msgs[0])), '明确要求不编造');
     check(/只填菜名/.test(aiText(msgs[0])), '提示词要求标题只填菜名');
     check(/西红柿炒鸡蛋/.test(aiText(msgs[0])), '提示词给了「只留菜名」的例子');
-    const withPage = buildAiMessages('一段文案', '作者候选: 阿珍');
-    check(
-      aiText(withPage[1]).includes('阿珍') && aiText(withPage[1]).includes('页面线索'),
-      '给了页面线索就一并带上',
-    );
     check(/保姆级/.test(aiText(msgs[0])), '提示词点名要去掉「保姆级 / 教程」这类营销词');
     check(/酸甜爽脆的腌萝卜保姆级教程来了/.test(aiText(msgs[0])), '提示词给了「只留菜品名」的具体例子');
-    check(/第一条结果/.test(aiText(msgs[0])), '提示词约定：搜索结果页取第一条结果的菜名');
+    check(!/原链接页面线索/.test(aiText(msgs[0])), '提示词里不再有「原链接页面线索」（读原链接已删）');
     check(aiText(buildAiMessages('')[1]).includes('只给了一个链接'), '只给链接（没文案）时提示词也读得通');
     check(/截图|图里/.test(aiText(msgs[0])), '提示词交代了截图识图（只抄图里真实出现的字）');
 
     /* 带截图：content 变成「文字 + 图片」块，走 deepseek-flash 的识图 */
     const SHOT = 'data:image/jpeg;base64,c2hvdA==';
-    const withImg = buildAiMessages('', undefined, SHOT);
+    const withImg = buildAiMessages('', SHOT);
     const parts = withImg[1].content;
     check(Array.isArray(parts), '带截图时 user 消息的 content 是内容块数组');
     const arr = Array.isArray(parts) ? parts : [];
@@ -2622,11 +2530,15 @@ async function aiChecks() {
   );
   check(parseJsonLoose('完全不是 JSON') === null, '不是 JSON → null');
   {
-    const r = normalizeAiRecipe({ 菜名: '【番茄牛腩】', 作者: ' 阿珍 ', 做法: '1. 焯水', 小贴士: '少放盐' });
+    const r = normalizeAiRecipe({ 菜名: '【番茄牛腩】', 做法: '1. 焯水', 小贴士: '少放盐' });
     check(
-      r.title === '番茄牛腩' && r.author === '阿珍' && r.steps === '1. 焯水' && r.note === '少放盐',
+      r.title === '番茄牛腩' && r.steps === '1. 焯水' && r.note === '少放盐',
       '中文字段名 / 书名号也能规整',
       JSON.stringify(r),
+    );
+    check(
+      !('author' in normalizeAiRecipe({ author: '阿珍' })),
+      '★ 模型就算回了 author，规整后也不留这个字段',
     );
     check(normalizeAiRecipe({}).title === '' && normalizeAiRecipe(null).steps === '', '缺字段补空串，不编造');
     check(normalizeAiRecipe({ title: 'x'.repeat(80) }).title.length === 20, '菜名裁到 20 字');
@@ -2968,75 +2880,6 @@ async function photoChecks() {
   }
 }
 
-/* ═══════════ reader.ts（读原链接）═══════════ */
-
-async function readerChecks() {
-  console.log('\n[读链接 · URL 与请求]');
-  check(isFetchableUrl('https://xhslink.com/a/x'), 'http(s) 链接可读');
-  check(isFetchableUrl('  http://b23.tv/xyz  '), '首尾空白不影响判断');
-  check(!isFetchableUrl('javascript:alert(1)'), 'javascript: 协议拒绝');
-  check(!isFetchableUrl('这不是链接'), '不是链接就拒绝');
-
-  {
-    /* 非法链接根本不该发请求 */
-    const rd = stubFetch([]);
-    const e = await readerErrOf(() => readPageHtml('javascript:alert(1)'));
-    check(e?.kind === 'badurl', '非法链接 → badurl，且不发请求');
-    check(rd.calls.length === 0, '没发任何请求');
-    rd.restore();
-  }
-  {
-    const rd = stubFetch([
-      { match: /^https:\/\/r\.jina\.ai\//, reply: () => new Response('<html><body>hi</body></html>') },
-    ]);
-    const html = await readPageHtml('https://xhslink.com/a/x');
-    check(html.includes('hi'), '成功路径：返回页面 HTML');
-    check(rd.calls[0].url === 'https://r.jina.ai/https://xhslink.com/a/x', '拼到 r.jina.ai 后面', rd.calls[0].url);
-    check(rd.calls[0].headers['x-respond-with'] === 'html', '要 HTML（作者名在里面）');
-    rd.restore();
-  }
-  {
-    const rd = stubFetch([{ match: /.*/, reply: () => jsonRes({ message: 'blocked' }, 403) }]);
-    const e = await readerErrOf(() => readPageHtml('https://xhslink.com/a/x'));
-    check(e?.kind === 'http' && (e?.message ?? '').includes('403'), '抓取被拒 → http 错误（带状态码）');
-    rd.restore();
-  }
-  {
-    const rd = stubFetch([{ match: /.*/, reply: () => { throw new Error('boom'); } }]);
-    const e = await readerErrOf(() => readPageHtml('https://xhslink.com/a/x'));
-    check(e?.kind === 'network', '网络异常 → network 错误');
-    rd.restore();
-  }
-
-  console.log('\n[读链接 · 页面线索压缩]');
-  {
-    const clues = compactPage(PAGE_HTML, 'https://xhslink.com/a/x');
-    check(clues.includes('番茄牛腩 - 小红书'), '抽出页面标题');
-    check(clues.includes('酸甜开胃'), '抽出 og:description');
-    check(clues.includes('爱做饭的阿珍'), 'meta 作者 / 作者块进了候选');
-    check(clues.includes('阿珍的厨房'), '★ 内嵌 JSON 里的昵称也捞得到');
-    check(clues.includes('牛腩冷水下锅'), '带上了正文摘录（做法线索）');
-    check(clues.includes('链接: https://xhslink.com/a/x'), '带上原链接');
-  }
-  {
-    const clues = compactPage(
-      '<html><head></head><body><div class="author-name">登录</div><div class="nickname">关注</div><p>正文</p></body></html>',
-    );
-    check(!clues.includes('作者候选'), '「登录 / 关注」这类噪音不会被当成作者', clues);
-  }
-  check(compactPage('<html><body></body></html>') === '', '空页面 → 空线索（不编造）');
-}
-
-/** 跑一个必然抛错的读取，取回 ReaderError（不是则记为 null） */
-async function readerErrOf(fn: () => Promise<unknown>): Promise<ReaderError | null> {
-  try {
-    await fn();
-    return null;
-  } catch (e) {
-    return e instanceof ReaderError ? e : null;
-  }
-}
-
 function helperChecks() {
   console.log('\n[辅助函数 · 称呼与身份]');
   check(partnerOf('a') === 'b' && partnerOf('b') === 'a', 'partnerOf 取另一位');
@@ -3070,13 +2913,6 @@ function helperChecks() {
   );
   check(statusMeta('done').cls === 'done', '状态样式类');
   check(mealLabel('lunch') === '午餐' && mealLabel('dinner') === '晚餐', '餐次文案');
-  check(
-    srcMeta('red').label === '小红书' &&
-      srcMeta('bili').label === 'B站' &&
-      srcMeta('douyin').label === '抖音' &&
-      srcMeta('generic').label === '网页',
-    '来源文案',
-  );
 
   console.log('\n[辅助函数 · 在单检测 / 首字 / 路径]');
   const openOrders: Order[] = [
@@ -3151,7 +2987,7 @@ function helperChecks() {
 
     /* 老缓存 / 老仓库的菜谱没有点单次数（或不是合法数字）→ 一律补 0 */
     const noCount = normalizeRecipes([
-      { id: 'r', title: '老菜谱', source: 'red', url: '', author: '', art: '', steps: '', note: '', createdAt: 'x', updatedAt: 'x' },
+      { id: 'r', title: '老菜谱', source: 'red', url: '', author: '阿珍', art: '', steps: '', note: '', createdAt: 'x', updatedAt: 'x' },
       { id: 'r2', orderCount: -3 },
       { id: 'r3', orderCount: 2 },
     ]);
@@ -3171,10 +3007,13 @@ function helperChecks() {
     check(withArt[0].art === 'stir-fry.svg', '★ 空 art 的手写菜谱按菜名补一张插画', withArt[0].art);
     check(withArt[1].art === '', '猜不出来的还是空串（用首字占位）', JSON.stringify(withArt[1].art));
     check(withArt[2].art === 'mango-sago.svg', '已经有 art 的不动它', withArt[2].art);
-    /* 「来自剪藏」是我们自己写过的「没作者」占位：读到就当成没作者（手写 / 截图识图根本没有剪藏） */
-    const legacyAuthor = normalizeRecipes([{ id: 'r5', author: '来自剪藏' }, { id: 'r6', author: '阿珍' }]);
-    check(legacyAuthor[0].author === '', '★ 老数据里的「来自剪藏」被清成空串', JSON.stringify(legacyAuthor[0].author));
-    check(legacyAuthor[1].author === '阿珍', '真作者原样留着');
+    /* 作者 / 来源平台两个字段已删：老缓存 / 老仓库带进来的要在规整时摘掉，别一路同步下去 */
+    const legacyFields = noCount[0] as unknown as Record<string, unknown>;
+    check(
+      !('author' in legacyFields) && !('source' in legacyFields),
+      '★ 老数据里的作者 / 来源平台字段被摘掉',
+      JSON.stringify(legacyFields),
+    );
 
     /* 版本号已是最新、但缓存里缺 profiles 的脏数据 —— 只看 schema 会漏 */
     const noProfiles = seed() as unknown as Record<string, unknown>;
@@ -4066,16 +3905,21 @@ async function edgeChecks() {
       picks().every((p) => p.querySelector('.pt') !== null && p.querySelector('.t') !== null),
       '缩略图与菜名还在',
     );
+    check(
+      (m.$('.picksearch input') as HTMLInputElement | null)?.placeholder === '搜菜名或备注',
+      '★ 挑选网格搜索框只提示菜名 / 备注（不再提作者）',
+      (m.$('.picksearch input') as HTMLInputElement | null)?.placeholder ?? '',
+    );
 
-    /* 搜索：菜名 / 备注 / 作者都能命中，只过滤可见项 */
+    /* 搜索：菜名 / 备注都能命中，只过滤可见项 */
     await m.type('.picksearch input', '椰');
     check(pickTitles().join(' / ') === '椰子鸡火锅 / 芒果糯米饭', '★ 搜「椰」→ 只剩 2 道（备注里的椰浆也算）', pickTitles().join(' / '));
     check(m.html().includes('找到 2 道「椰」'), '★ 提示找到 2 道');
     await m.click('.picksearch .sclear');
     check(picks().length === 6, '★ 清除搜索 → 恢复全部 6 道', `实际 ${picks().length}`);
 
-    await m.type('.picksearch input', '海南小厨娘');
-    check(pickTitles().join(' / ') === '椰子鸡火锅', '★ 按作者搜得到', pickTitles().join(' / '));
+    await m.type('.picksearch input', '三杯');
+    check(pickTitles().join(' / ') === '台式三杯鸡', '按菜名也能搜到', pickTitles().join(' / '));
     await m.type('.picksearch input', '九层塔');
     check(pickTitles().join(' / ') === '台式三杯鸡', '按备注也能搜到', pickTitles().join(' / '));
 
@@ -4258,7 +4102,8 @@ async function edgeChecks() {
     );
     const html = m.html();
     check(html.includes('我的备注') && html.includes('葱油一次多熬一点'), '★ 详情里带这道菜的备注');
-    check(html.includes('深夜食堂阿伟') && html.includes('B站'), '带来源与作者');
+    check(!html.includes('深夜食堂阿伟') && !html.includes('B站'), '★ 菜品详情里不再有来源 / 作者');
+    check(/更新/.test(html), '带更新时间');
     check(html.includes('查看原文') && html.includes('https://b23.tv/scallion-noodle'), '★ 带原文链接');
 
     await m.click('.ds-close');
@@ -4731,9 +4576,7 @@ async function edgeChecks() {
     const legacy = {
       id: 'r9',
       title: '老菜谱',
-      source: 'red',
       url: 'https://example.com/old',
-      author: '旧版本',
       art: '',
       note: '',
       updatedAt: '上周',
@@ -5089,6 +4932,15 @@ async function edgeChecks() {
   localStorage.clear();
   {
     const m = await mount('/setup');
+    check(
+      (m.$('#importJson')?.getAttribute('placeholder') ?? '').includes('"aiKey"'),
+      '★ 导入框的示例 JSON 里带 aiKey（可省的 DeepSeek Key）',
+      m.$('#importJson')?.getAttribute('placeholder') ?? '',
+    );
+    check(
+      (m.$('details.adv .hint')?.textContent ?? '').includes('aiKey'),
+      '字段说明里也点了 aiKey',
+    );
     await m.type(
       '#importJson',
       JSON.stringify({
@@ -5178,6 +5030,7 @@ async function edgeChecks() {
       '关掉手机键盘自动大写 / 自动更正',
     );
     check(m.html().includes('可留空'), '标注了「可留空」');
+    check(!m.html().includes('作者'), '★ 首次设置的 AI 说明里不再提「作者」');
 
     await m.type('#fNickname', '小辉');
     await m.type('#fToken', FAKE_CFG.token);
@@ -5440,25 +5293,22 @@ function Boom(): never {
 }
 
 async function boundaryChecks() {
-  console.log('\n[边界 · 没填作者的菜谱不编出处]');
-  localStorage.clear();
+  console.log('\n[边界 · 详情页不再显示作者 / 来源平台]');
+  useDb();
   {
-    useDb((db) => {
-      db.recipes = db.recipes.map((r) => ({ ...r, author: '' }));
-    });
     const m = await mount('/recipe/r1');
-    check(!m.html().includes('来自剪藏'), '★ 详情页不再显示「来自剪藏」这种假出处');
+    check(m.$('.meta-row') === null, '★ 详情页没有作者 / 来源那一行');
     check(
-      m.$$('.meta-row .meta').every((el) => (el.textContent ?? '').trim() !== ''),
-      '★ 也不留一个空的位置（没作者就不摆那格）',
+      !m.html().includes('爱做饭的阿珍') && !m.html().includes('小红书'),
+      '★ 详情页不出现作者与来源平台',
     );
     await m.close();
 
     const m2 = await mount('/cook');
     await m2.click('.dit');
     const dsMeta = (m2.$('.ds-meta')?.textContent ?? '').trim();
-    check(!dsMeta.includes('来自剪藏'), '掌勺的菜品详情同样不编出处', dsMeta);
-    check(!dsMeta.includes('·'), '★ 没作者时不留孤零零的分隔点', dsMeta);
+    check(!/小红书|B站|抖音/.test(dsMeta), '★ 掌勺的菜品详情也不摆来源徽章', dsMeta);
+    check(/更新/.test(dsMeta), '只留更新时间', dsMeta);
     await m2.close();
   }
 
@@ -5617,7 +5467,6 @@ helperChecks();
 await githubChecks();
 await aiChecks();
 await photoChecks();
-await readerChecks();
 await migrationChecks();
 await connectChecks();
 await syncChecks();

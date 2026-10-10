@@ -1,9 +1,9 @@
 import { useMemo, type ReactNode } from 'react';
 import { Icon, type IconName } from './Icons';
 import { Cover } from './Photo';
-import { srcMeta, statusMeta } from '../data/helpers';
+import { statusMeta } from '../data/helpers';
 import { localStorageBroken } from '../lib/storage';
-import type { OrderStatus, SourceKey } from '../data/types';
+import type { OrderStatus } from '../data/types';
 
 /* ─── 骨架屏 ─────────────────────────────────── */
 
@@ -20,18 +20,6 @@ export function SkeletonRows({ n = 4 }: { n?: number }) {
         </div>
       ))}
     </>
-  );
-}
-
-/* ─── 来源徽章 ───────────────────────────────── */
-
-export function SourceBadge({ source, solid }: { source: SourceKey; solid?: boolean }) {
-  const m = srcMeta(source);
-  return (
-    <span className={`src ${m.cls}${solid ? ' solid' : ''}`}>
-      <i />
-      {m.label}
-    </span>
   );
 }
 

@@ -384,7 +384,7 @@ export default function Setup() {
                   rows={5}
                   spellCheck={false}
                   autoComplete="off"
-                  placeholder='{"nickname":"小辉","partnerNickname":"小红","token":"ghp_xxxxxxxx","repo":"owner/repo","branch":"main","intervalSec":60}'
+                  placeholder='{"nickname":"小辉","partnerNickname":"小红","token":"ghp_xxxxxxxx","repo":"owner/repo","branch":"main","intervalSec":60,"aiKey":"sk-xxxxxxxx"}'
                   value={importJson}
                   onChange={(e) => {
                     setImportJson(e.target.value);
@@ -400,7 +400,8 @@ export default function Setup() {
                   {importErr}
                 </span>
                 <span className="hint">
-                  字段：nickname（我的）/ partnerNickname（另一半的，可省）/ token / repo / branch / intervalSec
+                  字段：nickname（我的）/ partnerNickname（另一半的，可省）/ token / repo / branch / intervalSec /
+                  aiKey（DeepSeek Key，可省，填了就能用 AI 识别）
                 </span>
               </div>
               <button type="button" className="btn-sticker solid" onClick={doImport}>
@@ -556,7 +557,7 @@ export default function Setup() {
                     <span className="err">{aiKeyErr ?? 'Key 格式不对（应以 sk- 开头）'}</span>
                     <span className="hint">
                       可留空 —— 不填就只用本地解析文案，之后能在「设置」里补。填了「识别」会用 DeepSeek 把菜名 /
-                      作者 / 做法一起拆出来。Key 只存本机，不写进仓库。
+                      做法一起拆出来。Key 只存本机，不写进仓库。
                     </span>
                   </div>
                 </div>

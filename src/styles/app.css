@@ -28,11 +28,6 @@
   --danger:  oklch(0.55 0.19 28);
   --danger-soft: color-mix(in oklch, var(--danger) 10%, #ffffff);
 
-  /* 平台来源色（小点，非页面 accent） */
-  --src-red:    #ff3b47;
-  --src-bili:   #00a1d6;
-  --src-douyin: #3b3b40;
-
   --shadow-sticker: 0 3px 0 0 var(--ink);
 
   --font-display: "ZCOOL KuaiLe", "YouYuan", "幼圆", "Yuanti SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
@@ -256,17 +251,6 @@ textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible {
 /* 首字占位（无插画时） */
 .mono-fallback { font-family: var(--font-display); color: var(--accent-ink); }
 
-/* ─── 平台来源徽章 ────────────────────────────── */
-.src { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); white-space: nowrap; }
-.src i { width: 9px; height: 9px; border-radius: 50%; background: var(--c, #bbb); box-shadow: 0 1px 0 0 color-mix(in oklch, var(--c, #bbb) 40%, transparent); flex: 0 0 auto; }
-.src.solid { padding: 3px 9px 3px 7px; border-radius: 999px; background: color-mix(in oklch, var(--c,#bbb) 12%, #fff); color: var(--fg); }
-
-.sred { --c: var(--src-red); }
-.sbili { --c: var(--src-bili); }
-.sdou { --c: var(--src-douyin); }
-.sgeneric { --c: color-mix(in oklch, var(--muted) 70%, #fff); }
-.smanual { --c: color-mix(in oklch, var(--ink) 62%, #fff); }
-
 /* ─── pill / tag / 状态 ───────────────────────── */
 .pill { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border-radius: 999px;
   background: var(--surface); border: 1.5px solid var(--border); color: var(--muted);
@@ -280,28 +264,6 @@ textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible {
 
 .spin { animation: odspin 1s linear infinite; }
 @keyframes odspin { to { transform: rotate(360deg); } }
-
-/* 筛选 chip（可点，高 44px 保证触达）。
-   flex: 0 0 auto 是必须的：.app 是固定高度的纵向 flex，只有 .scroll 该伸缩；
-   否则菜谱列表越长，这行就被压得越扁，和列表的间距会跟着列表长短变。 */
-.chips { display: flex; flex: 0 0 auto; gap: 8px; overflow-x: auto; padding: 6px 18px 10px; scrollbar-width: none; }
-.chips::-webkit-scrollbar { display: none; }
-.chip {
-  flex: 0 0 auto; min-height: 44px; padding: 8px 16px;
-  display: inline-flex; align-items: center; gap: 6px;
-  border-radius: 999px; border: 1.5px solid var(--border);
-  background: var(--surface); color: var(--fg);
-  font: inherit; font-size: 13.5px; font-weight: 500;
-  cursor: pointer;
-}
-.chip .n { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
-.chip.on {
-  background: var(--ink); border-color: var(--ink); color: #fff;
-  box-shadow: 0 2px 0 0 var(--ink);
-}
-.chip.on .n { color: color-mix(in oklch, #fff 62%, transparent); }
-.chip:hover:not(.on) { background: color-mix(in oklch, var(--accent-soft) 60%, var(--surface)); border-color: var(--border); }
-.chip:active { transform: translateY(1px); box-shadow: none; }
 
 /* 点单状态 chip */
 .st { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 3px 9px; border-radius: 999px; font-weight: 600; line-height: 1; }
