@@ -89,6 +89,7 @@ import { backAction, isRootPath, pressBack, trackHistory } from '../src/lib/back
 import { keepsNativeLongPress } from '../src/lib/gestures';
 import {
   UpdateError,
+  apkCandidates,
   checkForUpdate,
   compareVersions,
   formatBytes,
@@ -729,6 +730,8 @@ function fakeRelease(version = NEXT_VERSION) {
       {
         name: `jishiben-${tag}.apk`,
         browser_download_url: `https://github.com/L/Recipes/releases/download/${tag}/jishiben-${tag}.apk`,
+        /* API 端点：另一台主机（api.github.com）上的同一个附件，下载换线路时用它 */
+        url: `https://api.github.com/repos/L/Recipes/releases/assets/12345`,
         size: 7340032,
       },
     ],
@@ -4176,6 +4179,15 @@ async function edgeChecks() {
       assets: [{ name: 'other.apk', browser_download_url: 'https://x/other.apk' }],
     });
     check(odd?.apkName === 'other.apk', '附件名不是约定格式时退回第一个 .apk');
+
+    /* 下载线路：真机上踩过「api.github.com 通、github.com 那个 IP 连不上」，所以备两条 */
+    const like = parseLatestRelease(fakeRelease())!;
+    check(like.apkApiUrl.includes('/releases/assets/'), '★ 从 Release 里也记下附件端点（备用线路）');
+    check(apkCandidates(like).length === 2, '★ 下载备两条线路：直链 + API 附件端点');
+    check(apkCandidates(like)[0] === like.apkUrl, '先试直链（浏览器点「下载」走的就是它）');
+    check(apkCandidates(like)[1] === like.apkApiUrl, '连不上再换 api.github.com 那条');
+    check(apkCandidates({ ...like, apkApiUrl: '' }).length === 1, 'Release 里没给端点时就只有直链');
+    check(apkCandidates({ ...like, apkApiUrl: like.apkUrl }).length === 1, '两条地址相同时不重复试');
   }
 
   console.log('\n[边界 · 应用内更新：查 GitHub Release]');
@@ -4335,6 +4347,99 @@ async function edgeChecks() {
       check(bridgeCalls.includes('canInstall true'), '★ 「我开好了」会重新问一次系统');
       check(bridgeCalls.includes('download'), '★ 这次才真的下载');
       check(m.html().includes('已交给系统安装器'), '接着交给系统安装器');
+      await m.close();
+    } finally {
+      gh.restore();
+      setUpdaterBridgeForTest(null);
+      setUpdaterPlatformForTest(null);
+    }
+  }
+
+  /* 第一条线路连不上 → 自动换第二条（api.github.com）再下 */
+  {
+    useDb();
+    const calls: string[] = [];
+    const rel = parseLatestRelease(fakeRelease())!;
+    setUpdaterPlatformForTest('android');
+    setUpdaterBridgeForTest({
+      async canInstall() {
+        return true;
+      },
+      async openInstallSettings() {},
+      async openInBrowser(url) {
+        calls.push(`browser ${url}`);
+      },
+      async downloadAndInstall(url) {
+        calls.push(`download ${url}`);
+        if (calls.filter((c) => c.startsWith('download')).length === 1) {
+          /* 原生那边连不上时抛的就是这句中文（见 AppUpdaterPlugin.friendlyError） */
+          throw new Error('连不上 GitHub 的下载服务器（网络被挡或太慢），可以改用浏览器下载');
+        }
+        return '/data/cache/jishiben-update.apk';
+      },
+    });
+    const gh = stubFetch([{ match: /releases\/latest/, reply: () => jsonRes(fakeRelease()) }]);
+    try {
+      const m = await mount('/sync');
+      await m.click('#aboutBtn');
+      await settle(60);
+      await m.click('#appUpdateInstallBtn');
+      await settle(60);
+      check(calls[0] === `download ${rel.apkUrl}`, '★ 先试直链');
+      check(calls[1] === `download ${rel.apkApiUrl}`, '★ 直链连不上就换 API 附件端点再试');
+      check(m.html().includes('已交给系统安装器'), '★ 换条线路下成功了，照常交给系统安装器');
+      check(!calls.some((c) => c.startsWith('browser')), '能下下来就不用惊动浏览器');
+      await m.close();
+    } finally {
+      gh.restore();
+      setUpdaterBridgeForTest(null);
+      setUpdaterPlatformForTest(null);
+    }
+  }
+
+  /* 两条线路都下不动 → 中文原因 + 退路「用浏览器下载」 */
+  {
+    useDb();
+    const calls: string[] = [];
+    const rel = parseLatestRelease(fakeRelease())!;
+    setUpdaterPlatformForTest('android');
+    setUpdaterBridgeForTest({
+      async canInstall() {
+        return true;
+      },
+      async openInstallSettings() {},
+      async openInBrowser(url) {
+        calls.push(`browser ${url}`);
+      },
+      async downloadAndInstall(url) {
+        calls.push(`download ${url}`);
+        throw new Error('连不上 GitHub 的下载服务器（网络被挡或太慢），可以改用浏览器下载');
+      },
+    });
+    const gh = stubFetch([{ match: /releases\/latest/, reply: () => jsonRes(fakeRelease()) }]);
+    try {
+      const m = await mount('/sync');
+      await m.click('#aboutBtn');
+      await settle(60);
+      await m.click('#appUpdateInstallBtn');
+      await settle(60);
+      const downloads = calls.filter((c) => c.startsWith('download'));
+      check(
+        downloads.join(' | ') === `download ${rel.apkUrl} | download ${rel.apkApiUrl} | download ${rel.apkUrl}`,
+        '★ 每个地址都试过、最后回到直链再试一次才放弃',
+        downloads.join(' | '),
+      );
+      check(
+        (m.$('.ab-upd-t.err')?.textContent ?? '').includes('连不上 GitHub 的下载服务器'),
+        '★ 失败给的是中文原因，不是原生那串英文',
+      );
+      check(!m.html().includes('failed to connect to'), '★ 原生异常原文不摆到界面上');
+      check(m.$('#appUpdateBrowserBtn') !== null, '★ 给一条退路：用浏览器下载');
+      check(m.$('#appUpdateRetryBtn') !== null, '还能重试');
+
+      await m.click('#appUpdateBrowserBtn');
+      await settle(20);
+      check(calls.includes(`browser ${rel.apkUrl}`), '★ 点「用浏览器下载」把 APK 直链交给系统浏览器');
       await m.close();
     } finally {
       gh.restore();

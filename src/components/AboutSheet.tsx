@@ -4,8 +4,10 @@ import { APP_VERSION } from '../lib/version';
 import {
   checkForUpdate,
   formatBytes,
+  installRelease,
   isAppUpdaterAvailable,
   updaterBridge,
+  type AttemptInfo,
   type ReleaseInfo,
   type UpdateProgress,
 } from '../lib/update';
@@ -38,6 +40,8 @@ export function AboutSheet({ onClose }: { onClose: () => void }) {
   const [release, setRelease] = useState<ReleaseInfo | null>(null);
   const [latestVersion, setLatestVersion] = useState('');
   const [progress, setProgress] = useState<UpdateProgress | null>(null);
+  /* 下载是「换个地址再试」的：把第几次尝试显示出来，人知道它还动着 */
+  const [attempt, setAttempt] = useState<AttemptInfo | null>(null);
   const [message, setMessage] = useState('');
 
   const check = useCallback(async () => {
@@ -73,15 +77,29 @@ export function AboutSheet({ onClose }: { onClose: () => void }) {
       return;
     }
     setProgress(null);
+    setAttempt(null);
     setPhase('downloading');
     try {
-      await bridge.downloadAndInstall(rel.apkUrl, (p) => setProgress(p));
+      await installRelease(rel, (p) => setProgress(p), (a) => {
+        setAttempt(a);
+        setProgress(null); /* 换条线路重来时进度条从头开始，别留着上一跳的百分比 */
+      });
       setPhase('installing');
     } catch (e) {
       setMessage(e instanceof Error ? e.message : '下载安装包失败，稍后重试。');
       setPhase('error');
     }
   }, []);
+
+  /** 应用内下不动时的退路：把地址交给系统浏览器（见 AppUpdaterPlugin 的 openInBrowser） */
+  async function handOffToBrowser(rel: ReleaseInfo) {
+    try {
+      await updaterBridge().openInBrowser(rel.apkUrl);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : '打不开浏览器，可以到 GitHub 的 Release 页面手动下载。');
+      setPhase('error');
+    }
+  }
 
   async function openInstallPermission() {
     try {
@@ -171,7 +189,10 @@ export function AboutSheet({ onClose }: { onClose: () => void }) {
 
             {phase === 'downloading' && (
               <>
-                <p className="ab-upd-t">正在下载安装包…</p>
+                <p className="ab-upd-t">
+                  正在下载安装包…
+                  {attempt && attempt.total > 1 ? `（第 ${attempt.attempt} 次尝试，共 ${attempt.total} 次）` : ''}
+                </p>
                 {progress && progress.percent >= 0 && (
                   <div className="ab-bar">
                     <i style={{ width: `${progress.percent}%` }} />
@@ -224,7 +245,22 @@ export function AboutSheet({ onClose }: { onClose: () => void }) {
             {phase === 'error' && (
               <>
                 <p className="ab-upd-t err">{message}</p>
+                {release && (
+                  <p className="ab-upd-d">
+                    应用内这条路走不通时，可以交给系统浏览器去下（它有自己的重试与多线路），下完点通知里的安装包。
+                  </p>
+                )}
                 <div className="ab-upd-row">
+                  {release && (
+                    <button
+                      id="appUpdateBrowserBtn"
+                      type="button"
+                      className="btn-sticker"
+                      onClick={() => void handOffToBrowser(release)}
+                    >
+                      用浏览器下载
+                    </button>
+                  )}
                   {release && (
                     <button
                       id="appUpdateRetryBtn"

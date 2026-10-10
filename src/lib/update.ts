@@ -55,7 +55,10 @@ export interface ReleaseInfo {
   version: string;
   /** 原始 tag，如 `v1.0.3` */
   tag: string;
+  /** 浏览器点「下载」走的那条直链（`github.com/.../releases/download/...`） */
   apkUrl: string;
+  /** 同一个附件的 API 端点（`api.github.com/.../releases/assets/<id>`，配 `Accept: application/octet-stream` 也是原包）。备用下载地址，见 `apkCandidates()` */
+  apkApiUrl: string;
   apkName: string;
   sizeBytes: number;
   publishedAt: string;
@@ -101,11 +104,25 @@ export function parseLatestRelease(raw: unknown): ReleaseInfo | null {
     version,
     tag,
     apkUrl,
+    apkApiUrl: typeof pick.url === 'string' ? pick.url : '',
     apkName: String(pick.name),
     sizeBytes: typeof pick.size === 'number' ? pick.size : 0,
     publishedAt: typeof r.published_at === 'string' ? r.published_at : '',
     notes: typeof r.body === 'string' ? r.body : '',
   };
+}
+
+/**
+ * 下载安装包时依次尝试的地址。
+ *
+ * 真机上踩过：`api.github.com`（检测更新）通得了，`github.com` 那个 IP 却连不上 ——
+ * 手机挂着代理 / VPN 时，某一台主机的某一个 IP 被挡是常有的事，而这两条路是**两台不同主机**。
+ * 所以先试直链，不通就换 API 的附件端点（同一个包，另一条路）。
+ */
+export function apkCandidates(info: ReleaseInfo): string[] {
+  const list = [info.apkUrl];
+  if (info.apkApiUrl && info.apkApiUrl !== info.apkUrl) list.push(info.apkApiUrl);
+  return list;
 }
 
 /** 拉最新 Release（超时 15 秒，与仓库同步同一档）*/
@@ -178,6 +195,14 @@ export interface UpdaterBridge {
   openInstallSettings(): Promise<void>;
   /** 下载 APK（进度回调）并拉起系统安装器，返回落地的文件路径 */
   downloadAndInstall(url: string, onProgress: (p: UpdateProgress) => void): Promise<string>;
+  /** 换系统浏览器去下（Chrome / 系统下载管理器有自己的重试与多 IP 备选），应用内这条路彻底不通时的退路 */
+  openInBrowser(url: string): Promise<void>;
+}
+
+/** 第几次尝试 / 一共几次：界面显示「第 2 次尝试」，让人知道它还在动 */
+export interface AttemptInfo {
+  attempt: number;
+  total: number;
 }
 
 /* 冒烟测试跑在 jsdom 里，平台判定永远是「网页」。想覆盖真机那条路（检查更新 → 下载 →
@@ -203,6 +228,7 @@ interface AppUpdaterPlugin {
   canInstall(): Promise<{ allowed: boolean }>;
   openInstallSettings(): Promise<void>;
   downloadAndInstall(options: { url: string }): Promise<{ path: string; bytes: number }>;
+  openInBrowser(options: { url: string }): Promise<void>;
   addListener(
     event: 'progress',
     cb: (p: UpdateProgress) => void,
@@ -219,6 +245,9 @@ const nativeBridge: UpdaterBridge = {
   async openInstallSettings() {
     await AppUpdater.openInstallSettings();
   },
+  async openInBrowser(url) {
+    await AppUpdater.openInBrowser({ url });
+  },
   async downloadAndInstall(url, onProgress) {
     /* 进度是原生推过来的 `progress` 事件；下完（或失败）都要把监听摘掉 */
     const handle = await AppUpdater.addListener('progress', (p) => onProgress(p));
@@ -233,4 +262,32 @@ const nativeBridge: UpdaterBridge = {
 
 export function updaterBridge(): UpdaterBridge {
   return bridgeOverride ?? nativeBridge;
+}
+
+/**
+ * 下安装包并交给系统安装器。
+ *
+ * 按 `apkCandidates()` 给的地址逐个试，试完一轮再回到第一条试一次 —— 手机网络与代理
+ * 偶发抽风，重试这一下往往就过去了；**全都失败才抛错**（抛的是原生那边给的中文原因，
+ * 界面据此提示「可以改用浏览器下载」）。
+ */
+export async function installRelease(
+  info: ReleaseInfo,
+  onProgress: (p: UpdateProgress) => void,
+  onAttempt?: (info: AttemptInfo) => void,
+): Promise<string> {
+  const urls = apkCandidates(info);
+  /* 两个地址就是「直链 → 附件端点 → 再回直链」，只有一个就老实试两遍 */
+  const plan = urls.length > 1 ? [...urls, urls[0]!] : [urls[0]!, urls[0]!];
+  let last: unknown = null;
+  for (let i = 0; i < plan.length; i++) {
+    onAttempt?.({ attempt: i + 1, total: plan.length });
+    try {
+      return await updaterBridge().downloadAndInstall(plan[i]!, onProgress);
+    } catch (e) {
+      last = e;
+    }
+  }
+  const msg = last instanceof Error ? last.message : '';
+  throw new UpdateError('network', msg || '下载安装包失败，检查网络后重试。');
 }

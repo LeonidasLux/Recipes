@@ -6,6 +6,7 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.provider.Settings;
+import android.util.Log;
 
 import androidx.core.content.FileProvider;
 
@@ -18,9 +19,14 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
+import java.net.SocketTimeoutException;
 import java.net.URL;
+import java.net.UnknownHostException;
+
+import javax.net.ssl.SSLException;
 
 /**
  * 应用内更新：设置页「关于」里点「下载并安装」时走这里。
@@ -28,10 +34,11 @@ import java.net.URL;
  * 包是从 GitHub Release 上装的，手工流程是「开浏览器 → 找最新 Release → 下载 → 点安装」。
  * 这里把那几步搬到应用里：把 Release 附件下到应用自己的缓存目录，再拉起系统安装器。
  *
- * 三件事：
+ * 四件事：
  *   · canInstall / openInstallSettings —— Android 8 起，装 APK 要先在系统里允许本应用
  *     「安装未知应用」（AndroidManifest 里的 REQUEST_INSTALL_PACKAGES 只是声明，开关归用户）；
  *   · downloadAndInstall —— 下载（进度用 `progress` 事件回传）+ 拉起安装器；
+ *   · openInBrowser —— 下不动时把地址丢给系统浏览器（见下面「网络不通」那段注释）；
  *   · 安装走 FileProvider 的 content:// 地址 —— Android 7 起不允许把 file:// 交给别的应用。
  *
  * 为什么手写本地插件、不引 @capacitor/filesystem + 某个安装插件：这里只有一件事要做，
@@ -41,14 +48,19 @@ import java.net.URL;
 @CapacitorPlugin(name = "AppUpdater")
 public class AppUpdaterPlugin extends Plugin {
 
+    private static final String TAG = "AppUpdater";
     /** 下载好的 APK 固定放这个文件名，下一次更新直接覆盖 */
     private static final String APK_NAME = "jishiben-update.apk";
     private static final String APK_MIME = "application/vnd.android.package-archive";
     /** 与 AndroidManifest 里 provider 的 `android:authorities="${applicationId}.fileprovider"` 对应 */
     private static final String FILE_PROVIDER_SUFFIX = ".fileprovider";
-    /** 连接 / 读流超时（毫秒）：Release 附件在 GitHub 的 CDN 上，一般几秒到几十秒下完 */
-    private static final int CONNECT_TIMEOUT_MS = 15000;
-    private static final int READ_TIMEOUT_MS = 30000;
+    /**
+     * 连接 / 读流超时（毫秒）。连接给到 20 秒：国内这台机器多半挂着代理 / VPN，
+     * 穿过去握手慢是常态，15 秒会误杀那些「慢但能连上」的情况（真机上撞过）。
+     * 读流给 60 秒：4 MB 的包在 0.1 MB/s 的网络上也要 40 秒。
+     */
+    private static final int CONNECT_TIMEOUT_MS = 20000;
+    private static final int READ_TIMEOUT_MS = 60000;
 
     /** 系统允不允许本应用装包（Android 8 以下没有这个开关，一律算允许） */
     @PluginMethod
@@ -95,8 +107,34 @@ public class AppUpdaterPlugin extends Plugin {
             ret.put("bytes", apk.length());
             call.resolve(ret);
         } catch (Exception e) {
-            String msg = e.getMessage();
-            call.reject(msg == null || msg.isEmpty() ? "下载安装包失败，检查网络后重试" : msg);
+            /* 原生这串英文（`failed to connect to github.com/… after 15000ms`）别往界面上摆，进 logcat */
+            Log.w(TAG, "下载安装包失败：" + url, e);
+            call.reject(friendlyError(e));
+        }
+    }
+
+    /**
+     * 实在下不动时的退路：把这个地址交给系统浏览器（Chrome / 系统下载管理器）去下。
+     *
+     * 为什么需要它：原生这条 HTTP 是直连某一台主机的某一个 IP，网络稍微被挡就整条路不通；
+     * 而浏览器有自己的连接重试、多 IP 备选与断点重下（也正是「手工更新」那条老路），
+     * 应用内下不动时把地址递出去，用户至少还有一条走得通的路。
+     */
+    @PluginMethod
+    public void openInBrowser(PluginCall call) {
+        String url = call.getString("url");
+        if (url == null || url.isEmpty()) {
+            call.reject("没有拿到要打开的地址");
+            return;
+        }
+        try {
+            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+            call.resolve();
+        } catch (Exception e) {
+            Log.w(TAG, "打不开浏览器", e);
+            call.reject("打不开浏览器，可以到 GitHub 的 Release 页面手动下载");
         }
     }
 
@@ -105,6 +143,27 @@ public class AppUpdaterPlugin extends Plugin {
             return getContext().getPackageManager().canRequestPackageInstalls();
         }
         return true;
+    }
+
+    /**
+     * 把原生异常翻成一句用户能照着做的中文。
+     * 原始那串英文（含被连的主机与 IP）只写进 logcat，不摆到界面上。
+     */
+    private String friendlyError(Exception e) {
+        if (e instanceof UnknownHostException) {
+            return "解析不了下载地址（网络或 DNS 不通），检查网络后重试";
+        }
+        if (e instanceof SSLException) {
+            return "HTTPS 连接被中断了（网络可能被劫持），可以改用浏览器下载";
+        }
+        if (e instanceof SocketTimeoutException) {
+            return "连不上 GitHub 的下载服务器（网络被挡或太慢），可以改用浏览器下载";
+        }
+        if (e instanceof IOException) {
+            return "下载中途断了（网络不稳），稍后重试或改用浏览器下载";
+        }
+        String msg = e.getMessage();
+        return msg == null || msg.isEmpty() ? "下载安装包失败，检查网络后重试" : msg;
     }
 
     /** 下到应用缓存目录；中途失败只留下 `.part`，不会被当成一个完整的包 */
