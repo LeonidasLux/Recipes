@@ -222,6 +222,7 @@
   border-radius: 14px; border: 1.5px solid color-mix(in oklch, var(--on-accent) 40%, transparent);
   background: color-mix(in oklch, #fff 76%, transparent); color: var(--fg); font: inherit; font-size: 13.5px; }
 .s-order .ordernote::placeholder { color: color-mix(in oklch, var(--on-accent) 62%, transparent); }
+.s-order .clearwrap > .ordernote { padding-right: 40px; } /* 给右端那枚清空按钮腾地方 */
 .s-order .ordernote:focus { outline: 3px solid color-mix(in oklch, #fff 65%, transparent); outline-offset: 1px;
   background: #fff; border-color: var(--ink); }
 .s-order .sendbtn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 46px;
@@ -270,8 +271,10 @@
 .s-order .pick.on .ck { background: var(--fg); border-color: var(--fg); color: #fff; }
 
 .s-order .manualrow { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+.s-order .manualrow .clearwrap { flex: 1; min-width: 0; }
 .s-order .manualrow input { flex: 1; min-width: 0; min-height: 48px; padding: 11px 14px; border: 1.5px solid var(--border);
   border-radius: 14px; background: var(--surface); color: var(--fg); font: inherit; font-size: 15px; }
+.s-order .manualrow .clearwrap > input { padding-right: 42px; }
 .s-order .manualrow input:focus { border-color: var(--accent-deep); outline: 3px solid color-mix(in oklch, var(--accent-deep) 20%, transparent); outline-offset: 0; }
 .s-order .manualrow .btn-sticker { flex: 0 0 auto; min-height: 48px; }
 

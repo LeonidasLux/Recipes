@@ -5,6 +5,7 @@ import { useSync } from '../lib/useSync';
 import { useToast } from '../components/Toast';
 import { Icon } from '../components/Icons';
 import { StorageWarning } from '../components/Bits';
+import { ClearArea, ClearInput } from '../components/ClearInput';
 import { GithubError, maskToken, normalizeToken, tokenShapeError } from '../lib/github';
 import { aiKeyShapeError, maskAiKey, normalizeAiKey } from '../lib/ai';
 import { preserveTypedValue } from '../lib/inputs';
@@ -379,7 +380,7 @@ export default function Setup() {
             <div className="adv-body">
               <div className={`field${importErr ? ' invalid' : ''}`}>
                 <label htmlFor="importJson">配置 JSON</label>
-                <textarea
+                <ClearArea
                   id="importJson"
                   rows={5}
                   spellCheck={false}
@@ -388,6 +389,10 @@ export default function Setup() {
                   value={importJson}
                   onChange={(e) => {
                     setImportJson(e.target.value);
+                    if (importErr) setImportErr('');
+                  }}
+                  onClear={() => {
+                    setImportJson('');
                     if (importErr) setImportErr('');
                   }}
                   {...preserveTypedValue((v) => {
@@ -422,7 +427,7 @@ export default function Setup() {
             <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <div className={`field${invalid.nickname ? ' invalid' : ''}`}>
                 <label htmlFor="fNickname">我的昵称</label>
-                <input
+                <ClearInput
                   id="fNickname"
                   type="text"
                   autoComplete="nickname"
@@ -432,6 +437,7 @@ export default function Setup() {
                   placeholder="例如：小辉"
                   value={myName}
                   onChange={(e) => setMyName(e.target.value)}
+                  onClear={() => setMyName('')}
                   {...preserveTypedValue(setMyName, (v) => blurCheck('nickname', v))}
                 />
                 <span className="err">昵称要填 1–12 个字</span>
@@ -440,7 +446,7 @@ export default function Setup() {
 
               <div className={`field${invalid.partner ? ' invalid' : ''}`}>
                 <label htmlFor="fPartnerNickname">另一半的昵称（可留空）</label>
-                <input
+                <ClearInput
                   id="fPartnerNickname"
                   type="text"
                   autoComplete="off"
@@ -449,6 +455,7 @@ export default function Setup() {
                   placeholder="例如：小红"
                   value={partnerName}
                   onChange={(e) => setPartnerName(e.target.value)}
+                  onClear={() => setPartnerName('')}
                   {...preserveTypedValue(setPartnerName, (v) => blurCheck('partner', v))}
                 />
                 <span className="err">最多 12 个字</span>
@@ -459,7 +466,7 @@ export default function Setup() {
 
               <div className={`field${invalid.token ? ' invalid' : ''}`}>
                 <label htmlFor="fToken">GitHub token</label>
-                <input
+                <ClearInput
                   id="fToken"
                   type="password"
                   autoComplete="off"
@@ -471,6 +478,10 @@ export default function Setup() {
                   value={token}
                   onChange={(e) => {
                     setToken(normalizeToken(e.target.value));
+                    if (tokenErr) setTokenErr(null);
+                  }}
+                  onClear={() => {
+                    setToken('');
                     if (tokenErr) setTokenErr(null);
                   }}
                   {...preserveTypedValue(
@@ -487,7 +498,7 @@ export default function Setup() {
 
               <div className={`field${invalid.repo ? ' invalid' : ''}`}>
                 <label htmlFor="fRepo">仓库（owner/repo）</label>
-                <input
+                <ClearInput
                   id="fRepo"
                   type="text"
                   spellCheck={false}
@@ -496,6 +507,7 @@ export default function Setup() {
                   placeholder="例如 xiaoman/family-recipes"
                   value={repo}
                   onChange={(e) => setRepo(e.target.value.trimStart())}
+                  onClear={() => setRepo('')}
                   {...preserveTypedValue(
                     (v) => setRepo(v.trimStart()),
                     (v) => blurCheck('repo', v.trimStart()),
@@ -509,12 +521,13 @@ export default function Setup() {
                 <div className="adv-body">
                   <div className={`field${invalid.branch ? ' invalid' : ''}`}>
                     <label htmlFor="fBranch">分支</label>
-                    <input
+                    <ClearInput
                       id="fBranch"
                       type="text"
                       spellCheck={false}
                       value={branch}
                       onChange={(e) => setBranch(e.target.value)}
+                      onClear={() => setBranch('')}
                       {...preserveTypedValue(setBranch, (v) => blurCheck('branch', v))}
                     />
                   </div>
@@ -532,7 +545,7 @@ export default function Setup() {
                   </div>
                   <div className={`field${invalid.aiKey ? ' invalid' : ''}`}>
                     <label htmlFor="fAiKey">DeepSeek API Key（可留空）</label>
-                    <input
+                    <ClearInput
                       id="fAiKey"
                       type="password"
                       autoComplete="off"
@@ -544,6 +557,10 @@ export default function Setup() {
                       value={aiKey}
                       onChange={(e) => {
                         setAiKey(normalizeAiKey(e.target.value));
+                        if (aiKeyErr) setAiKeyErr(null);
+                      }}
+                      onClear={() => {
+                        setAiKey('');
                         if (aiKeyErr) setAiKeyErr(null);
                       }}
                       {...preserveTypedValue(

@@ -5,6 +5,7 @@ import { useToast } from '../components/Toast';
 import { TabBar, usePreviewState } from '../components/TabBar';
 import { RoleSwitch } from '../components/RoleSwitch';
 import { SkeletonRows, StateCard, StatusChip, Thumb } from '../components/Bits';
+import { ClearInput } from '../components/ClearInput';
 import { Icon } from '../components/Icons';
 import { anchorDeleteTip, DeleteTip, type DeleteTipState } from '../components/DeleteTip';
 import { initial, isTodayOrder, itemCover, mealLabel, orderCover, orderItems, orderMain, orderSummary, todayLine } from '../data/helpers';
@@ -226,7 +227,7 @@ export default function OrderScreen() {
           )}
         </div>
 
-        <input
+        <ClearInput
           className="ordernote"
           type="text"
           value={note}
@@ -236,6 +237,7 @@ export default function OrderScreen() {
           placeholder="给掌勺的话（可不填）"
           aria-label="给掌勺的话"
           onChange={(e) => setNote(e.target.value)}
+          onClear={() => setNote('')}
           {...preserveTypedValue(setNote)}
         />
 
@@ -343,13 +345,15 @@ export default function OrderScreen() {
             </div>
 
             <div className="manualrow">
-              <input
+              <ClearInput
                 type="text"
                 maxLength={18}
                 autoComplete="off"
                 placeholder="还想吃某道没收藏的？自己输"
+                aria-label="自己加一道没收藏的"
                 value={manual}
                 onChange={(e) => setManual(e.target.value)}
+                onClear={() => setManual('')}
                 {...preserveTypedValue(setManual)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {

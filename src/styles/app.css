@@ -371,6 +371,24 @@ textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible {
 .field.invalid .err { display: inline-flex; }
 .field .hint { font-size: 11.5px; color: var(--muted); }
 
+/* ─── 输入格里的一键清空 ────────────────────────
+   .clearwrap 是「输入框 + 右端那枚 ×」的包装层：只负责给按钮定位（贴输入框自己的盒子，
+   不是外层的 .field，那个盒子还含 label 与错误提示）。按钮由组件在「有内容」时才渲染。 */
+.clearwrap { position: relative; display: block; width: 100%; min-width: 0; }
+.clearwrap > input, .clearwrap > textarea { width: 100%; }
+.clearx { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); z-index: 1;
+  width: 30px; height: 30px; padding: 0; border: 0; border-radius: 50%;
+  display: grid; place-items: center; cursor: pointer;
+  background: color-mix(in oklch, var(--ink) 10%, transparent); color: var(--fg); }
+.clearx svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2.4; }
+.clearx:hover { background: color-mix(in oklch, var(--ink) 20%, transparent); }
+.clearx:active { transform: translateY(-50%) scale(.94); }
+/* 多行输入格：贴右上角，跟第一行文字平齐 */
+.clearx.top { top: 9px; transform: none; }
+.clearx.top:active { transform: scale(.94); }
+/* 给右端这枚按钮腾地方：输入框自己的内边距不动，只把右边加宽 */
+.field .clearwrap > input, .field .clearwrap > textarea { padding-right: 42px; }
+
 /* 菜谱照片的编辑区（添加页的按钮、详情页「编辑这道菜」里的预览 + 换图） */
 .photofield { display: flex; gap: 12px; align-items: center; }
 .pthumb { width: 84px; height: 84px; border-radius: 18px; overflow: hidden; flex: 0 0 auto;

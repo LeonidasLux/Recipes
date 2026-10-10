@@ -175,6 +175,8 @@ interface Mounted {
   pointerUp(sel: string): Promise<void>;
   /** 派发 contextmenu（长按链接时系统补的那个事件），返回是否被 preventDefault */
   contextMenu(sel: string): Promise<boolean>;
+  /** 派发 mousedown，返回是否被 preventDefault（用来验「按钮不抢输入框的焦点」） */
+  mouseDown(sel: string): Promise<boolean>;
   /** 长按：按下 → 推进虚拟时间（默认 600ms）→ 松手 */
   longPress(sel: string, ms?: number): Promise<void>;
   value(sel: string): string;
@@ -298,6 +300,15 @@ async function mount(path: string): Promise<Mounted> {
       let prevented = false;
       await act(async () => {
         prevented = !el.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+      });
+      return prevented;
+    },
+    async mouseDown(sel) {
+      const el = root.querySelector<HTMLElement>(sel);
+      if (!el) throw new Error(`找不到 ${sel}`);
+      let prevented = false;
+      await act(async () => {
+        prevented = !el.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
       });
       return prevented;
     },
@@ -1490,7 +1501,7 @@ async function interactionChecks() {
     check(readDb().recipes.length === 6, '★ 缺菜名就拦住，一条都不落库', String(readDb().recipes.length));
     check(m.html().includes('第 2 张还缺菜名'), '告诉用户是哪一张');
     check(
-      (m.$('#b1Title')?.parentElement?.className ?? '').includes('invalid'),
+      (m.$('#b1Title')?.closest('.field')?.className ?? '').includes('invalid'),
       '把那一条的「菜名」标红',
       m.$('#b1Title')?.parentElement?.className,
     );
@@ -5170,7 +5181,7 @@ async function edgeChecks() {
       '★ 添加页备注 = .field 里的 textarea',
     );
     check(
-      note.parentElement?.querySelector('label')?.getAttribute('for') === 'mNote',
+      note.closest('.field')?.querySelector('label')?.getAttribute('for') === 'mNote',
       '★ 添加页备注有对应的 label',
     );
     check((note.getAttribute('style') ?? '') === '', '备注不再靠内联样式硬撑高度', note.getAttribute('style') ?? '');
@@ -5186,6 +5197,131 @@ async function edgeChecks() {
       '详情编辑的备注也是 .field 里的 textarea（两边结构一致）',
     );
     await m.close();
+  }
+
+  console.log('\n[边界 · 内容输入格都带一键清空]');
+  localStorage.clear();
+  {
+    /* 全应用要打字的地方（含做法 / 备注这类多行输入）都该一样：格子里有内容 → 右端出现 ×，
+       点一下清空；空了就不出现。样式表在冒烟里是空的，定位与内边距只能读文件验。 */
+    const btnOf = (m: Mounted, sel: string) =>
+      m.$(sel)?.closest('.clearwrap')?.querySelector<HTMLElement>('.clearx') ?? null;
+
+    /** 一格一格走：先打字，断言按钮出现且点了真能清空；再断言空的时候按钮不出现 */
+    async function walk(m: Mounted, sel: string, what: string) {
+      /* 有的格子进来就带着值（昵称、分支、详情里的原文），按钮该跟着「有没有内容」走 */
+      check(
+        (btnOf(m, sel) !== null) === (m.value(sel) !== ''),
+        `${what}：清空按钮跟着「这格有没有内容」出现 / 收起`,
+      );
+      await m.type(sel, '随便写点内容');
+      check(m.value(sel) === '随便写点内容', `${what}：能打字进去`);
+      const btn = btnOf(m, sel);
+      check(btn !== null, `★ ${what}：有内容就出现右端的清空按钮`);
+      if (btn) {
+        check(
+          (await m.mouseDown(`${sel} + .clearx`)) === true,
+          `${what}：按钮不抢输入框的焦点（手机上软键盘不会跟着收起来）`,
+        );
+        await m.clickEl(btn);
+        check(m.value(sel) === '', `★ ${what}：点一下就把这格清空`);
+        check(btnOf(m, sel) === null, `${what}：清空后按钮收起来`);
+      }
+    }
+
+    /** 每一屏的输入格都该被 .clearwrap 包住（搜索框那两处另有 .sclear，本来就是自带清除） */
+    function sweep(m: Mounted, path: string) {
+      const bare = m
+        .$$('input, textarea')
+        .filter((el) => {
+          const t = (el.getAttribute('type') ?? 'text').toLowerCase();
+          return t !== 'checkbox' && t !== 'file' && t !== 'radio' && t !== 'hidden';
+        })
+        .filter((el) => el.closest('.clearwrap') === null && el.closest('.searchbar, .picksearch') === null);
+      check(
+        bare.length === 0,
+        `★ ${path} 的每个输入格都带一键清空（搜索框那种自带清除的除外）`,
+        bare.map((el) => el.id || el.className || el.tagName).join(' | '),
+      );
+    }
+
+    {
+      useDb();
+      const m = await mount('/setup');
+      sweep(m, '/setup');
+      await walk(m, '#fNickname', '首次设置的昵称');
+      await walk(m, '#fPartnerNickname', '另一半的昵称');
+      await walk(m, '#fToken', 'GitHub token');
+      await walk(m, '#fRepo', '仓库名');
+      await walk(m, '#fBranch', '分支');
+      await walk(m, '#fAiKey', 'DeepSeek Key');
+      await walk(m, '#importJson', '导入配置的 JSON（多行）');
+      await m.close();
+    }
+    {
+      useDb();
+      const m = await mount('/sync');
+      sweep(m, '/sync');
+      await walk(m, '#nickMe', '设置页的我的昵称');
+      await walk(m, '#nickPartner', '设置页的另一半昵称');
+      await walk(m, '#tokenInput', '设置页的新 token');
+      await walk(m, '#aiKeyInput', '设置页的 DeepSeek Key');
+      await m.close();
+    }
+    {
+      useDb();
+      const m = await mount('/order');
+      sweep(m, '/order');
+      await walk(m, '.ordernote', '给掌勺的话');
+      await walk(m, '.manualrow input', '自己加一道没收藏的');
+      await m.close();
+    }
+    {
+      useDb();
+      const m = await mount('/library');
+      sweep(m, '/library');
+      await m.close();
+    }
+    {
+      useDb();
+      const m = await mount('/add');
+      sweep(m, '/add');
+      await walk(m, '#shareInput', '粘贴的分享文案（多行）');
+      await walk(m, '#mTitle', '菜名');
+      await walk(m, '#mSteps', '做法（多行）');
+      await walk(m, '#mUrl', '原文链接');
+      await walk(m, '#mNote', '备注（多行）');
+      await m.close();
+    }
+    {
+      useDb();
+      const m = await mount('/recipe/r5');
+      await m.click('#editRecipeBtn');
+      sweep(m, '/recipe/r5 编辑态');
+      await walk(m, '#editTitle', '详情编辑的菜名');
+      await walk(m, '#editUrl', '详情编辑的原文出处');
+      await walk(m, '#editSteps', '详情编辑的做法（多行）');
+      await walk(m, '#editNote', '详情编辑的备注（多行）');
+      await m.close();
+    }
+
+    /* 布局约束：按钮贴的是输入框自己的盒子（不是外层 .field），并给它腾出右边的位置 */
+    const css = readFileSync('src/styles/app.css', 'utf8') + readFileSync('src/styles/screens.css', 'utf8');
+    check(
+      /\.clearwrap\s*\{[^}]*position:\s*relative/.test(css),
+      '★ 清空按钮的定位容器就是输入框那层（不是外层的 .field）',
+    );
+    check(/\.clearx\s*\{[^}]*position:\s*absolute[^}]*right:\s*8px/.test(css), '清空按钮贴在输入框右端');
+    check(/\.clearx\.top\s*\{[^}]*top:\s*9px/.test(css), '多行输入格的按钮贴右上角，跟第一行文字平齐');
+    check(
+      /\.field \.clearwrap > input,\s*\.field \.clearwrap > textarea\s*\{[^}]*padding-right:\s*42px/.test(css),
+      '★ 有按钮时输入框右边留出位置，文字不会钻到按钮底下',
+    );
+    check(
+      /\.s-order \.clearwrap > \.ordernote\s*\{[^}]*padding-right/.test(css) &&
+        /\.s-order \.manualrow \.clearwrap\s*\{[^}]*flex:\s*1/.test(css),
+      '点单页那两个（给掌勺的话 / 自己加一道）也跟着走',
+    );
   }
 
   console.log('\n[边界 · 菜谱库长按走系统长按事件也进多选]');

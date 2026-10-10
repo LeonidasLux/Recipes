@@ -1,6 +1,7 @@
 import { useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import { useStore } from '../data/store';
 import { useToast } from '../components/Toast';
+import { ClearArea, ClearInput } from '../components/ClearInput';
 import { Icon } from '../components/Icons';
 import { PhotoViewer } from '../components/PhotoViewer';
 import { artUrl, initial, newId } from '../data/helpers';
@@ -354,7 +355,7 @@ export default function AddRecipe() {
           {/* ① 输入：贴一段分享文案，或者传一张截图 —— 两个按钮并排，点完就识别 */}
           <section className="card sticker stack" style={{ padding: 14 }}>
             <div className={`field${rawInvalid ? ' invalid' : ''}`}>
-              <textarea
+              <ClearArea
                 id="shareInput"
                 rows={3}
                 spellCheck={false}
@@ -365,6 +366,10 @@ export default function AddRecipe() {
                 value={raw}
                 onChange={(e) => {
                   setRaw(e.target.value);
+                  setRawInvalid(false);
+                }}
+                onClear={() => {
+                  setRaw('');
                   setRawInvalid(false);
                 }}
                 {...preserveTypedValue((v) => {
@@ -563,13 +568,14 @@ function RecipeFields({
         {cover}
         <div className={`field${titleInvalid ? ' invalid' : ''}`} style={{ minWidth: 0 }}>
           <label htmlFor={`${prefix}Title`}>菜名</label>
-          <input
+          <ClearInput
             id={`${prefix}Title`}
             type="text"
             spellCheck={false}
             placeholder="这道菜叫什么？"
             value={value.title}
             onChange={(e) => onChange({ title: e.target.value })}
+            onClear={() => onChange({ title: '' })}
             {...preserveTypedValue((v) => onChange({ title: v }))}
           />
           <span className="err">总得有个名字才能存</span>
@@ -578,25 +584,27 @@ function RecipeFields({
 
       <div className="field">
         <label htmlFor={`${prefix}Steps`}>做法</label>
-        <textarea
+        <ClearArea
           id={`${prefix}Steps`}
           placeholder="一步一行，换行分开就行"
           style={{ minHeight: 92 }}
           value={value.steps}
           onChange={(e) => onChange({ steps: e.target.value })}
+          onClear={() => onChange({ steps: '' })}
           {...preserveTypedValue((v) => onChange({ steps: v }))}
         />
       </div>
 
       <div className="field">
         <label htmlFor={`${prefix}Url`}>原文链接</label>
-        <input
+        <ClearInput
           id={`${prefix}Url`}
           type="url"
           spellCheck={false}
           placeholder="https://…"
           value={value.url}
           onChange={(e) => onChange({ url: e.target.value })}
+          onClear={() => onChange({ url: '' })}
           {...preserveTypedValue((v) => onChange({ url: v }))}
         />
       </div>
@@ -605,11 +613,12 @@ function RecipeFields({
 
       <div className="field">
         <label htmlFor={`${prefix}Note`}>备注</label>
-        <textarea
+        <ClearArea
           id={`${prefix}Note`}
           placeholder="想记的点：少辣、换食材、准备时间…"
           value={value.note}
           onChange={(e) => onChange({ note: e.target.value })}
+          onClear={() => onChange({ note: '' })}
           {...preserveTypedValue((v) => onChange({ note: v }))}
         />
       </div>

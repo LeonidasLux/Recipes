@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useStore } from '../data/store';
 import { useToast } from '../components/Toast';
 import { StateCard } from '../components/Bits';
+import { ClearArea, ClearInput } from '../components/ClearInput';
 import { useRecipePhoto } from '../components/Photo';
 import { PhotoViewer } from '../components/PhotoViewer';
 import { Icon } from '../components/Icons';
@@ -200,19 +201,20 @@ export default function RecipeDetail() {
                   <div className="editrow show">
                     <div className="field">
                       <label htmlFor="editTitle">菜名</label>
-                      <input
+                      <ClearInput
                         id="editTitle"
                         type="text"
                         maxLength={18}
                         value={draft.title}
                         onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
+                        onClear={() => setDraft((d) => ({ ...d, title: '' }))}
                         {...preserveTypedValue((v) => setDraft((d) => ({ ...d, title: v })))}
                         placeholder="例如：番茄炖牛腩"
                       />
                     </div>
                     <div className="field">
                       <label htmlFor="editUrl">原文出处</label>
-                      <input
+                      <ClearInput
                         id="editUrl"
                         type="url"
                         inputMode="url"
@@ -220,6 +222,7 @@ export default function RecipeDetail() {
                         spellCheck={false}
                         value={draft.url}
                         onChange={(e) => setDraft((d) => ({ ...d, url: e.target.value }))}
+                        onClear={() => setDraft((d) => ({ ...d, url: '' }))}
                         {...preserveTypedValue((v) => setDraft((d) => ({ ...d, url: v })))}
                         placeholder="https://…"
                       />
@@ -262,20 +265,22 @@ export default function RecipeDetail() {
                     </div>
                     <div className="field">
                       <label htmlFor="editSteps">做法</label>
-                      <textarea
+                      <ClearArea
                         id="editSteps"
                         value={draft.steps}
                         onChange={(e) => setDraft((d) => ({ ...d, steps: e.target.value }))}
+                        onClear={() => setDraft((d) => ({ ...d, steps: '' }))}
                         {...preserveTypedValue((v) => setDraft((d) => ({ ...d, steps: v })))}
                         placeholder="一步一步写，换行分开就行。"
                       />
                     </div>
                     <div className="field">
                       <label htmlFor="editNote">我的备注</label>
-                      <textarea
+                      <ClearArea
                         id="editNote"
                         value={draft.note}
                         onChange={(e) => setDraft((d) => ({ ...d, note: e.target.value }))}
+                        onClear={() => setDraft((d) => ({ ...d, note: '' }))}
                         {...preserveTypedValue((v) => setDraft((d) => ({ ...d, note: v })))}
                         placeholder="做法心得、替代食材、另一半的口味，都可以记在这里。"
                       />

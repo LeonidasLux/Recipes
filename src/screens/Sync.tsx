@@ -4,6 +4,7 @@ import { useStore } from '../data/store';
 import { useSync } from '../lib/useSync';
 import { useToast } from '../components/Toast';
 import { StorageWarning } from '../components/Bits';
+import { ClearInput } from '../components/ClearInput';
 import { TabBar } from '../components/TabBar';
 import { Icon } from '../components/Icons';
 import { AboutSheet } from '../components/AboutSheet';
@@ -233,7 +234,7 @@ export default function SyncScreen() {
             <div className={`editrow${editToken ? ' show' : ''}`}>
               <div className={`field${tokenInvalid ? ' invalid' : ''}`}>
                 <label htmlFor="tokenInput">新的 token</label>
-                <input
+                <ClearInput
                   id="tokenInput"
                   type="password"
                   autoComplete="off"
@@ -244,6 +245,10 @@ export default function SyncScreen() {
                   value={tokenDraft}
                   onChange={(e) => {
                     setTokenDraft(normalizeToken(e.target.value));
+                    setTokenInvalid(false);
+                  }}
+                  onClear={() => {
+                    setTokenDraft('');
                     setTokenInvalid(false);
                   }}
                   {...preserveTypedValue(
@@ -341,7 +346,7 @@ export default function SyncScreen() {
             <div className={`editrow${editAi ? ' show' : ''}`}>
               <div className={`field${aiInvalid ? ' invalid' : ''}`}>
                 <label htmlFor="aiKeyInput">DeepSeek API Key</label>
-                <input
+                <ClearInput
                   id="aiKeyInput"
                   type="password"
                   autoComplete="off"
@@ -352,6 +357,11 @@ export default function SyncScreen() {
                   value={aiDraft}
                   onChange={(e) => {
                     setAiDraft(normalizeAiKey(e.target.value));
+                    setAiInvalid(false);
+                    setAiMsg(null);
+                  }}
+                  onClear={() => {
+                    setAiDraft('');
                     setAiInvalid(false);
                     setAiMsg(null);
                   }}
@@ -423,7 +433,7 @@ export default function SyncScreen() {
             <div className={`editrow${editNames ? ' show' : ''}`}>
               <div className="field">
                 <label htmlFor="nickMe">我的昵称</label>
-                <input
+                <ClearInput
                   id="nickMe"
                   type="text"
                   maxLength={12}
@@ -432,12 +442,13 @@ export default function SyncScreen() {
                   placeholder="例如：小辉"
                   value={nameDraft.me}
                   onChange={(e) => setNameDraft((s) => ({ ...s, me: e.target.value }))}
+                  onClear={() => setNameDraft((s) => ({ ...s, me: '' }))}
                   {...preserveTypedValue((v) => setNameDraft((s) => ({ ...s, me: v })))}
                 />
               </div>
               <div className="field">
                 <label htmlFor="nickPartner">另一半的昵称</label>
-                <input
+                <ClearInput
                   id="nickPartner"
                   type="text"
                   maxLength={12}
@@ -446,6 +457,7 @@ export default function SyncScreen() {
                   placeholder="例如：小红"
                   value={nameDraft.partner}
                   onChange={(e) => setNameDraft((s) => ({ ...s, partner: e.target.value }))}
+                  onClear={() => setNameDraft((s) => ({ ...s, partner: '' }))}
                   {...preserveTypedValue((v) => setNameDraft((s) => ({ ...s, partner: v })))}
                 />
               </div>
