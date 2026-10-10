@@ -10,6 +10,9 @@
 /* ═══════════ 菜谱库 · Feed ═══════════ */
 .s-library .feed { padding-bottom: 18px; }
 .s-library .emptyart svg { width: 40px; height: 40px; }
+/* 顶栏标题行：右上角刷新按钮（.syncbtn）的底边跟左边大标题的底边齐平。
+   改成整行按底部对齐，按钮自己不再上提（原来那 4px 是想让圆心对标题中线）。 */
+.s-library .topbar .navrow { align-items: flex-end; }
 
 /* 多选模式：顶栏换成选择条（退出 / 已选几条 / 全选），条目右侧出现勾选圈。
    整行都是勾选目标（不是只能点那个圈）。 */
@@ -33,8 +36,10 @@
 .s-library .dishrow .ck svg { width: 14px; height: 14px; stroke: transparent; fill: none; stroke-width: 3; }
 .s-library .dishrow.pick.on .ck { background: var(--accent); border-color: var(--ink); box-shadow: 0 1px 0 0 var(--ink); }
 .s-library .dishrow.pick.on .ck svg { stroke: var(--ink); }
-/* 同上：固定高度的纵向 flex 里，搜索框不该被列表挤扁 */
-.s-library .searchwrap { flex: 0 0 auto; padding: 0 18px 2px; }
+/* 同上：固定高度的纵向 flex 里，搜索框不该被列表挤扁。
+   搜索框下方不再单独留那 2px —— 与排序条的间距统一由排序条的上内边距给，
+   这样「搜索框 ↔ 排序条」和「排序条 ↔ 列表」两段间距一样宽。 */
+.s-library .searchwrap { flex: 0 0 auto; padding: 0 18px; }
 .s-library .searchbar { display: flex; align-items: center; gap: 6px;
   background: var(--surface); border: 1.5px solid var(--border); border-radius: 999px;
   padding: 2px 6px 2px 16px; min-height: 48px; transition: border-color .15s ease; }
@@ -51,9 +56,10 @@
 .s-library .matchline { display: flex; align-items: center; justify-content: space-between; margin: 10px 2px 2px; }
 .s-library .matchline .sclear { width: auto; padding: 4px 10px; font-size: 12.5px;
   color: var(--accent-ink); font-weight: 600; }
-/* 排序条：紧凑的一行，窄屏放不下就横向滚 */
+/* 排序条：紧凑的一行，窄屏放不下就横向滚。
+   上下各留 10px：与上方搜索框、下方菜谱列表的间距保持一致。 */
 .s-library .sortbar { display: flex; align-items: center; flex: 0 0 auto; gap: 7px; overflow-x: auto;
-  padding: 0 18px 10px; scrollbar-width: none; }
+  padding: 10px 18px; scrollbar-width: none; }
 .s-library .sortbar::-webkit-scrollbar { display: none; }
 .s-library .sortbar .sortlabel { flex: 0 0 auto; font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); }
 .s-library .schip { flex: 0 0 auto; min-height: 34px; padding: 5px 12px; display: inline-flex; align-items: center; gap: 5px;
@@ -185,6 +191,10 @@
 .s-cook .morebar.open .chev svg { transform: rotate(180deg); }
 
 /* ═══════════ 点单 · 组合器 ═══════════ */
+/* 顶栏标题行：右上角「点单 / 掌勺」开关的底边跟左边大标题的底边齐平
+   （和菜谱库那枚同步按钮同一套做法，见文件开头的 .s-library .topbar .navrow）。
+   掌勺屏的标题块下面还挂着一行小字，开关留在顶端正对标题，不跟着往下坠。 */
+.s-order .topbar .navrow { align-items: flex-end; }
 /* 和页面其他内容一样左右留 18px（原来通栏贴边），高度也比原先收紧一档 */
 .s-order .composer { flex: 0 0 auto; padding: 10px 12px 12px; margin: 0 18px; border-radius: var(--radius-card);
   background: var(--accent); border: 2px solid var(--ink); color: var(--on-accent); box-shadow: var(--shadow-sticker); }

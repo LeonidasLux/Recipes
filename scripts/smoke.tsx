@@ -696,8 +696,18 @@ async function updateErrOf(fn: () => Promise<unknown>): Promise<UpdateError | nu
   }
 }
 
-/** 应用内更新的假 Release：版本 1.0.3、附件就是 CI 约定那个名字 */
-function fakeRelease(version = '1.0.3') {
+/**
+ * 假 Release 用的版本号：**比本机高一档**，按 `package.json` 现算。
+ * 本机 version 每次「提交」都 patch +1（`AGENTS.md` §8），写死一个数字迟早跟它撞上 ——
+ * 撞上那天「查到更高的版本 → 提示可以更新」就不成立了。
+ */
+const NEXT_VERSION = (() => {
+  const [major = 0, minor = 0, patch = 0] = PKG_VERSION.split('.').map((n) => Number.parseInt(n, 10) || 0);
+  return `${major}.${minor}.${patch + 1}`;
+})();
+
+/** 应用内更新的假 Release：版本比本机高一档、附件就是 CI 约定那个名字 */
+function fakeRelease(version = NEXT_VERSION) {
   const tag = `v${version}`;
   return {
     tag_name: tag,
@@ -4139,10 +4149,16 @@ async function edgeChecks() {
     check(formatBytes(0) === '大小未知', '没给大小就不瞎写 0 B');
 
     const rel = parseLatestRelease(fakeRelease());
-    check(rel?.version === '1.0.3' && rel?.tag === 'v1.0.3', '★ 从 Release 里读出版本号（去掉 v）');
-    check(rel?.apkName === 'jishiben-v1.0.3.apk' && rel?.sizeBytes === 7340032, '★ 挑出约定那个 APK 附件');
-    check(rel?.apkUrl.endsWith('/jishiben-v1.0.3.apk') === true, '带上 APK 的下载地址');
-    check(parseLatestRelease({ tag_name: 'v1.0.3', assets: [] }) === null, '★ 没有 APK 附件的 Release 不算数');
+    check(
+      rel?.version === NEXT_VERSION && rel?.tag === `v${NEXT_VERSION}`,
+      '★ 从 Release 里读出版本号（去掉 v）',
+    );
+    check(
+      rel?.apkName === `jishiben-v${NEXT_VERSION}.apk` && rel?.sizeBytes === 7340032,
+      '★ 挑出约定那个 APK 附件',
+    );
+    check(rel?.apkUrl.endsWith(`/jishiben-v${NEXT_VERSION}.apk`) === true, '带上 APK 的下载地址');
+    check(parseLatestRelease({ tag_name: `v${NEXT_VERSION}`, assets: [] }) === null, '★ 没有 APK 附件的 Release 不算数');
     check(parseLatestRelease({ assets: [{ name: 'a.apk', browser_download_url: 'u' }] }) === null, '没有 tag 的返回不算数');
     const odd = parseLatestRelease({
       tag_name: 'v9.9.9',
@@ -4155,7 +4171,7 @@ async function edgeChecks() {
   {
     const gh = stubFetch([{ match: /releases\/latest/, reply: () => jsonRes(fakeRelease()) }]);
     const found = await checkForUpdate('1.0.2');
-    check(found.hasUpdate && found.latest.version === '1.0.3', '★ 查到更高的版本 → 提示可以更新');
+    check(found.hasUpdate && found.latest.version === NEXT_VERSION, '★ 查到更高的版本 → 提示可以更新');
     check(
       gh.calls[0]?.url.includes('/repos/LeonidasLux/Recipes/releases/latest') === true,
       '★ 查的是本项目自己的 Release',
@@ -4233,18 +4249,23 @@ async function edgeChecks() {
     const gh = stubFetch([{ match: /releases\/latest/, reply: () => jsonRes(fakeRelease()) }]);
     try {
       const m = await mount('/sync');
-      check(m.html().includes('有新版本 v1.0.3'), '★ 进设置页就顺手查一次，「关于」那一行挂出「有新版本」');
+      check(
+        m.html().includes(`有新版本 v${NEXT_VERSION}`),
+        '★ 进设置页就顺手查一次，「关于」那一行挂出「有新版本」',
+      );
       await m.click('#aboutBtn');
       await settle(60);
       check(m.html().includes('发现新版本'), '★ 手机上打开「关于」自动查一次，发现新版本');
-      check(m.html().includes('v1.0.3'), '写清是哪个版本（v1.0.3）');
+      check(m.html().includes(`v${NEXT_VERSION}`), `写清是哪个版本（v${NEXT_VERSION}）`);
       check(bridgeCalls.length === 0, '还没点「下载并安装」，一个字节都没下');
 
       await m.click('#appUpdateInstallBtn');
       await settle(60);
       check(bridgeCalls.includes('canInstall'), '★ 先问系统允不允许装包');
       check(
-        bridgeCalls.includes('download https://github.com/L/Recipes/releases/download/v1.0.3/jishiben-v1.0.3.apk'),
+        bridgeCalls.includes(
+          `download https://github.com/L/Recipes/releases/download/v${NEXT_VERSION}/jishiben-v${NEXT_VERSION}.apk`,
+        ),
         '★ 下载的是 Release 里那个 APK 地址',
         bridgeCalls.join(' | '),
       );
@@ -4643,6 +4664,35 @@ async function edgeChecks() {
     check(/\.syncbtn\.sync-busy svg\s*\{[^}]*odspin/.test(css), '★ 同步中的同步按钮在转');
     check(/\.syncbtn\.sync-err svg\s*\{[^}]*--danger/.test(css), '失败时按钮图标是红的');
     check(/prefers-reduced-motion[^{]*\{[^}]*\.syncbtn\.sync-busy/.test(css), '系统关了动效时不再闪 / 转');
+  }
+  {
+    /* 版式对齐与间距：冒烟里样式表是空的，布局只能读文件验 */
+    const css = readFileSync('src/styles/screens.css', 'utf8');
+    const appCss = readFileSync('src/styles/app.css', 'utf8');
+    check(
+      /\.s-library \.topbar \.navrow\s*\{[^}]*align-items:\s*flex-end/.test(css),
+      '★ 菜谱库标题行按底部对齐',
+    );
+    check(
+      !/\.syncbtn\s*\{[^}]*margin-top:\s*-/.test(appCss),
+      '★ 刷新按钮自己不再上提（底边就此与大标题齐平）',
+    );
+    check(
+      /\.s-library \.searchwrap\s*\{[^}]*padding:\s*0 18px\s*;/.test(css),
+      '★ 搜索框下方不再单独留 2px',
+    );
+    check(
+      /\.s-library \.sortbar\s*\{[^}]*padding:\s*10px 18px\s*;/.test(css),
+      '★ 排序条上下各留 10px：与上方搜索框、下方列表的间距一致',
+    );
+    check(
+      /\.s-order \.topbar \.navrow\s*\{[^}]*align-items:\s*flex-end/.test(css),
+      '★ 点单屏「点单 / 掌勺」开关也按底部对齐（底边与大标题齐平）',
+    );
+    check(
+      !/\.s-cook \.topbar \.navrow\s*\{[^}]*align-items:\s*flex-end/.test(css),
+      '掌勺屏标题块下面还有一行小字，开关留在顶端对标题，不跟着往下坠',
+    );
   }
 
   console.log('\n[边界 · 四个一级页的顶栏结构一致]');

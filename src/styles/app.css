@@ -159,8 +159,8 @@ img { -webkit-user-drag: none; }
 /* 菜谱库标题行右端的同步按钮：点一下同步一次，图标自带状态（与底部「设置」格那枚一套） */
 .syncbtn {
   width: 38px; height: 38px; flex: 0 0 auto;
-  /* 标题行是 flex-start 对齐：往上提一点，让圆钮的圆心跟标题对齐 */
-  margin-top: -4px;
+  /* 标题行按底部对齐（见 screens.css 的 .s-library .topbar .navrow）：
+     圆钮的底边与大标题的底边齐平，这里不再自己往上提 */
 }
 .syncbtn svg { width: 19px; height: 19px; }
 .syncbtn.sync-ok svg { stroke: var(--ok); }
