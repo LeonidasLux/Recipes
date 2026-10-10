@@ -199,8 +199,11 @@ npm run apk          # = 构建 Web → 同步进原生工程 → gradlew assemb
 ```
 
 打包前会先跑 `scripts/set-version.mjs` 写版本号（`android/app/build.gradle` 里的 `versionCode` / `versionName`）：
-本机是 `package.json` 的 version（如 `1.0.0`），CI 是 `1.0.0-build.<运行序号>`，`versionCode` 随之递增 ——
-手机上「应用信息」里能直接看到装的是哪一版，覆盖安装也不会因为版本号没变而看不出差别。
+**`versionName` 就是 `package.json` 的 version**（如 `1.0.1`、`1.1.2`）—— 本机和 CI 一样，不带任何后缀；
+只有 `versionCode` 会随 CI 的运行序号递增（本机固定 `100000`），保证覆盖安装不会被拦。
+所以**要发新版本，就改 `package.json` 的 `version`**（`package-lock.json` 根包那两处一起改），
+手机上「应用信息」里看到的就是这个号。本仓库约定：**每次「提交」都自动把 patch 位 +1**
+（`AGENTS.md` §8），所以平时不用手改版本号，想跳版本（`1.1.0` 这种）时明说一句就行。
 
 产出的 APK 在：
 
@@ -223,7 +226,9 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk   # 数据线�
 GitHub 会用和你本机一样的 `npm run apk` 打一次包，然后：
 
 - 把 `app-debug.apk` 传成这次运行的构建产物（Actions → 对应运行 → Artifacts 下载）；
-- 建一个 Release（tag `v1.0.0-build.<运行序号>`），把 APK 作为附件挂上去，手机点开链接就能下。
+- 建一个 Release（tag `v<package.json version>`，如 `v1.0.1`），把 APK 作为附件挂上去，手机点开链接就能下。
+  同一个版本再推一次不会建重复的 Release，而是把那条 Release 的附件覆盖成最新一次打的包；
+  想留升级记录就把 `package.json` 的 `version` 往上加。
 
 Release 里挂的是 debug 签名的包 —— 和本机 `npm run apk` 出来的那份一样，**能直接装、不能上架**。
 想自己签名出正式包，见下面的「Debug 包 vs Release 包」。

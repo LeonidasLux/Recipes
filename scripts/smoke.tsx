@@ -10,6 +10,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
+import { version as PKG_VERSION } from '../package.json';
 import { applyVersion, resolveVersion } from './set-version.mjs';
 import { AppShell } from '../src/App';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
@@ -4198,6 +4199,48 @@ async function edgeChecks() {
     await m.close();
   }
 
+  console.log('\n[边界 · 设置页的「关于」弹窗]');
+  localStorage.clear();
+  {
+    useDb();
+    const m = await mount('/sync');
+    const entry = m.$('#aboutBtn');
+    check(entry !== null && entry.tagName === 'BUTTON', '★ 设置页有「关于记食本」入口（可点的行）');
+    check((entry?.textContent ?? '').includes('关于记食本'), '入口上写着「关于记食本」');
+    check(m.$('.aboutsheet') === null, '★ 没点之前不弹');
+    /* 版本号只住在弹层里：设置页本身不铺一遍 */
+    check(!m.html().includes(PKG_VERSION), '设置页本体不显示版本号');
+
+    await m.click('#aboutBtn');
+    const sheet = m.$('.aboutsheet');
+    check(sheet !== null, '★ 点「关于」→ 弹出弹窗');
+    check(
+      sheet?.getAttribute('role') === 'dialog' && sheet?.getAttribute('aria-modal') === 'true',
+      '弹窗是对话框语义',
+    );
+    check((sheet?.getAttribute('aria-label') ?? '') === '关于记食本', '弹窗的无障碍名叫「关于记食本」');
+    check(
+      (m.$('.aboutsheet .ab-ver')?.textContent ?? '').trim() === `版本 ${PKG_VERSION}`,
+      '★ 弹窗里展示版本号（取自 package.json）',
+      `实际「${m.$('.aboutsheet .ab-ver')?.textContent ?? '（无）'}」`,
+    );
+
+    await m.click('.ab-close');
+    check(m.$('.aboutsheet') === null, '点 × 关掉弹窗');
+
+    await m.click('#aboutBtn');
+    await m.click('.ab-mask');
+    check(m.$('.aboutsheet') === null, '点遮罩也能关掉');
+
+    await m.click('#aboutBtn');
+    await act(async () => {
+      window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    check(m.$('.aboutsheet') === null, '按 Esc 也能关掉');
+    check(m.$('.s-sync') !== null, '★ 关掉弹窗后人还留在设置页');
+    await m.close();
+  }
+
   console.log('\n[边界 · 掌勺点菜弹出菜品详情]');
   localStorage.clear();
   {
@@ -5308,6 +5351,17 @@ async function backChecks() {
     await m.close();
   }
 
+  console.log('\n[返回键 · 遮罩优先：设置页的关于弹窗]');
+  useDb();
+  {
+    const m = await mount('/sync');
+    await m.click('#aboutBtn');
+    check(m.$('.aboutsheet') !== null, '点「关于记食本」→ 弹出关于弹窗');
+    await act(async () => pressBack());
+    check(m.$('.aboutsheet') === null && m.$('.s-sync') !== null, '★ 返回键先关掉关于弹窗，不退应用');
+    await m.close();
+  }
+
   console.log('\n[返回键 · 遮罩优先：详情页的大图]');
   localStorage.clear();
   {
@@ -5504,18 +5558,34 @@ function workflowChecks() {
   check(yml.includes("java-version: '17'"), 'JDK 17（AGP 8.2.1 要求）');
   check(
     yml.includes('JISHIBEN_BUILD: ${{ github.run_number }}'),
-    '★ 打包时按 run_number 写版本号（每次 Release 版本都不一样）',
+    '★ 打包时按 run_number 写 versionCode（版本号本身仍以 package.json 为准）',
+  );
+  check(
+    !yml.includes('-build.'),
+    '★ Release tag / 附件名不再拼 build 号（tag 就是 v<package.json version>）',
   );
 
   console.log('\n[仓库 · 版本号与固定签名]');
   const local = resolveVersion('1.2.3', '');
   check(local.code === 100000 && local.name === '1.2.3', '本机打包：versionName 就是 package.json 的 version', JSON.stringify(local));
   const ci = resolveVersion('1.2.3', '42');
-  check(ci.code === 100042 && ci.name === '1.2.3-build.42', '★ CI 打包：versionName 带 build 号，versionCode 随之递增', JSON.stringify(ci));
+  check(
+    ci.code === 100042 && ci.name === '1.2.3',
+    '★ CI 打包：versionName 照样是 package.json 的 version（不带 build 后缀），versionCode 递增',
+    JSON.stringify(ci),
+  );
   check(resolveVersion('1.2.3', 'abc').code === 100000, 'build 号不是数字时退回基准值，不写坏 versionCode');
   check(
-    applyVersion('  versionCode 1\n  versionName "1.0"', 100042, '1.0.0-build.42').includes('versionCode 100042'),
+    applyVersion('  versionCode 1\n  versionName "1.0"', 100042, '1.0.1').includes('versionCode 100042'),
     '脚本能把版本号写进 build.gradle',
+  );
+  check(
+    applyVersion('  versionCode 1\n  versionName "1.0"', 100042, '1.0.1').includes('versionName "1.0.1"'),
+    '★ 写进去的 versionName 就是 package.json 的 version（手机上看到的就是它）',
+  );
+  check(
+    readFileSync('scripts/set-version.mjs', 'utf8').includes('set-version\\.mjs'),
+    '★ 只有真以 scripts/set-version.mjs 跑起来才改写 gradle（冒烟把它打进 bundle 时不会写盘）',
   );
 
   let gradle = '';

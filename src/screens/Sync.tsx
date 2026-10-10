@@ -6,9 +6,11 @@ import { useToast } from '../components/Toast';
 import { StorageWarning } from '../components/Bits';
 import { TabBar } from '../components/TabBar';
 import { Icon } from '../components/Icons';
+import { AboutSheet } from '../components/AboutSheet';
 import { maskToken, normalizeToken, tokenShapeError } from '../lib/github';
 import { aiKeyShapeError, maskAiKey, normalizeAiKey, verifyAiKey } from '../lib/ai';
 import { preserveTypedValue } from '../lib/inputs';
+import { useBackClose } from '../lib/back';
 import { nicknameOf, partnerOf, PERSON_KEYS } from '../data/helpers';
 import type { PersonKey } from '../data/types';
 
@@ -24,6 +26,10 @@ export default function SyncScreen() {
 
   const [editNames, setEditNames] = useState(false);
   const [nameDraft, setNameDraft] = useState({ me: '', partner: '' });
+
+  /* 「关于」弹层：整屏遮罩，手机返回键先关它，而不是退出应用（见 src/lib/back.tsx） */
+  const [about, setAbout] = useState(false);
+  useBackClose(about, () => setAbout(false));
 
   const cfg = db.config;
   const me: PersonKey = cfg?.me === 'b' ? 'b' : 'a';
@@ -515,6 +521,16 @@ export default function SyncScreen() {
               ))}
           </section>
 
+          {/* ─── 关于：点一下弹层看应用信息（现在只有版本号）─── */}
+          <section className="card sticker" style={{ padding: '2px 16px' }}>
+            <button id="aboutBtn" type="button" className="kvrow aboutrow" onClick={() => setAbout(true)}>
+              <span className="k">关于记食本</span>
+              <span className="v aboutval">
+                <Icon name="chevronRight" />
+              </span>
+            </button>
+          </section>
+
           {connected ? (
             <button
               className="dang"
@@ -533,6 +549,8 @@ export default function SyncScreen() {
       </main>
 
       <TabBar active="sync" />
+
+      {about && <AboutSheet onClose={() => setAbout(false)} />}
     </div>
   );
 }

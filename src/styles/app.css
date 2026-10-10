@@ -544,6 +544,20 @@ textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible {
 .ds-link { justify-content: center; }
 @keyframes odpop { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: none; } }
 
+/* ─── 「关于」弹窗（设置页）────────────────── */
+/* 与菜品详情同一层（z-index 30）：盖住底部导航（3），Toast（40）仍浮在上面 */
+.aboutsheet { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 24px 18px; }
+.ab-mask { position: absolute; inset: 0; border: 0; padding: 0; cursor: pointer;
+  background: color-mix(in oklch, var(--ink) 44%, transparent); animation: odfade .16s ease; }
+.ab-card { position: relative; width: min(360px, 100%); padding: 18px 18px 20px; animation: odpop .18s ease; }
+.ab-close { position: absolute; top: 10px; right: 10px; width: 36px; height: 36px; border-radius: 50%;
+  border: 0; background: color-mix(in oklch, var(--ink) 10%, transparent); color: var(--fg);
+  display: grid; place-items: center; cursor: pointer; }
+.ab-close:hover { background: color-mix(in oklch, var(--ink) 20%, transparent); }
+.ab-close svg { width: 17px; height: 17px; stroke: currentColor; fill: none; stroke-width: 2.2; }
+.ab-name { margin: 0; font-family: var(--font-display); font-size: 22px; line-height: 1.2; }
+.ab-ver { margin: 8px 0 0; font-family: var(--font-mono); font-size: 13.5px; color: var(--muted); }
+
 /* ─── Toast（提交/同步反馈）────────────────── */
 .toast {
   position: fixed; left: 50%; transform: translate(-50%, 14px);

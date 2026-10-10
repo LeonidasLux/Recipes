@@ -60,7 +60,7 @@ jobs:
       - name: 打包 APK
         run: npm run apk
         env:
-          # 让 versionName 变成 1.0.0-build.<run_number>、versionCode 随之递增
+          # 只影响 versionCode（100000 + run_number）；versionName 仍是 package.json 的 version
           JISHIBEN_BUILD: ${{ github.run_number }}
 
       - name: 上传 APK（每次运行的 Actions 页面都能下载）
@@ -76,15 +76,17 @@ jobs:
         run: |
           set -euo pipefail
           version=$(node -p "require('./package.json').version")
-          tag="v${version}-build.${{ github.run_number }}"
+          tag="v${version}"
           asset="jishiben-${tag}.apk"
+          notes="GitHub Actions 自动打包（debug 签名，可直接安装）。对应提交：${{ github.sha }}"
           cp android/app/build/outputs/apk/debug/app-debug.apk "$asset"
           if gh release view "$tag" >/dev/null 2>&1; then
-            # 同一个 run 重跑时 tag 已存在，直接覆盖附件
+            # 同一个 version 又出了一次包：沿用那条 Release，覆盖附件并刷新说明（tag 按 version 走）
             gh release upload "$tag" "$asset" --clobber
+            gh release edit "$tag" --notes "$notes"
           else
             gh release create "$tag" "$asset" \
               --title "记食本 ${tag}" \
-              --notes "GitHub Actions 自动打包（debug 签名，可直接安装）。对应提交：${{ github.sha }}" \
+              --notes "$notes" \
               --latest
           fi

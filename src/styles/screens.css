@@ -324,6 +324,13 @@
 /* 标签不参与收缩、也不折行：仓库名太长时该被省略号截断的是右边的值，不是标签 */
 .s-sync .kvrow .k { font-size: 13px; color: var(--muted); flex: 0 0 auto; white-space: nowrap; }
 .s-sync .kvrow .v { font-family: var(--font-mono); font-size: 13.5px; color: var(--fg); text-align: right; }
+
+/* 「关于」那行：整行可点，点开是本页的关于弹窗（现在只有版本号） */
+.s-sync .aboutrow { width: 100%; border: 0; background: transparent; color: var(--fg); font: inherit;
+  cursor: pointer; text-align: left; }
+.s-sync .aboutrow .aboutval { display: flex; align-items: center; gap: 4px; color: var(--muted); }
+.s-sync .aboutrow .aboutval svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2; }
+.s-sync .aboutrow:active { opacity: 0.7; }
 .s-sync .kvrow .v.tagval { font-family: var(--font-body); }
 .s-sync .editrow { display: none; flex-direction: column; gap: 10px; padding: 12px 0; border-top: 1.5px solid var(--border); }
 .s-sync .editrow.show { display: flex; }

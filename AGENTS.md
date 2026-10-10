@@ -61,7 +61,8 @@
 ## 8. 提交与推送（用户说「提交」时）
 
 - 用户只说「提交」（或「提交并推送」）时，含义是：**把当前更改区（工作区）的全部内容直接提交到 `main` 分支并推送**。不看暂存区、不挑文件、不区分哪次任务改的，也不要再回头确认。
-- 固定流程：`git add -A` → 按下述格式写中文 commit message → `git commit` → `git push origin HEAD:main`。本仓库 remote 是 `origin`（GitHub，`LeonidasLux/Recipes`），主干是 `main`。
+- 固定流程：**先把版本号自增一位**（见下条）→ `git add -A` → 按下述格式写中文 commit message → `git commit` → `git push origin HEAD:main`。本仓库 remote 是 `origin`（GitHub，`LeonidasLux/Recipes`），主干是 `main`。
+- **每次「提交」都要自动改 `package.json` 的版本号**：默认把 patch 位 +1（`1.0.0` → `1.0.1` → `1.0.2`…，major / minor 不动），`package-lock.json` 里根包的两处 `version`（顶层与 `packages[""]`）同步改，并连同这次改动一起提交。理由：CI 打出来的 APK 的版本号与 Release 的 tag 都是 `v<version>`（见 `CONTEXT.md` §11 与 `.github/workflows/android-apk.yml`），版本号每次提交往前走，推 `main` 出来的 Release 才是逐版递增、手机上覆盖安装也分得清。用户当次明确给了版本号（或说了「这是大版本 / 小版本」）就按用户说的来；只说了「提交」就直接照默认自增，不要再回头确认。
 - **允许直推 `main`**：不必先开分支、不必提 PR，也不必再问「能不能直推主干」。
 - 本节**覆盖**默认 `git-push` 技能的规则（那条规则要求「只提交暂存区、禁止提交更改区」并且在推送主干前先确认）——在本仓库一律以本节为准。
 - 唯一例外：凭据绝不入库（见 §6）。若工作区里出现真实 token，先告诉用户，不要提交。

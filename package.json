@@ -1,7 +1,7 @@
 {
   "name": "jishiben",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "description": "记食本 — 菜谱收藏 + 点单，数据存在你自己的 GitHub 仓库里",
   "scripts": {
