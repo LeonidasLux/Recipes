@@ -160,6 +160,19 @@ export function recipeInOpenOrder(orders: Order[], recipeId: string | null): Ord
   return null;
 }
 
+/**
+ * 掌勺那边还有几单没做完：对方点的、状态不是「已完成」。
+ * 角色开关右上角那枚数字红点与底部第二格（角色是掌勺时的「掌勺」格）共用同一个数。
+ */
+export function openCookCount(orders: Order[], me: PersonKey): number {
+  return orders.filter((o) => o.placedBy !== me && o.status !== 'done').length;
+}
+
+/** 数字红点的文案：超过 99 显示 `99+` */
+export function badgeText(n: number): string {
+  return n > 99 ? '99+' : String(n);
+}
+
 /* ─── 两个人（a / b）──────────────────────────── */
 
 export const PERSON_KEYS: readonly PersonKey[] = ['a', 'b'] as const;

@@ -1,6 +1,7 @@
 import { Link, useSearchParams } from 'react-router-dom';
 import { useStore } from '../data/store';
 import { useSync } from '../lib/useSync';
+import { badgeText, openCookCount } from '../data/helpers';
 import { Icon, type IconName } from './Icons';
 import type { SyncStatus } from '../data/types';
 
@@ -46,14 +47,20 @@ export function syncTone(connected: boolean, status: SyncStatus): string {
  *
  * 第二格跟着「本机当前角色」（config.view）走：
  * 角色是点单 → 第二格「点单」（/order）；角色是掌勺 → 第二格「掌勺」（/cook）。
+ * 角色是掌勺、且对方还有没做完的单时，第二格右上角还挂一枚数字红点 ——
+ * 与角色开关右上角那枚同源（openCookCount / badgeText，见 data/helpers.ts）。
  * 角色切换贴在这两块屏的右上角（见 components/RoleSwitch.tsx），是本地设置、不触发推送。
  */
 export function TabBar({ active }: { active: TabKey }) {
-  const { view, connected } = useStore();
+  const { db, me, view, connected } = useStore();
   const { status, syncNow } = useSync();
   const second = view === 'cook' ? COOK_TAB : ORDER_TAB;
+  /* 掌勺那边还没做完的单：角色是掌勺时，第二格右上角挂上同一枚数字红点 ——
+     角色是点单时第二格是「点单」，不挂红点（那枚只留在角色开关上）。 */
+  const cooking = openCookCount(db.orders, me);
+  const secondBadge = view === 'cook' && cooking > 0 ? badgeText(cooking) : '';
 
-  const tab = (t: TabDef, extra = '', onClick?: () => void) => (
+  const tab = (t: TabDef, extra = '', onClick?: () => void, badge = '') => (
     /* 四格之间互相换屏用 replace：一级页不叠历史，否则按返回会退回「上一次用过的一级页」，
        而不是直接回桌面（返回键规则见 src/lib/back.tsx）。中间那个「＋添加」是二级页，仍走 push。 */
     <Link
@@ -62,9 +69,15 @@ export function TabBar({ active }: { active: TabKey }) {
       replace
       className={`tab${extra}${t.key === active ? ' active' : ''}`}
       onClick={onClick}
+      aria-label={badge ? `${t.label}（还有 ${cooking} 单没做完）` : undefined}
     >
       <Icon name={t.icon} />
-      <span>{t.label}</span>
+      <span className="lbl">{t.label}</span>
+      {badge && (
+        <span className="badge" title={`掌勺还有 ${cooking} 单没做完`}>
+          {badge}
+        </span>
+      )}
       <span className="bubble" />
     </Link>
   );
@@ -75,7 +88,7 @@ export function TabBar({ active }: { active: TabKey }) {
       {/* 第二格（点单 / 掌勺）点一下顺手同步一次：进来看到的单 / 菜单都该是新的 */}
       {tab(second, '', () => {
         if (connected) void syncNow({ toast: false });
-      })}
+      }, secondBadge)}
       <Link to="/add" className="tab add">
         <span className="fab">
           <Icon name="plus" />

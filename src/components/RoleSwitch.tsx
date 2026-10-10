@@ -2,6 +2,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from '../data/store';
 import { useToast } from './Toast';
 import { useSync } from '../lib/useSync';
+import { badgeText, openCookCount } from '../data/helpers';
 import type { ViewRole } from '../data/types';
 
 /**
@@ -19,8 +20,8 @@ export function RoleSwitch() {
   const { search } = useLocation();
 
   /* 掌勺那边还没做完的单：对方点的、状态不是「已完成」。数字挂在开关右上角，
-     这样停在点单屏也能一眼看到「那边还有活」。 */
-  const cooking = db.orders.filter((o) => o.placedBy !== me && o.status !== 'done').length;
+     这样停在点单屏也能一眼看到「那边还有活」；角色是掌勺时底部第二格还会挂同一枚数字（见 TabBar）。 */
+  const cooking = openCookCount(db.orders, me);
 
   function pick(next: ViewRole) {
     if (next === view) return;
@@ -50,7 +51,7 @@ export function RoleSwitch() {
       {seg('cook', '掌勺')}
       {cooking > 0 && (
         <span className="badge" title={`掌勺还有 ${cooking} 单没做完`}>
-          {cooking > 99 ? '99+' : cooking}
+          {badgeText(cooking)}
         </span>
       )}
     </div>

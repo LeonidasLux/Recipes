@@ -877,7 +877,8 @@ async function renderChecks() {
   /* 底部导航固定 4 格：第二格跟着本机角色（config.view）走 */
   {
     const m = await mount('/library');
-    const got = m.$$('.tabbar .tab').map((t) => (t.textContent ?? '').trim());
+    /* 只看格子的标签：第二格角色是掌勺时还会多挂一枚数字红点，那是单独断言的事 */
+    const got = m.$$('.tabbar .tab .lbl').map((t) => (t.textContent ?? '').trim());
     const want = ['菜谱库', '点单', '添加', '设置'];
     check(got.join(' / ') === want.join(' / '), `底部导航顺序：${want.join(' / ')}`, `实际：${got.join(' / ')}`);
     await m.close();
@@ -887,12 +888,17 @@ async function renderChecks() {
       db.config!.view = 'cook';
     });
     const m = await mount('/library');
-    const got = m.$$('.tabbar .tab').map((t) => (t.textContent ?? '').trim());
+    const got = m.$$('.tabbar .tab .lbl').map((t) => (t.textContent ?? '').trim());
     const want = ['菜谱库', '掌勺', '添加', '设置'];
     check(
       got.join(' / ') === want.join(' / '),
       `掌勺角色 → 底部第二格为掌勺：${want.join(' / ')}`,
       `实际：${got.join(' / ')}`,
+    );
+    check(
+      m.$$('.tabbar .tab')[1]?.querySelector('.badge')?.textContent?.trim() === '1',
+      '★ 掌勺角色（任一屏）→ 底部第二格右上角也挂上数字红点',
+      `实际「${m.$$('.tabbar .tab')[1]?.querySelector('.badge')?.textContent ?? '（无）'}」`,
     );
     await m.close();
   }
@@ -4558,6 +4564,7 @@ async function edgeChecks() {
     check(m.$('.topbar > .navrow > .rolesw') !== null, '开关挂在标题行（navrow）的右端');
     check((m.$('.rolesw button.on')?.textContent ?? '') === '点单', '当前角色 → 开关高亮「点单」');
     check((m.$$('.tabbar .tab')[1]?.textContent ?? '').includes('点单'), '点单角色 → 底部第二格是「点单」');
+    check(m.$$('.tabbar .tab')[1]?.querySelector('.badge') === null, '点单角色 → 底部第二格不挂数字红点');
 
     await m.wait(900); /* 先让挂载后的自动推送落定，再看切角色会不会额外推 */
     const before = gh.calls.length;
@@ -4565,6 +4572,11 @@ async function edgeChecks() {
     await m.wait(900);
     check(readDb().config?.view === 'cook', '★ 切角色落库到本机 config.view');
     check((m.$$('.tabbar .tab')[1]?.textContent ?? '').includes('掌勺'), '★ 切角色后底部第二格立刻变「掌勺」');
+    check(
+      m.$$('.tabbar .tab')[1]?.querySelector('.badge')?.textContent?.trim() === '1',
+      '★ 切到掌勺 → 底部第二格右上角立刻挂上数字红点',
+      `实际「${m.$$('.tabbar .tab')[1]?.querySelector('.badge')?.textContent ?? '（无）'}」`,
+    );
     check(m.html().includes('今日菜单'), '★ 在点单屏切角色 → 直接落到掌勺屏');
     const puts = gh.calls.slice(before).filter((c) => c.startsWith('PUT'));
     check(puts.length === 0, '★ 切角色是本地设置，不触发推送', `实际 PUT：${puts.join(',') || '（无）'}`);
@@ -4584,6 +4596,7 @@ async function edgeChecks() {
     await m2.wait(900);
     check(readDb().config?.view === 'order', '从掌勺屏切回点单');
     check(m2.html().includes('点一顿饭'), '切回点单 → 落到点单屏');
+    check(m2.$$('.tabbar .tab')[1]?.querySelector('.badge') === null, '★ 切回点单 → 底部第二格的红点也随之收掉');
     await m2.close();
 
     const s = await mount('/sync');
@@ -4593,7 +4606,7 @@ async function edgeChecks() {
     gh.restore();
   }
 
-  console.log('\n[边界 · 掌勺没做完的单在角色开关上有红点]');
+  console.log('\n[边界 · 掌勺没做完的单在角色开关与底部第二格上有红点]');
   localStorage.clear();
   {
     /* 种子里 me=a：对方点的一单待接（o2）+ 一单已完成（o3）→ 只算没做完的 1 单 */
@@ -4603,23 +4616,35 @@ async function edgeChecks() {
     check(badge?.textContent?.trim() === '1', '★ 掌勺有没做完的单 → 开关右上角挂数字红点', `实际「${badge?.textContent ?? '（无）'}」`);
     check(m.$('.rolesw button.on')?.textContent === '点单', '红点不影响原来的高亮态');
     check((badge?.getAttribute('title') ?? '').includes('1 单没做完'), '红点带一句说明');
+    check(
+      m.$$('.tabbar .tab')[1]?.querySelector('.badge') === null,
+      '★ 角色是点单 → 底部第二格不挂红点（红点只在角色开关上）',
+      m.$$('.tabbar .tab')[1]?.textContent ?? '',
+    );
     await m.close();
   }
   {
-    /* 对方那几单全做完 → 红点消失 */
+    /* 对方那几单全做完 → 红点消失（角色切到掌勺，底部第二格也跟着不挂） */
     useDb((db) => {
       db.orders = db.orders.map((o) => (o.placedBy === 'b' ? { ...o, status: 'done' as const } : o));
+      db.config!.view = 'cook';
     });
-    const m = await mount('/order');
+    const m = await mount('/cook');
     check(m.$('.rolesw .badge') === null, '★ 没有没做完的单 → 不显示红点');
+    check(m.$$('.tabbar .tab')[1]?.querySelector('.badge') === null, '★ 全做完了 → 底部第二格也不挂红点');
     await m.close();
   }
   {
-    /* 自己点的单不算掌勺的活；掌勺屏自己也带着这枚红点 */
-    useDb();
+    /* 自己点的单不算掌勺的活；掌勺屏上开关与底部第二格挂的是同一个数 */
+    useDb((db) => {
+      db.config!.view = 'cook';
+    });
     const m = await mount('/cook');
     check(m.$('.rolesw .badge')?.textContent?.trim() === '1', '掌勺屏同样带红点（切过去也看得见）');
     check((m.$('.rolesw button[aria-label]')?.getAttribute('aria-label') ?? '').includes('1 单没做完'), '按钮的无障碍名带上单数');
+    const tabBadge = m.$$('.tabbar .tab')[1]?.querySelector('.badge');
+    check(tabBadge?.textContent?.trim() === '1', '★ 掌勺角色 → 底部第二格右上角的数字与开关上那枚一致', `实际「${tabBadge?.textContent ?? '（无）'}」`);
+    check((tabBadge?.getAttribute('title') ?? '').includes('1 单没做完'), '第二格的红点也带一句说明');
     await m.close();
   }
 

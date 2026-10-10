@@ -458,6 +458,14 @@ textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible {
 .tab.active { color: var(--fg); }
 .tab.active svg { stroke-width: 2.2; }
 .tab.active .bubble { background: var(--accent); }
+/* 掌勺角色下，第二格右上角挂「还有几单没做完」的数字红点（与角色开关上那枚同一个数） */
+.tab .badge {
+  position: absolute; top: 2px; right: calc(50% - 20px); z-index: 1;
+  box-sizing: border-box; min-width: 17px; height: 17px; padding: 0 4px;
+  border-radius: 999px; background: var(--danger); color: #fff;
+  font-family: var(--font-mono); font-size: 10.5px; font-weight: 700; line-height: 17px;
+  text-align: center; box-shadow: 0 1px 0 0 var(--ink);
+}
 .tab:hover:not(.active) { color: var(--accent-ink); }
 .tab:active { opacity: 0.75; }
 /* 「设置」格图标随同步状态变色：已同步绿、同步失败红（其余状态保持原色） */
