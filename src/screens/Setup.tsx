@@ -9,7 +9,7 @@ import { ClearArea, ClearInput } from '../components/ClearInput';
 import { GithubError, maskToken, normalizeToken, tokenShapeError } from '../lib/github';
 import { aiKeyShapeError, maskAiKey, normalizeAiKey } from '../lib/ai';
 import { preserveTypedValue } from '../lib/inputs';
-import { partnerOf } from '../data/helpers';
+import { partnerOf, PERSON_KEYS } from '../data/helpers';
 import type { PersonKey, SyncConfig } from '../data/types';
 
 type IntervalSec = 0 | 60 | 600;
@@ -39,8 +39,9 @@ export default function Setup() {
   const { toast } = useToast();
   const navigate = useNavigate();
 
-  /* 本机默认认领 a 槽；连上仓库后，joinAs 会按名字决定真正的槽位 */
-  const [slot] = useState<PersonKey>(db.config?.me === 'b' ? 'b' : 'a');
+  /* 本机认领哪一格（= 这台设备是谁）：默认 a，导入配置后按「对方发来的」认领另一半那格；
+     连上仓库后 joinAs 还会按名字复核一次（本机这格写着别人的名字就换一格）。 */
+  const [slot, setSlot] = useState<PersonKey>(db.config?.me === 'b' ? 'b' : 'a');
   const otherSlot = partnerOf(slot);
   const [names, setNames] = useState<Record<PersonKey, string>>({
     a: db.profiles?.a?.nickname ?? '',
@@ -191,19 +192,19 @@ export default function Setup() {
       return;
     }
 
-    setNames((s) => {
-      const next = { ...s };
-      next[slot] = nick;
-      if (partnerNick) next[otherSlot] = partnerNick;
-      return next;
-    });
+    /* 这份 JSON 是**发件人**那一侧的配置：`nickname` 是发给你的人，`partnerNickname` 才是你
+       （导入框的标题就写着「另一半发来的 JSON」）。所以发件人放一格、本机认领另一格 ——
+       两个人共用同一份 JSON 时才是「一人一个身份」，而不是两台设备都变成发件人。
+       换手机恢复自己那份配置的情况：下面的「这台设备是谁」点一下就换回来。 */
+    setNames((s) => ({ ...s, a: nick, b: partnerNick }));
+    setSlot(partnerNick ? 'b' : 'a');
     setToken(tk);
     setRepo(rp);
     setBranch(br);
     setAiKey(ak);
     setIntervalSec(iv as IntervalSec);
     setInvalid({});
-    toast('配置已导入，检查后连接');
+    toast(partnerNick ? `配置已导入：这台设备算「${partnerNick}」` : '配置已导入，检查后连接');
   }
 
   /* ─── 连接 ─── */
@@ -405,8 +406,10 @@ export default function Setup() {
                   {importErr}
                 </span>
                 <span className="hint">
-                  字段：nickname（我的）/ partnerNickname（另一半的，可省）/ token / repo / branch / intervalSec /
-                  aiKey（DeepSeek Key，可省，填了就能用 AI 识别）
+                  字段：nickname（发这份配置的人）/ partnerNickname（你，可省）/ token / repo / branch /
+                  intervalSec / aiKey（DeepSeek Key，可省，填了就能用 AI 识别）。导入后这台设备算
+                  partnerNickname 那位（对方发来才是这个意思）；万一这份就是你自己的配置（换手机恢复），
+                  填好后把下面的「这台设备是谁」换回来。
                 </span>
               </div>
               <button type="button" className="btn-sticker solid" onClick={doImport}>
@@ -425,6 +428,33 @@ export default function Setup() {
             }}
           >
             <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {/* 「这台设备是谁」：两个人各在自己手机上选自己那个名字。
+                  两个名字都知道时才摆出来（只有一个人时没什么好挑的）——
+                  摆出来是为了不让「导入同一份配置 → 两台设备都是同一个人」这种事悄悄发生。 */}
+              {myName.trim() !== '' && partnerName.trim() !== '' && (
+                <div className="field">
+                  <label>这台设备是谁</label>
+                  <div className="seg" role="group" aria-label="这台设备是谁">
+                    {PERSON_KEYS.map((k) => (
+                      <button
+                        key={k}
+                        id={k === 'a' ? 'meSlotA' : 'meSlotB'}
+                        type="button"
+                        className={slot === k ? 'on' : ''}
+                        aria-pressed={slot === k}
+                        onClick={() => setSlot(k)}
+                      >
+                        {names[k].trim()}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="hint">
+                    你自己用哪台手机就选哪个名字。选错了两个人会显示成同一个人，「我的点单」也会混在一起
+                    （之后在「设置 → 我是谁」里还能改）。
+                  </span>
+                </div>
+              )}
+
               <div className={`field${invalid.nickname ? ' invalid' : ''}`}>
                 <label htmlFor="fNickname">我的昵称</label>
                 <ClearInput

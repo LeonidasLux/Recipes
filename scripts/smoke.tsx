@@ -5531,12 +5531,79 @@ async function edgeChecks() {
     );
     await m.clickByText('details.adv .btn-sticker.solid', '导入并填充');
     await m.wait(50);
-    check(m.value('#fNickname') === '小辉' && m.value('#fPartnerNickname') === '小红', '导入填充两个昵称');
+    /* 这份 JSON 是**发件人**那一侧的配置（导入框标题就是「另一半发来的 JSON」）：
+       `nickname` 是发给你的人，`partnerNickname` 才是你 —— 两个人共用同一份也不会都变成同一个人 */
+    check(
+      m.value('#fPartnerNickname') === '小辉' && m.value('#fNickname') === '小红',
+      '★ 导入配置：本机认领 partnerNickname 那位（nickname 是发件人）',
+      `我的=「${m.value('#fNickname')}」另一半=「${m.value('#fPartnerNickname')}」`,
+    );
+    check(
+      (m.$('#meSlotA')?.textContent ?? '') === '小辉' && (m.$('#meSlotB')?.textContent ?? '') === '小红',
+      '★ 摆出「这台设备是谁」，两个名字都能点',
+    );
+    check(m.$('#meSlotB')?.classList.contains('on') === true, '导入后默认就选中收件人那位');
+    await m.click('#meSlotA');
+    check(
+      m.value('#fNickname') === '小辉' && m.value('#fPartnerNickname') === '小红',
+      '★ 点一下就换回发件人（换手机恢复自己那份配置的情况）',
+    );
+    check(m.$('#meSlotA')?.classList.contains('on') === true, '选中态跟着走');
     check(m.value('#fRepo') === 'owner/repo' && m.value('#fBranch') === 'dev', '导入填充仓库与分支');
     check(m.value('#fInterval') === '600', '导入填充拉取间隔', m.value('#fInterval'));
     check(m.value('#fAiKey') === AI_KEY, '导入也填充 DeepSeek Key（可选字段）');
     check(m.html().includes('配置已导入'), '给出导入成功提示');
     await m.close();
+  }
+
+  console.log('\n[边界 · 两个人共用一份配置，各自的身份分开]');
+  localStorage.clear();
+  {
+    /* 用户踩过的坑：两个人把同一份 JSON 各自导一遍，两台设备都变成发件人（都叫小美），
+       「今日点单」混成一份、谁是谁也分不清。现在导入按「对方发来的」理解，
+       本机认领 partnerNickname 那位，两台设备自然一分为二。 */
+    const share = { nickname: '小美', partnerNickname: '小帅', token: FAKE_CFG.token, repo: FAKE_CFG.repo };
+    const gh = installFakeGithub({
+      recipes: { schema: 3, updatedAt: 'x', recipes: [] },
+      orders: { schema: 3, updatedAt: 'x', orders: [] },
+      profiles: {
+        schema: 3,
+        updatedAt: 'x',
+        profiles: { a: { nickname: '', updatedAt: 'x' }, b: { nickname: '', updatedAt: 'x' } },
+      },
+    });
+
+    /* ① 小美这台先建起来（自己填名字，不用导入） */
+    const first = await mount('/setup');
+    await first.type('#fNickname', '小美');
+    await first.type('#fPartnerNickname', '小帅');
+    await first.type('#fToken', FAKE_CFG.token);
+    await first.type('#fRepo', FAKE_CFG.repo);
+    await first.click('button[type="submit"]');
+    await first.wait(1500);
+    check(readDb().config?.me === 'a', '第一台：本机就是 a（小美）');
+    check(readDb().profiles.a.nickname === '小美' && readDb().profiles.b.nickname === '小帅', '两个名字都进了仓库');
+    await first.close();
+
+    /* ② 另一台手机：本机缓存是空的，只有小美发来的那份配置 */
+    localStorage.clear();
+    const second = await mount('/setup');
+    await second.type('#importJson', JSON.stringify(share));
+    await second.clickByText('details.adv .btn-sticker.solid', '导入并填充');
+    await second.wait(50);
+    check(
+      second.value('#fNickname') === '小帅' && second.value('#fPartnerNickname') === '小美',
+      '★ 导入这份配置的那台：本机是小帅',
+    );
+    await second.click('button[type="submit"]');
+    await second.wait(1500);
+    check(readDb().config?.me === 'b', '★ 第二台的身份是 b（小帅），不再是发件人', String(readDb().config?.me));
+    check(
+      readDb().profiles.a.nickname === '小美' && readDb().profiles.b.nickname === '小帅',
+      '★ 两台设备在仓库里各就各位，谁也没被顶掉',
+    );
+    await second.close();
+    gh.restore();
   }
   {
     const m = await mount('/setup');
