@@ -205,6 +205,112 @@ export default function SyncScreen() {
             <span>立即同步</span>
           </button>
 
+          {/* ─── 昵称（两个人谁都能改，随仓库同步）─── */}
+          <section className="card sticker" style={{ padding: '2px 16px' }}>
+            <div className="kvrow">
+              <span className="k">昵称（随仓库同步）</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span className="v tagval" style={{ color: 'var(--muted)', fontSize: 12 }}>
+                  {editNames ? '编辑中' : '两台设备共用'}
+                </span>
+                <button
+                  id="editNamesBtn"
+                  className="inlinebtn"
+                  onClick={() => (editNames ? setEditNames(false) : openNameEdit())}
+                >
+                  {editNames ? '收起' : '修改'}
+                </button>
+              </span>
+            </div>
+
+            <div className="kvrow">
+              <span className="k">我</span>
+              <span className="v tagval">{db.profiles[me].nickname || '未设置'}</span>
+            </div>
+            <div className="kvrow">
+              <span className="k">另一半</span>
+              <span className="v tagval">{db.profiles[other].nickname || '未设置'}</span>
+            </div>
+
+            <div className={`editrow${editNames ? ' show' : ''}`}>
+              <div className="field">
+                <label htmlFor="nickMe">我的昵称</label>
+                <ClearInput
+                  id="nickMe"
+                  type="text"
+                  maxLength={12}
+                  spellCheck={false}
+                  autoComplete="off"
+                  placeholder="例如：小辉"
+                  value={nameDraft.me}
+                  onChange={(e) => setNameDraft((s) => ({ ...s, me: e.target.value }))}
+                  onClear={() => setNameDraft((s) => ({ ...s, me: '' }))}
+                  {...preserveTypedValue((v) => setNameDraft((s) => ({ ...s, me: v })))}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="nickPartner">另一半的昵称</label>
+                <ClearInput
+                  id="nickPartner"
+                  type="text"
+                  maxLength={12}
+                  spellCheck={false}
+                  autoComplete="off"
+                  placeholder="例如：小红"
+                  value={nameDraft.partner}
+                  onChange={(e) => setNameDraft((s) => ({ ...s, partner: e.target.value }))}
+                  onClear={() => setNameDraft((s) => ({ ...s, partner: '' }))}
+                  {...preserveTypedValue((v) => setNameDraft((s) => ({ ...s, partner: v })))}
+                />
+              </div>
+              <span className="hint" style={{ fontSize: 11.5, color: 'var(--muted)' }}>
+                两个名字都能改：谁先装就能顺手把对方的名字填上。清空表示「未设置」，界面会退回「我 / 对方」。
+              </span>
+              <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
+                <button className="btn-sticker" onClick={() => setEditNames(false)}>
+                  取消
+                </button>
+                <button id="saveNamesBtn" className="btn-sticker primary" onClick={saveNames}>
+                  保存并同步
+                </button>
+              </div>
+            </div>
+          </section>
+
+          {/* ─── 我是谁 ─── */}
+          <section className="card sticker" style={{ padding: '14px 16px' }}>
+            <div className="row-between" style={{ marginBottom: 10 }}>
+              <div>
+                <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>我是谁</h2>
+                <p className="meta" style={{ fontSize: 11 }}>
+                  这台设备代表哪一位 · 决定页面上叫你什么
+                </p>
+              </div>
+              <span className="pill synced" style={{ fontSize: 11 }}>
+                <span>{nicknameOf(db.profiles, me) || '我'}</span>
+              </span>
+            </div>
+
+            <div className="idgrid" role="group" aria-label="选择我是谁">
+              {PERSON_KEYS.map((k, i) => (
+                <button
+                  key={k}
+                  className={`idpick${me === k ? ' on' : ''}`}
+                  aria-pressed={me === k}
+                  onClick={() => pickMe(k)}
+                >
+                  <span className="ic">
+                    <Icon name={i === 0 ? 'roleOrderer' : 'roleCook'} />
+                  </span>
+                  <span>
+                    <b>{nicknameOf(db.profiles, k) || `第 ${i + 1} 位`}</b>
+                    <small>{me === k ? '就是这台设备上的我' : '另一半'}</small>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+
           {/* ─── 仓库与 token ─── */}
           <section className="card sticker" style={{ padding: '2px 16px' }}>
             <div className="kvrow">
@@ -400,112 +506,6 @@ export default function SyncScreen() {
                 </button>
               </div>
               <p className={`aimsg${aiMsg?.err ? ' err' : ''}`}>{aiMsg?.text ?? ''}</p>
-            </div>
-          </section>
-
-          {/* ─── 昵称（两个人谁都能改，随仓库同步）─── */}
-          <section className="card sticker" style={{ padding: '2px 16px' }}>
-            <div className="kvrow">
-              <span className="k">昵称（随仓库同步）</span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span className="v tagval" style={{ color: 'var(--muted)', fontSize: 12 }}>
-                  {editNames ? '编辑中' : '两台设备共用'}
-                </span>
-                <button
-                  id="editNamesBtn"
-                  className="inlinebtn"
-                  onClick={() => (editNames ? setEditNames(false) : openNameEdit())}
-                >
-                  {editNames ? '收起' : '修改'}
-                </button>
-              </span>
-            </div>
-
-            <div className="kvrow">
-              <span className="k">我</span>
-              <span className="v tagval">{db.profiles[me].nickname || '未设置'}</span>
-            </div>
-            <div className="kvrow">
-              <span className="k">另一半</span>
-              <span className="v tagval">{db.profiles[other].nickname || '未设置'}</span>
-            </div>
-
-            <div className={`editrow${editNames ? ' show' : ''}`}>
-              <div className="field">
-                <label htmlFor="nickMe">我的昵称</label>
-                <ClearInput
-                  id="nickMe"
-                  type="text"
-                  maxLength={12}
-                  spellCheck={false}
-                  autoComplete="off"
-                  placeholder="例如：小辉"
-                  value={nameDraft.me}
-                  onChange={(e) => setNameDraft((s) => ({ ...s, me: e.target.value }))}
-                  onClear={() => setNameDraft((s) => ({ ...s, me: '' }))}
-                  {...preserveTypedValue((v) => setNameDraft((s) => ({ ...s, me: v })))}
-                />
-              </div>
-              <div className="field">
-                <label htmlFor="nickPartner">另一半的昵称</label>
-                <ClearInput
-                  id="nickPartner"
-                  type="text"
-                  maxLength={12}
-                  spellCheck={false}
-                  autoComplete="off"
-                  placeholder="例如：小红"
-                  value={nameDraft.partner}
-                  onChange={(e) => setNameDraft((s) => ({ ...s, partner: e.target.value }))}
-                  onClear={() => setNameDraft((s) => ({ ...s, partner: '' }))}
-                  {...preserveTypedValue((v) => setNameDraft((s) => ({ ...s, partner: v })))}
-                />
-              </div>
-              <span className="hint" style={{ fontSize: 11.5, color: 'var(--muted)' }}>
-                两个名字都能改：谁先装就能顺手把对方的名字填上。清空表示「未设置」，界面会退回「我 / 对方」。
-              </span>
-              <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
-                <button className="btn-sticker" onClick={() => setEditNames(false)}>
-                  取消
-                </button>
-                <button id="saveNamesBtn" className="btn-sticker primary" onClick={saveNames}>
-                  保存并同步
-                </button>
-              </div>
-            </div>
-          </section>
-
-          {/* ─── 我是谁 ─── */}
-          <section className="card sticker" style={{ padding: '14px 16px' }}>
-            <div className="row-between" style={{ marginBottom: 10 }}>
-              <div>
-                <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>我是谁</h2>
-                <p className="meta" style={{ fontSize: 11 }}>
-                  这台设备代表哪一位 · 决定页面上叫你什么
-                </p>
-              </div>
-              <span className="pill synced" style={{ fontSize: 11 }}>
-                <span>{nicknameOf(db.profiles, me) || '我'}</span>
-              </span>
-            </div>
-
-            <div className="idgrid" role="group" aria-label="选择我是谁">
-              {PERSON_KEYS.map((k, i) => (
-                <button
-                  key={k}
-                  className={`idpick${me === k ? ' on' : ''}`}
-                  aria-pressed={me === k}
-                  onClick={() => pickMe(k)}
-                >
-                  <span className="ic">
-                    <Icon name={i === 0 ? 'roleOrderer' : 'roleCook'} />
-                  </span>
-                  <span>
-                    <b>{nicknameOf(db.profiles, k) || `第 ${i + 1} 位`}</b>
-                    <small>{me === k ? '就是这台设备上的我' : '另一半'}</small>
-                  </span>
-                </button>
-              ))}
             </div>
           </section>
 

@@ -4579,6 +4579,31 @@ async function edgeChecks() {
     await m.close();
   }
 
+  console.log('\n[边界 · 设置页分区顺序]');
+  localStorage.clear();
+  {
+    /* 「昵称」「我是谁」是每个人都会看的，排在上面；「仓库与 token」「AI 识别」是配好就不动的，排它们下面 */
+    useDb();
+    const m = await mount('/sync');
+    const cardOf = (text: string) =>
+      m.$$('section').find((s) => (s.textContent ?? '').includes(text)) ?? null;
+    const FOLLOWING = window.Node.DOCUMENT_POSITION_FOLLOWING;
+    const before = (a: HTMLElement | null, b: HTMLElement | null) =>
+      a !== null && b !== null && (a.compareDocumentPosition(b) & FOLLOWING) !== 0;
+
+    const names = cardOf('昵称（随仓库同步）');
+    const who = cardOf('我是谁');
+    const repo = cardOf('当前仓库');
+    const ai = cardOf('AI 识别（DeepSeek）');
+    const logs = cardOf('最近同步');
+    check(names !== null && who !== null && repo !== null && ai !== null, '四块都挂出来了');
+    check(before(names, repo) && before(who, repo), '★ 仓库与 token 排在「昵称 / 我是谁」下面');
+    check(before(repo, ai), '★ 仓库与 token 下面接着是 AI 识别');
+    check(before(ai, logs), 'AI 识别还在同步日志上面（日志与「关于」仍在最下面）');
+    check(before(names, who), '昵称在上面、我是谁紧跟其后');
+    await m.close();
+  }
+
   console.log('\n[边界 · 设置格图标反映同步状态]');
   useDb();
   {
