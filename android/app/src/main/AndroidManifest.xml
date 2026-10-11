@@ -9,12 +9,16 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
 
+        <!-- 键盘弹出时把 WebView 顶上去：用系统的 adjustResize。
+             不要改用 Capacitor 的 input capture（capacitor.config.ts 里那个开关）——
+             它会把 WebView 的输入连接换掉，剪贴板粘贴、输入法与文字选区都会走形。 -->
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
             android:name=".MainActivity"
             android:label="@string/title_activity_main"
             android:theme="@style/AppTheme.NoActionBarLaunch"
             android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
             android:exported="true">
 
             <intent-filter>

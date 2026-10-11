@@ -6032,6 +6032,23 @@ async function boundaryChecks() {
     关键步骤（触发分支 / 打包命令 / 产物 / 建 Release / 权限）缺一个就报错，
     免得哪天把自动打包改坏了也没人发现。 */
 function workflowChecks() {
+  /* 安卓壳的输入法配置：这两个文件都改不了运行时的行为（要重新打包才生效），
+     但真机上踩过 —— 开着 Capacitor 的 input capture，从剪贴板点一下粘贴直接没反应，
+     所以在这儿钉住「不开它、键盘顶上去交给 adjustResize」。 */
+  console.log('\n[仓库 · 安卓壳：输入法 / 剪贴板交给 WebView]');
+  {
+    const nativeCfg = readFileSync('capacitor.config.ts', 'utf8');
+    const manifest = readFileSync('android/app/src/main/AndroidManifest.xml', 'utf8');
+    check(
+      !/captureInput\s*:\s*true/.test(nativeCfg),
+      '★ 不再开 Capacitor 的 input capture（它换掉 WebView 的输入连接，剪贴板粘贴会失效）',
+    );
+    check(
+      /<activity[^>]*android:windowSoftInputMode="adjustResize"/.test(manifest),
+      '★ 键盘顶上去交给清单里的 adjustResize（activity 上那一条）',
+    );
+  }
+
   console.log('\n[仓库 · GitHub Actions 自动打包]');
   let yml = '';
   try {

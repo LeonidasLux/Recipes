@@ -9,8 +9,14 @@ const config: CapacitorConfig = {
   android: {
     allowMixedContent: false,
     backgroundColor: '#FCF7ED',
-    /* 键盘弹出时把 WebView 顶上去，否则输入框会被挡住 */
-    captureInput: true,
+    /* 输入法 / 剪贴板 / 文字选区一律交回 WebView 自己管，别开 Capacitor 的
+       input capture 开关（曾经在这儿开着）：它会把 WebView 的输入连接换成
+       BaseInputConnection，于是从手机剪贴板点一下粘贴，字只被塞进 DOM、不发 input 事件，
+       React 的受控 value 下一次渲染又把它抹掉 —— 表现就是「粘贴没反应」；
+       长按选区菜单与输入法候选词也跟着走形。
+       「键盘挡住输入框」那件事改由清单里的 windowSoftInputMode="adjustResize" 解决
+       （见 android/app/src/main/AndroidManifest.xml）；布局本来就按 100dvh 伸缩，
+       WebView 被顶小了会跟着收，弹键盘时输入框自然在键盘上面。 */
   },
 
   server: {
