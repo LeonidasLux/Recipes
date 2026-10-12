@@ -88,6 +88,18 @@ import {
 import { backAction, isRootPath, pressBack, trackHistory } from '../src/lib/back';
 import { keepsNativeLongPress } from '../src/lib/gestures';
 import {
+  DOUBLE_TAP_MS,
+  DOUBLE_TAP_SLOP,
+  ORIGIN,
+  clampPan,
+  clampScale,
+  isDoubleTap,
+  isZoomed,
+  panTo,
+  pinchTo,
+  zoomTo,
+} from '../src/lib/zoom';
+import {
   UpdateError,
   apkCandidates,
   checkForUpdate,
@@ -174,6 +186,12 @@ interface Mounted {
   /** pointerType 传 'touch' 才像真机触摸；不传等同于鼠标 */
   pointerDown(sel: string, pointerType?: string): Promise<void>;
   pointerUp(sel: string): Promise<void>;
+  /**
+   * 派发任意指针事件（pointerdown / pointermove / pointerup / pointercancel），
+   * 带着 clientX / clientY / pointerId —— 大图的捏合与拖动要按坐标验。
+   * jsdom 没有 PointerEvent，用普通 Event 顶上，这些属性得手动挂。
+   */
+  pointer(sel: string, type: string, at?: { x?: number; y?: number; id?: number; pointerType?: string }): Promise<void>;
   /** 派发 contextmenu（长按链接时系统补的那个事件），返回是否被 preventDefault */
   contextMenu(sel: string): Promise<boolean>;
   /** 派发 mousedown，返回是否被 preventDefault（用来验「按钮不抢输入框的焦点」） */
@@ -320,6 +338,20 @@ async function mount(path: string): Promise<Mounted> {
         el.dispatchEvent(new window.Event('pointerup', { bubbles: true }));
       });
     },
+    async pointer(sel, type, at = {}) {
+      const el = root.querySelector<HTMLElement>(sel);
+      if (!el) throw new Error(`找不到 ${sel}`);
+      await act(async () => {
+        const ev = new window.Event(type, { bubbles: true, cancelable: true });
+        const id = at.id ?? 1;
+        Object.defineProperty(ev, 'clientX', { value: at.x ?? 0 });
+        Object.defineProperty(ev, 'clientY', { value: at.y ?? 0 });
+        Object.defineProperty(ev, 'pointerId', { value: id });
+        Object.defineProperty(ev, 'pointerType', { value: at.pointerType ?? 'touch' });
+        Object.defineProperty(ev, 'isPrimary', { value: id === 1 });
+        el.dispatchEvent(ev);
+      });
+    },
     async longPress(sel, ms = 600) {
       await mounted.pointerDown(sel);
       await settle(ms);
@@ -337,6 +369,45 @@ async function mount(path: string): Promise<Mounted> {
     },
   };
   return mounted;
+}
+
+/* ─── 大图手势的测试小工具 ─────────────────────
+   jsdom 不做布局（offsetWidth / getBoundingClientRect 恒为 0），窗口又是桌面尺寸
+   1024×768；而大图手势的坐标系 = 视口尺寸 + 图片版面尺寸。要验拖动与「拖不出屏幕」，
+   就得先把这两个量换成手机上的值 —— 用完记得还原，别串到别的用例里去。 */
+
+interface XY { x: number; y: number }
+
+/** 固定元素量出来的版面尺寸（offsetWidth / offsetHeight，不吃 transform） */
+function fakeSize(el: HTMLElement, w: number, h: number): void {
+  Object.defineProperty(el, 'offsetWidth', { value: w, configurable: true });
+  Object.defineProperty(el, 'offsetHeight', { value: h, configurable: true });
+}
+
+/** 把 window.innerWidth / innerHeight 换成手机视口，返回还原函数 */
+function fakeViewport(w: number, h: number): () => void {
+  const width = Object.getOwnPropertyDescriptor(window, 'innerWidth');
+  const height = Object.getOwnPropertyDescriptor(window, 'innerHeight');
+  Object.defineProperty(window, 'innerWidth', { value: w, configurable: true });
+  Object.defineProperty(window, 'innerHeight', { value: h, configurable: true });
+  return () => {
+    if (width) Object.defineProperty(window, 'innerWidth', width);
+    if (height) Object.defineProperty(window, 'innerHeight', height);
+  };
+}
+
+/** 大图当前的 transform（内联样式就是手势算出来的结果） */
+function transformOf(m: Mounted): string {
+  const el = m.$('.pv-img');
+  return el ? el.style.transform : '(没有大图)';
+}
+
+/** 在图上点两下：真机触摸的双击不一定补 dblclick，组件自己数时间与落点 */
+async function doubleTap(m: Mounted, sel: string, at: XY): Promise<void> {
+  for (let i = 0; i < 2; i++) {
+    await m.pointer(sel, 'pointerdown', { x: at.x, y: at.y });
+    await m.pointer(sel, 'pointerup', { x: at.x, y: at.y });
+  }
 }
 
 /* ─── 场景装载 ───────────────────────────────── */
@@ -1957,6 +2028,9 @@ async function interactionChecks() {
     await m.click('[aria-label="查看大图"]');
     check(m.$('.photoview') !== null, '点封面 → 打开大图');
     check(m.$('.pv-img')?.getAttribute('src') === SHOT_DATA_URL, '大图用的就是刚选的这张');
+    /* 添加页的大图与详情页共用一个 PhotoViewer：手势同样能用 */
+    await doubleTap(m, '.pv-img', { x: 180, y: 320 });
+    check(transformOf(m) === 'translate(0px, 0px) scale(2)', '★ 添加页的大图也能双击放大', transformOf(m));
     await m.click('.pv-close');
     check(m.$('.photoview') === null && m.$('.s-add') !== null, '点 × 关掉大图，人还在添加页');
     await m.click('[aria-label="查看大图"]');
@@ -2208,6 +2282,60 @@ async function interactionChecks() {
       window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     });
     check(m2.$('.photoview') === null, 'Esc 也能关掉');
+
+    /* 大图手势：双击放大 / 还原、双指捏合、放大后拖动看边角（拖不出屏幕）。
+       视口与图片版面都换成手机上的尺寸：jsdom 是桌面 1024×768 且不做布局。 */
+    const restoreVp = fakeViewport(360, 640);
+    await m2.click('[aria-label="查看大图"]');
+    fakeSize(m2.$('.pv-img') as HTMLElement, 360, 240);
+    check(transformOf(m2) === 'translate(0px, 0px) scale(1)', '打开大图先是原始大小', transformOf(m2));
+
+    await doubleTap(m2, '.pv-img', { x: 180, y: 320 });
+    check(transformOf(m2) === 'translate(0px, 0px) scale(2)', '★ 双击放大到 2 倍（点在正中，图不挪位）', transformOf(m2));
+    check((m2.$('.pv-img') as HTMLElement).className.includes('zoomed'), '放大后挂 zoomed（光标变抓手）');
+    await doubleTap(m2, '.pv-img', { x: 180, y: 320 });
+    check(transformOf(m2) === 'translate(0px, 0px) scale(1)', '★ 放大后再双击 → 还原成原始大小', transformOf(m2));
+
+    /* 双指从 100px 撑到 200px → 正好 2 倍；两指中点没动，图也就不挪位 */
+    await m2.pointer('.pv-img', 'pointerdown', { id: 1, x: 130, y: 320 });
+    await m2.pointer('.pv-img', 'pointerdown', { id: 2, x: 230, y: 320 });
+    await m2.pointer('.pv-img', 'pointermove', { id: 1, x: 80, y: 320 });
+    await m2.pointer('.pv-img', 'pointermove', { id: 2, x: 280, y: 320 });
+    check(transformOf(m2) === 'translate(0px, 0px) scale(2)', '★ 双指张开 → 放大到 2 倍', transformOf(m2));
+    check((m2.$('.pv-img') as HTMLElement).className.includes('moving'), '捏合中挂 moving（这段时间不做过渡动画）');
+    await m2.pointer('.pv-img', 'pointerup', { id: 1, x: 80, y: 320 });
+    await m2.pointer('.pv-img', 'pointerup', { id: 2, x: 280, y: 320 });
+    check(!(m2.$('.pv-img') as HTMLElement).className.includes('moving'), '松手收起 moving');
+
+    /* 放大后单指拖动：2 倍时图宽 720，比视口 360 多出 360，最多能拖 ±180 */
+    await m2.pointer('.pv-img', 'pointerdown', { id: 3, x: 100, y: 320 });
+    await m2.pointer('.pv-img', 'pointermove', { id: 3, x: 200, y: 320 });
+    check(transformOf(m2) === 'translate(100px, 0px) scale(2)', '★ 放大后拖动，图跟着手指走', transformOf(m2));
+    await m2.pointer('.pv-img', 'pointermove', { id: 3, x: 900, y: 320 });
+    check(transformOf(m2) === 'translate(180px, 0px) scale(2)', '★ 拖到边界就停住，图不会被拖出屏幕', transformOf(m2));
+    await m2.pointer('.pv-img', 'pointermove', { id: 3, x: 100, y: 320 });
+    check(transformOf(m2) === 'translate(0px, 0px) scale(2)', '拖回来：图跟着退回去');
+    await m2.pointer('.pv-img', 'pointerup', { id: 3, x: 100, y: 320 });
+
+    /* 拖动过的那一下不算「点一下」：紧接着点一下不会跟前面凑成双击 */
+    await m2.pointer('.pv-img', 'pointerdown', { id: 4, x: 220, y: 320 });
+    await m2.pointer('.pv-img', 'pointermove', { id: 4, x: 160, y: 320 });
+    await m2.pointer('.pv-img', 'pointerup', { id: 4, x: 160, y: 320 });
+    check(transformOf(m2) === 'translate(-60px, 0px) scale(2)', '往回拖 60px → 图跟着退 60', transformOf(m2));
+    await m2.pointer('.pv-img', 'pointerdown', { id: 5, x: 180, y: 320 });
+    await m2.pointer('.pv-img', 'pointerup', { id: 5, x: 180, y: 320 });
+    check(transformOf(m2) === 'translate(-60px, 0px) scale(2)', '★ 拖过之后再点一下，不会被当成双击', transformOf(m2));
+
+    /* 关掉再打开是一张新的：不带上次的缩放 / 平移；没放大时拖动也不动图 */
+    await m2.click('.pv-close');
+    await m2.click('[aria-label="查看大图"]');
+    fakeSize(m2.$('.pv-img') as HTMLElement, 360, 240);
+    check(transformOf(m2) === 'translate(0px, 0px) scale(1)', '★ 重新打开是原始大小，不带上次的缩放');
+    await m2.pointer('.pv-img', 'pointerdown', { id: 6, x: 100, y: 320 });
+    await m2.pointer('.pv-img', 'pointermove', { id: 6, x: 300, y: 320 });
+    check(transformOf(m2) === 'translate(0px, 0px) scale(1)', '★ 没放大时拖动不动图（图本来就完整可见）', transformOf(m2));
+    await m2.pointer('.pv-img', 'pointerup', { id: 6, x: 300, y: 320 });
+    restoreVp();
     await m2.close();
 
     gh.restore();
@@ -3555,6 +3683,84 @@ async function photoChecks() {
     );
     ds.restore();
   }
+}
+
+/* ═══════════ 大图手势（src/lib/zoom.ts）═══════════ */
+
+function zoomChecks() {
+  console.log('\n[大图 · 缩放与平移数学]');
+  const vp = { w: 360, h: 640 }; /* 手机视口 */
+  const img = { w: 360, h: 240 }; /* 手机上一张 3:2 的照片按 contain 摆下来的版面 */
+
+  check(clampScale(0.2) === 1 && clampScale(99) === 5, '★ 倍数夹在 1～5 倍之间');
+  check(!isZoomed(ORIGIN) && isZoomed({ scale: 1.02, x: 0, y: 0 }), '1 倍不算放大状态（浮点余量 0.001）');
+
+  /* 双击的锚点：手上那个点底下的图，缩放前后要待在原地 */
+  check(
+    JSON.stringify(zoomTo(ORIGIN, 2, { x: 0, y: 0 }, vp, img)) === JSON.stringify({ scale: 2, x: 0, y: 0 }),
+    '★ 正中双击放大到 2 倍：图不挪位',
+  );
+  check(
+    JSON.stringify(zoomTo(ORIGIN, 2, { x: 100, y: 0 }, vp, img)) === JSON.stringify({ scale: 2, x: -100, y: 0 }),
+    '★ 锚住手指：在右侧 100px 处放大，图往左让 100px',
+  );
+  check(
+    zoomTo({ scale: 1, x: 0, y: 0 }, 99, { x: 0, y: 0 }, vp, img).scale === 5,
+    '★ 一直放大也封顶在 5 倍',
+  );
+
+  /* 平移夹取：图比视口小的那一维不许拖，大的那一维最多拖到贴边 */
+  check(
+    JSON.stringify(clampPan({ scale: 2, x: 999, y: 999 }, vp, img)) === JSON.stringify({ scale: 2, x: 180, y: 0 }),
+    '★ 夹取：横向最多 (720-360)/2 = 180，纵向图还比视口矮 → 只能居中',
+  );
+  check(
+    JSON.stringify(clampPan({ scale: 1, x: 50, y: 50 }, vp, img)) === JSON.stringify({ scale: 1, x: 0, y: 0 }),
+    '★ 原始大小时拖不动（图完整可见，居中最好看）',
+  );
+  check(
+    JSON.stringify(clampPan({ scale: 3, x: 10, y: 10 }, vp, { w: 0, h: 0 })) === JSON.stringify({ scale: 3, x: 0, y: 0 }),
+    '★ 量不到图片尺寸（图还没加载完）时也夹成居中，不会把图拖出屏幕',
+  );
+  check(panTo({ scale: 2, x: 0, y: 0 }, 120, 30, vp, img).x === 120, '范围内的平移照走');
+  check(
+    clampPan({ scale: 2.3456, x: 0.004, y: -0 }, vp, img).scale === 2.35
+      && JSON.stringify(clampPan({ scale: 2, x: -0.001, y: 0 }, vp, img)) === JSON.stringify({ scale: 2, x: 0, y: 0 }),
+    '★ 结果取整到小数点后 2 位，且不出现 "-0px"（transform 字符串要干净）',
+  );
+
+  /* 捏合：两指距离之比当倍数，两指一起挪就是平移 */
+  const pinchStart = { view: { scale: 1, x: 0, y: 0 }, dist: 100, mid: { x: 0, y: 0 } };
+  check(
+    JSON.stringify(pinchTo(pinchStart, { dist: 200, mid: { x: 0, y: 0 } }, vp, img)) === JSON.stringify({ scale: 2, x: 0, y: 0 }),
+    '★ 两指从 100px 撑到 200px → 2 倍，中点没动图也不挪位',
+  );
+  check(
+    pinchTo({ view: { scale: 2, x: 0, y: 0 }, dist: 100, mid: { x: 0, y: 0 } }, { dist: 100, mid: { x: 50, y: 0 } }, vp, img).x === 50,
+    '★ 两指并着挪（距离不变）就是平移：图跟着走 50px',
+  );
+  check(
+    JSON.stringify(pinchTo(pinchStart, { dist: 20, mid: { x: 0, y: 0 } }, vp, img)) === JSON.stringify({ scale: 1, x: 0, y: 0 }),
+    '★ 两指收拢回 1 倍就停住（不缩得比原始大小还小）',
+  );
+  check(
+    pinchTo(pinchStart, { dist: 9999, mid: { x: 0, y: 0 } }, vp, img).scale === 5,
+    '★ 两指撑到天上去也封顶 5 倍',
+  );
+  check(
+    pinchTo({ view: { scale: 2, x: 0, y: 0 }, dist: 0, mid: { x: 0, y: 0 } }, { dist: 0, mid: { x: 0, y: 0 } }, vp, img).scale === 2,
+    '两指叠在一起（距离 0）也不炸',
+  );
+
+  /* 双击判定：时间窗 + 落点 */
+  const first = { t: 1000, x: 100, y: 100 };
+  check(!isDoubleTap(null, first), '第一下没有「上一拍」→ 不算双击');
+  check(isDoubleTap(first, { t: 1000 + DOUBLE_TAP_MS, x: 100, y: 100 }), '时间窗内、落点一样 → 双击');
+  check(!isDoubleTap(first, { t: 1000 + DOUBLE_TAP_MS + 1, x: 100, y: 100 }), '★ 超过时间窗就不算双击（两次单击）');
+  check(
+    !isDoubleTap(first, { t: 1010, x: 100 + DOUBLE_TAP_SLOP + 1, y: 100 }),
+    '★ 落点差太远也不算双击（两次都拖过）',
+  );
 }
 
 function helperChecks() {
@@ -6630,6 +6836,30 @@ async function backChecks() {
     gh.restore();
   }
 
+  console.log('\n[返回键 · 放大的大图先还原大小]');
+  localStorage.clear();
+  {
+    const gh = installFakeGithub({ images: { 'images/r1.png': SHOT_B64 } });
+    useDb((db) => {
+      db.recipes[0].image = 'images/r1.png';
+    });
+    const m = await mount('/recipe/r1');
+    await m.wait(300);
+    await m.click('[aria-label="查看大图"]');
+    await doubleTap(m, '.pv-img', { x: 400, y: 300 });
+    check(transformOf(m).includes('scale(2)'), '双击把大图放大到 2 倍', transformOf(m));
+    await act(async () => pressBack());
+    check(
+      m.$('.photoview') !== null && transformOf(m).includes('scale(1)'),
+      '★ 放大状态下按返回键先把大图还原成原始大小（大图还开着）',
+      transformOf(m),
+    );
+    await act(async () => pressBack());
+    check(m.$('.photoview') === null && m.$('.s-detail') !== null, '★ 还原之后再按一次才关掉大图，人还在详情页');
+    await m.close();
+    gh.restore();
+  }
+
   console.log('\n[返回键 · 一级页之间不互相回退]');
   useDb();
   {
@@ -6880,6 +7110,7 @@ helperChecks();
 await githubChecks();
 await aiChecks();
 await photoChecks();
+zoomChecks();
 await migrationChecks();
 await connectChecks();
 await syncChecks();
