@@ -421,6 +421,32 @@ async function doubleTap(m: Mounted, sel: string, at: XY): Promise<void> {
   }
 }
 
+/* ─── 点单组合器的小工具 ─────────────────────
+   餐别按钮上只有图标（日出 / 太阳 / 月亮 / 月亮加星），名字在 aria-label 上；
+   发送键也只留动作与道数，「哪天 + 哪餐」同样收在 aria-label 里。 */
+
+/** 当前选中的餐别（读 aria-label 去掉「选」字） */
+function pickedMeal(m: Mounted): string {
+  return (m.$('.seg.ony.meals button.on')?.getAttribute('aria-label') ?? '').replace(/^选/, '');
+}
+
+/** 点某一餐（名字对得上 aria-label 才点） */
+async function pickMeal(m: Mounted, label: string): Promise<void> {
+  const el = m.$$('.seg.ony.meals button').find((b) => b.getAttribute('aria-label') === `选${label}`);
+  if (!el) throw new Error(`找不到餐别「${label}」`);
+  await m.clickEl(el);
+}
+
+/** 发送键的 aria-label（完整那句「发给小红 · 明天夜宵 · 2 道」） */
+function sendLabel(m: Mounted): string {
+  return m.$('.sendbtn')?.getAttribute('aria-label') ?? '';
+}
+
+/** 点开「给掌勺的话」那一行输入（默认收着，点 oprow 里的备注图标才铺开） */
+async function openNote(m: Mounted): Promise<void> {
+  if (!m.$('.ordernote')) await m.click('.notebtn');
+}
+
 /* ─── 场景装载 ───────────────────────────────── */
 
 function useDb(mutate?: (db: DB) => void) {
@@ -984,10 +1010,10 @@ async function renderChecks() {
   ]);
   await expectIn('5 点单（未选菜 → 发送键禁用）', '/order', [
     '点一顿饭',
-    /* 组合器标题按「哪天 + 哪一餐」拼，餐别是按时段默认挑的，所以用 helper 算出来对 */
-    `${dayWord(dayKey())}${mealWord(mealForTime())}`,
-    '早餐',
-    '夜宵',
+    /* 组合器里只有两个选择器 + 一行操作：餐别是图标（名字在 aria-label 上），日子是三个词 */
+    '选早餐',
+    '选夜宵',
+    '今天',
     '明天',
     '后天',
     '从菜谱库挑选',
@@ -1075,6 +1101,19 @@ async function interactionChecks() {
     const m = await mount('/order');
     const before = readDb().orders.length;
 
+    /* 挑选区那行只有标题 + 一枚图标按钮（说明文字撤了、按钮上也不再印字） */
+    check(
+      (m.$('.sechead .h3')?.textContent ?? '').trim() === '从菜谱库挑选'
+        && (m.$('.randbtn')?.textContent ?? '').trim() === ''
+        && m.$('.randbtn')?.getAttribute('aria-label') === '随机加一道'
+        && !m.html().includes('已选中的会堆到上面'),
+      '★ 「从菜谱库挑选」那行：标题 + 一枚 36px 的随机图标，没有说明文字',
+    );
+    check(
+      m.$$('.sechead')[0]?.querySelector('.hint') === null,
+      '没在搜索时挑选区不摆那行说明（搜索命中数量仍会显示）',
+    );
+
     /* 多选两道菜 */
     await m.click('.pick');
     await m.click('.dishgrid .pick:nth-child(3)');
@@ -1085,9 +1124,10 @@ async function interactionChecks() {
     }
 
     /* 切晚餐（餐别那组是 .seg.ony.meals：日子那组也在 .seg.ony 里，别点串了） */
-    await m.clickByText('.seg.ony.meals button', '晚餐');
-    if (!m.text('.sendbtn').includes('晚餐')) fail('切晚餐', `实际是「${m.text('.sendbtn')}」`);
-    else ok('切到晚餐 → 发送键跟着变');
+    await pickMeal(m, '晚餐');
+    if (pickedMeal(m) !== '晚餐') fail('切晚餐', `选中态是「${pickedMeal(m)}」`);
+    else if (!sendLabel(m).includes('晚餐')) fail('切晚餐 → 发送键的说明', sendLabel(m));
+    else ok('切到晚餐 → 选中态与发送键都跟着变');
 
     /* 移除一颗胶囊 */
     await m.click('.sel .x');
@@ -1101,7 +1141,13 @@ async function interactionChecks() {
     else ok('手动输入也能加进这顿');
 
     /* 给掌勺的话 */
-    check(m.$('.ordernote')?.getAttribute('placeholder') === '给掌勺的话（可不填）', '组合器里有「给掌勺的话」输入框');
+    check(m.$('.ordernote') === null, '★ 「给掌勺的话」默认收着，不给组合器占高度');
+    check(
+      m.$('.notebtn')?.getAttribute('aria-label') === '给掌勺的话',
+      '★ 收起来之后仍有入口（那枚备注图标）',
+    );
+    await openNote(m);
+    check(m.$('.ordernote')?.getAttribute('placeholder') === '给掌勺的话（可不填）', '点开图标 → 铺开「给掌勺的话」输入框');
     await m.type('.ordernote', '  少放辣，米饭少一点  ');
 
     /* 发送 */
@@ -1144,38 +1190,40 @@ async function interactionChecks() {
     const m = await mount('/order');
     const auto = mealForTime();
     check(
-      (m.$('.seg.ony.meals button.on')?.textContent ?? '').trim() === mealLabel(auto),
+      pickedMeal(m) === mealLabel(auto),
       '★ 打开点单页就按现在的时间默认选好一餐',
-      m.text('.seg.ony.meals'),
+      pickedMeal(m),
     );
     check(
       m.$$('.seg.ony.meals button').length === 4 && m.$$('.seg.ony.days button').length === 3,
       '★ 四个餐别 + 三个日子（今天 / 明天 / 后天）都摆着',
-      `${m.text('.seg.ony.meals')} | ${m.text('.seg.ony.days')}`,
+      `${m.$$('.seg.ony.meals button').map((b) => b.getAttribute('aria-label')).join('/')} | ${m.text('.seg.ony.days')}`,
     );
     check(
-      m.html().includes(`先选了「${mealLabel(auto)}」（${mealWindow(auto)}）`),
-      '★ 说清默认是怎么来的（时间段 + 点一下就能改）',
+      m.$$('.seg.ony.meals button').every(
+        (b) => b.querySelector('svg') !== null && (b.textContent ?? '').trim() === '',
+      ),
+      '★ 餐别只用图标（四个按钮上一个字都没有，名字留在 aria-label / title 上）',
+      m.$$('.seg.ony.meals button').map((b) => b.getAttribute('aria-label')).join('/'),
     );
     check((m.$('.seg.ony.days button.on')?.textContent ?? '').trim() === dayWord(dayKey(0)), '日子默认今天');
 
-    /* 手动改餐别：那条「按现在的时间」提示就该收起来 */
-    await m.clickByText('.seg.ony.meals button', '早餐');
+    /* 手动改餐别 */
+    await pickMeal(m, '早餐');
     check(
-      (m.$('.seg.ony.meals button.on')?.textContent ?? '').trim() === '早餐',
+      pickedMeal(m) === '早餐',
       '★ 手动改餐别（点「早餐」）',
-      m.text('.seg.ony.meals'),
+      pickedMeal(m),
     );
-    check(!m.html().includes('按现在的时间先选了'), '改过之后就不再摆「按现在的时间…」那条提示');
 
     /* 选「明天」+「夜宵」发一单 */
     await m.clickByText('.seg.ony.days button', '明天');
-    await m.clickByText('.seg.ony.meals button', '夜宵');
+    await pickMeal(m, '夜宵');
     await m.click('.dishgrid .pick:nth-child(3)'); /* 椰子鸡火锅 */
     check(
-      m.text('.sendbtn').includes('发给小红 · 明天夜宵 · 1 道'),
+      sendLabel(m) === '发给小红 · 明天夜宵 · 1 道',
       '★ 发送键把日子与餐别都写清楚',
-      m.text('.sendbtn'),
+      sendLabel(m),
     );
     await m.click('.sendbtn');
     await m.wait(900);
@@ -1312,9 +1360,9 @@ async function interactionChecks() {
       m.text('.selchips'),
     );
     check(
-      (m.$('.seg.ony.meals button.on')?.textContent ?? '').trim() === '午餐',
+      pickedMeal(m) === '午餐',
       '★ 餐次也跟着填上（午餐）',
-      m.text('.seg.ony.meals'),
+      pickedMeal(m),
     );
     check(
       (m.$('.seg.ony.days button.on')?.textContent ?? '').trim() === dayWord(dayKey(0)),
@@ -1323,14 +1371,9 @@ async function interactionChecks() {
     );
     check(m.value('.picksearch input') === '', '进改单模式顺手清掉挑选网格上的搜索词');
     check(
-      m.text('.clabel').includes('改这一顿'),
-      '★ 改单时组合器标题写着「改这一顿」（跨天的单不该说成「今天中午」）',
-      m.text('.clabel'),
-    );
-    check(
-      m.text('.sendbtn').includes('保存修改 · 午餐 · 2 道'),
-      '★ 发送键变成「保存修改」',
-      m.text('.sendbtn'),
+      sendLabel(m).includes('保存修改 · 午餐 · 2 道'),
+      '★ 发送键变成「保存修改」（完整那句收在 aria-label 里）',
+      sendLabel(m),
     );
 
     /* 三样都改：换掉一道菜（巴斯克 → 椰子鸡火锅）、切晚餐、改给掌勺的话 */
@@ -1338,13 +1381,14 @@ async function interactionChecks() {
     check(m.$$('.sel').length === 1, '点胶囊上的 × 去掉一道菜', `剩 ${m.$$('.sel').length} 颗`);
     await m.type('.picksearch input', '椰');
     await m.click('.dishgrid .pick'); /* 椰子鸡火锅 */
+    await openNote(m);
     await m.type('.ordernote', '多放点辣');
     await m.type('.editbar .eb-why', '晚上想清淡一点');
-    await m.clickByText('.seg.ony.meals button', '晚餐');
+    await pickMeal(m, '晚餐');
     check(
-      m.text('.sendbtn').includes('保存修改 · 晚餐 · 2 道'),
+      sendLabel(m).includes('保存修改 · 晚餐 · 2 道'),
       '改完两菜一晚，按钮文案跟着变',
-      m.text('.sendbtn'),
+      sendLabel(m),
     );
 
     await m.click('.sendbtn');
@@ -1427,6 +1471,7 @@ async function interactionChecks() {
       '★ 改单模式里有「为什么改（可不填）」那一格',
     );
 
+    await openNote(m);
     await m.type('.ordernote', '多放辣');
     await m.click('.sendbtn');
     await m.wait(900);
@@ -1461,12 +1506,13 @@ async function interactionChecks() {
     const m = await mount('/order');
     await m.type('.manualrow input', '手抓饼加蛋');
     await m.click('.manualrow .btn-sticker');
+    await openNote(m);
     await m.type('.ordernote', '今晚想吃');
 
     await m.click('.osum');
     await m.click('.oactions .btn-sticker');
     check(m.$('.editbar') !== null, '进了改单模式');
-    await m.clickByText('.editbar .btn-sticker', '取消修改');
+    await m.click('.editbar .ebtx');
     const o1 = readDb().orders.find((o) => o.id === 'o1')!;
     check(
       o1.items.length === 2 && o1.meal === 'lunch' && o1.status === 'accepted',
@@ -1480,9 +1526,9 @@ async function interactionChecks() {
     );
     check(m.value('.ordernote') === '今晚想吃', '备注也还原了', `实际「${m.value('.ordernote')}」`);
     check(
-      m.$('.editbar') === null && m.text('.sendbtn').includes('发给小红'),
+      m.$('.editbar') === null && sendLabel(m).includes('发给小红'),
       '回到开新单的样子',
-      m.text('.sendbtn'),
+      sendLabel(m),
     );
 
     /* 卡片里那个按钮是开关：再点一次同样是「退出改单」 */
@@ -3026,6 +3072,7 @@ async function interactionChecks() {
     await m.ime('.manualrow input', '红烧排骨');
     await m.blur('.manualrow input');
     check(m.value('.manualrow input') === '红烧排骨', '点单手动加菜输入框不丢字');
+    await openNote(m);
     await m.ime('.ordernote', '少放辣');
     await m.blur('.ordernote');
     check(m.value('.ordernote') === '少放辣', '★ 点单备注框同样不丢字');
@@ -5109,7 +5156,7 @@ async function edgeChecks() {
     const input = m.$('.manualrow input');
     check(input?.getAttribute('maxlength') === '18', '手动菜名限制 18 字', `实际 ${input?.getAttribute('maxlength')}`);
 
-    await m.clickByText('.btn-sticker.solid', '随机加一道');
+    await m.click('.randbtn');
     check(m.$$('.sel').length === 1, '随机加一道 → 组合器出现 1 道');
 
     await m.type('.manualrow input', '手抓饼加蛋');
@@ -6650,6 +6697,8 @@ async function edgeChecks() {
       useDb();
       const m = await mount('/order');
       sweep(m, '/order');
+      /* 「给掌勺的话」默认收着（点 oprow 里那枚备注图标才铺开），先点开再走一遍输入 */
+      await m.click('.notebtn');
       await walk(m, '.ordernote', '给掌勺的话');
       await walk(m, '.manualrow input', '自己加一道没收藏的');
       await m.close();
@@ -6701,6 +6750,26 @@ async function edgeChecks() {
       /\.s-order \.clearwrap > \.ordernote\s*\{[^}]*padding-right/.test(css) &&
         /\.s-order \.manualrow \.clearwrap\s*\{[^}]*flex:\s*1/.test(css),
       '点单页那两个（给掌勺的话 / 自己加一道）也跟着走',
+    );
+    /* 点单组合器的布局约束：三行压扁（日子 / 餐别图标 / 已选 + 备注 + 发送），占屏不到 1/4。
+       原来它是一整块带标题与说明文字、发送键独占一行的固定区，把下面的列表挤得没地方。 */
+    check(
+      /\.s-order \.oprow\s*\{[^}]*display:\s*flex/.test(css) &&
+        /\.s-order \.sendbtn\s*\{[^}]*flex:\s*0 0 auto/.test(css) &&
+        !/\.s-order \.sendbtn\s*\{[^}]*width:\s*100%/.test(css),
+      '★ 发送键收进 oprow（与已选菜、备注图标同一行），不再独占一行',
+    );
+    check(
+      /\.s-order \.seg\.ony button\s*\{[^}]*min-height:\s*28px/.test(css) &&
+        /\.s-order \.seg\.ony\.meals button svg\s*\{[^}]*width:\s*19px/.test(css) &&
+        /\.s-order \.notebtn\s*\{[^}]*width:\s*40px/.test(css),
+      '★ 组合器压扁了：两排选择器 28px、操作行与已选菜胶囊齐高（40px），餐别那排是 19px 的图标',
+    );
+    check(
+      /\.s-order \.randbtn\s*\{[^}]*width:\s*36px/.test(css) &&
+        /\.s-order \.sechead\s*\{[^}]*margin:\s*0 2px 8px/.test(css) &&
+        /\.s-order \.sechead \.h3\s*\{[^}]*font-size:\s*15px/.test(css),
+      '★ 「从菜谱库挑选」那行也收紧了：标题 15px、随机按钮 36px 的图标、下边距 8px',
     );
   }
 

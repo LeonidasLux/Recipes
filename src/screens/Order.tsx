@@ -19,8 +19,6 @@ import {
   itemCover,
   mealForTime,
   mealLabel,
-  mealWindow,
-  mealWord,
   orderChanges,
   orderCover,
   orderDay,
@@ -33,7 +31,16 @@ import { Cover } from '../components/Photo';
 import { useNames } from '../data/useNames';
 import { preserveTypedValue } from '../lib/inputs';
 import { useBackClose } from '../lib/back';
+import type { IconName } from '../components/Icons';
 import type { DB, Meal, Order, OrderItem } from '../data/types';
+
+/** 餐别 → 图标：一天四段（日出 / 太阳 / 月亮 / 月亮加星），名字挂在按钮的 aria-label 上 */
+const MEAL_ICON: Record<Meal, IconName> = {
+  breakfast: 'mealSunrise',
+  lunch: 'mealSun',
+  dinner: 'mealMoon',
+  night: 'mealMoonStar',
+};
 
 export default function OrderScreen() {
   const { db, addOrder, updateOrder, restoreOrder, deleteOrder, me } = useStore();
@@ -44,8 +51,7 @@ export default function OrderScreen() {
   const [sp, setSp] = useSearchParams();
 
   /* 按现在几点先给个默认餐别（区间见 MEAL_WINDOWS）：一天四顿，忘了改就点错餐别了 */
-  const autoMeal = useRef<Meal>(mealForTime()).current;
-  const [meal, setMeal] = useState<Meal>(autoMeal);
+  const [meal, setMeal] = useState<Meal>(() => mealForTime());
   /** 哪天吃（默认今天，可选明天 / 后天） */
   const [day, setDay] = useState<string>(() => dayKey(0));
   const [selected, setSelected] = useState<OrderItem[]>([]);
@@ -54,6 +60,8 @@ export default function OrderScreen() {
   const [pickQ, setPickQ] = useState('');
   /* 给掌勺的话（可不填），随这一单一起发出去 */
   const [note, setNote] = useState('');
+  /** 「给掌勺的话」这一格默认收起来（点备注图标才铺开），先把组合器的高度让给下面的列表 */
+  const [noteOpen, setNoteOpen] = useState(false);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -277,8 +285,15 @@ export default function OrderScreen() {
   const historyOrders = useMemo(() => myOrders.filter((o) => orderDay(o) < todayKey), [myOrders, todayKey]);
 
   const canSend = selected.length > 0 && !sending;
-  /** 发送键上那句「明天早餐」：今天是默认，就不用占地方写「今天」 */
+  /** 按钮上放不下的那句「哪天 + 哪餐」：挂在 aria-label 上（读屏与自动化都读得到） */
   const whenLabel = `${dayTag(day)}${mealLabel(meal)}`;
+  const sendLabel = sending
+    ? editingId
+      ? '正在保存…'
+      : '正在发送…'
+    : selected.length
+      ? `${editingId ? '保存修改' : `发给${names.partnerName}`} · ${whenLabel} · ${selected.length} 道`
+      : '先选几道菜';
 
   /* 挑选网格：搜索词命中菜名 / 备注，与菜谱库那套同一口径 */
   const pickSearching = pickQ.trim().length > 0;
@@ -307,8 +322,8 @@ export default function OrderScreen() {
             <div className="eb-top">
               <Icon name="pencil" />
               <span className="ebt">正在修改：{orderSummary(editingOrder)}</span>
-              <button type="button" className="btn-sticker" onClick={cancelEdit}>
-                取消修改
+              <button type="button" className="icbtn ebtx" aria-label="取消修改" title="取消修改" onClick={cancelEdit}>
+                <Icon name="x" />
               </button>
             </div>
             {/* 原因可不填：填了掌勺那边展开这张单就看得到；不填就只记「改了什么」 */}
@@ -327,19 +342,8 @@ export default function OrderScreen() {
             />
           </div>
         )}
-        <div className="crow">
-          <div className="clabel">
-            {/* 改单时不写「今天中午」——那张单可能是昨天的、也可能是后天的 */}
-            <b>{editingOrder ? '改这一顿' : `${dayWord(day)}${mealWord(meal)}`}</b>
-            <span>
-              {editingOrder
-                ? `改完点下面保存，${names.partnerName}会看到新菜单`
-                : '先定哪天吃、哪一顿，再从菜谱库挑几道'}
-            </span>
-          </div>
-        </div>
 
-        {/* 哪天吃：今天 / 明天 / 后天 */}
+        {/* 哪天吃：今天 / 明天 / 后天 —— 就三个词，摆成一行小药丸 */}
         <div className="seg ony days" role="group" aria-label="选择哪天吃">
           {[0, 1, 2].map((n) => {
             const key = dayKey(n);
@@ -357,7 +361,7 @@ export default function OrderScreen() {
           })}
         </div>
 
-        {/* 哪一顿：早餐 / 午餐 / 晚餐 / 夜宵 */}
+        {/* 哪一顿：只给图标（日出 / 太阳 / 月亮 / 月亮加星），名字挂在 aria-label 与 title 上 */}
         <div className="seg ony meals" role="group" aria-label="选择餐别">
           {MEALS.map((m) => (
             <button
@@ -365,82 +369,94 @@ export default function OrderScreen() {
               key={m}
               className={meal === m ? 'on' : ''}
               aria-pressed={meal === m}
+              aria-label={`选${mealLabel(m)}`}
+              title={mealLabel(m)}
               onClick={() => setMeal(m)}
             >
-              {mealLabel(m)}
+              <Icon name={MEAL_ICON[m]} />
             </button>
           ))}
         </div>
 
-        {/* 默认是「按现在的时间」挑的 —— 说清依据，用户才知道要不要改 */}
-        {meal === autoMeal && (
-          <p className="autohint">
-            按现在的时间先选了「{mealLabel(autoMeal)}」（{mealWindow(autoMeal)}），点一下就能改
-          </p>
-        )}
-
-        <div className="selchips" aria-live="polite">
-          {selected.length === 0 ? (
-            <span className="ph">还没选菜 · 点下面任意一道试试</span>
-          ) : (
-            selected.map((s, i) => (
-              <span className="sel" key={`${s.recipeId ?? 'm'}-${i}`} title="点一下移除">
-                {s.dishName}
-                <button className="x" aria-label={`移除 ${s.dishName}`} onClick={() => removeAt(i)}>
-                  <Icon name="x" />
-                </button>
-              </span>
-            ))
-          )}
+        {/* 已选菜 + 给掌勺的话 + 发送：挤在一行里，组合器就三行高 */}
+        <div className="oprow">
+          <div className="selchips" aria-live="polite">
+            {selected.length === 0 ? (
+              <span className="ph">还没选菜</span>
+            ) : (
+              selected.map((s, i) => (
+                <span className="sel" key={`${s.recipeId ?? 'm'}-${i}`} title="点一下移除">
+                  {s.dishName}
+                  <button className="x" aria-label={`移除 ${s.dishName}`} onClick={() => removeAt(i)}>
+                    <Icon name="x" />
+                  </button>
+                </span>
+              ))
+            )}
+          </div>
+          <button
+            type="button"
+            className={`notebtn${noteOpen ? ' open' : ''}${note ? ' has' : ''}`}
+            aria-label="给掌勺的话"
+            aria-expanded={noteOpen}
+            title="给掌勺的话"
+            onClick={() => setNoteOpen((v) => !v)}
+          >
+            <Icon name="note" />
+          </button>
+          <button className="sendbtn" disabled={!canSend} aria-label={sendLabel} onClick={submit}>
+            {sending ? (
+              <>
+                <span className="spinner" aria-hidden /> {editingId ? '正在保存…' : '正在发送…'}
+              </>
+            ) : (
+              <>
+                <Icon name={editingId ? 'save' : 'send'} />
+                <span>{selected.length ? (editingId ? '保存修改' : `发给${names.partnerName}`) : '先选几道菜'}</span>
+                {selected.length > 0 && <b className="cnt">{selected.length} 道</b>}
+              </>
+            )}
+          </button>
         </div>
 
-        <ClearInput
-          className="ordernote"
-          type="text"
-          value={note}
-          maxLength={30}
-          autoComplete="off"
-          spellCheck={false}
-          placeholder="给掌勺的话（可不填）"
-          aria-label="给掌勺的话"
-          onChange={(e) => setNote(e.target.value)}
-          onClear={() => setNote('')}
-          {...preserveTypedValue(setNote)}
-        />
-
-        <button className="sendbtn" disabled={!canSend} onClick={submit}>
-          {sending ? (
-            <>
-              <span className="spinner" aria-hidden /> {editingId ? '正在保存…' : '正在发送…'}
-            </>
-          ) : (
-            <>
-              <Icon name={editingId ? 'save' : 'send'} />
-              <span>
-                {selected.length
-                  ? editingId
-                    ? `保存修改 · ${whenLabel} · ${selected.length} 道`
-                    : `发给${names.partnerName} · ${whenLabel} · ${selected.length} 道`
-                  : '先选几道菜'}
-              </span>
-            </>
-          )}
-        </button>
+        {/* 点备注图标才铺开的一行输入（默认收着，不占高度） */}
+        {noteOpen && (
+          <div className="noterow">
+            <ClearInput
+              className="ordernote"
+              type="text"
+              value={note}
+              maxLength={30}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="给掌勺的话（可不填）"
+              aria-label="给掌勺的话"
+              autoFocus
+              onChange={(e) => setNote(e.target.value)}
+              onClear={() => setNote('')}
+              {...preserveTypedValue(setNote)}
+            />
+          </div>
+        )}
       </section>
 
       <main className="scroll" onScroll={closeTip}>
-        <div className="pad" style={{ display: 'flex', flexDirection: 'column', gap: 18, paddingTop: 14, paddingBottom: 22 }}>
+        <div className="pad" style={{ display: 'flex', flexDirection: 'column', gap: 14, paddingTop: 10, paddingBottom: 22 }}>
           <section>
+            {/* 只留标题 + 一枚「随机加一道」图标按钮：说明文字与带字按钮都撤掉，这块不占地方 */}
             <div className="sechead">
               <div>
                 <h2 className="h3">从菜谱库挑选</h2>
-                <p className="hint">
-                  {pickSearching ? `找到 ${pickList.length} 道「${pickQ.trim()}」` : '可多选 · 已选中的会堆到上面'}
-                </p>
+                {pickSearching && <p className="hint">找到 {pickList.length} 道「{pickQ.trim()}」</p>}
               </div>
-              <button className="btn-sticker solid" onClick={randomAdd}>
+              <button
+                type="button"
+                className="randbtn"
+                aria-label="随机加一道"
+                title="随机加一道"
+                onClick={randomAdd}
+              >
                 <Icon name="shuffle" />
-                随机加一道
               </button>
             </div>
 

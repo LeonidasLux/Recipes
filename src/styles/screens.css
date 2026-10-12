@@ -198,27 +198,28 @@
    （和菜谱库那枚同步按钮同一套做法，见文件开头的 .s-library .topbar .navrow）。
    掌勺屏的标题块下面还挂着一行小字，开关留在顶端正对标题，不跟着往下坠。 */
 .s-order .topbar .navrow { align-items: flex-end; }
-/* 和页面其他内容一样左右留 18px（原来通栏贴边），高度也比原先收紧一档 */
-.s-order .composer { flex: 0 0 auto; padding: 10px 12px 12px; margin: 0 18px; border-radius: var(--radius-card);
+/* 点单的组合器常驻在列表上方（不随滚动走），所以**尽量压扁**：日子一行、餐别一行（只放图标）、
+   已选菜 + 备注 + 发送一行 —— 三行加起来不到屏幕 1/4，高度让给下面的挑选网格与点单列表。
+   这里不放描述性文字：餐别用图标（名字挂在 aria-label / title 上），是今天就不写「今天」。 */
+.s-order .composer { flex: 0 0 auto; padding: 7px 10px 9px; margin: 0 18px; border-radius: var(--radius-card);
   background: var(--accent); border: 2px solid var(--ink); color: var(--on-accent); box-shadow: var(--shadow-sticker); }
-.s-order .crow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.s-order .crow .clabel { min-width: 0; }
-.s-order .crow .clabel b { display: block; font-size: 15px; font-weight: 700; color: var(--on-accent); line-height: 1.2; }
-.s-order .crow .clabel span { font-size: 11px; color: color-mix(in oklch, var(--on-accent) 70%, transparent); }
 .s-order .seg.ony { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; background: rgba(255,255,255,0.2);
-  border-radius: 999px; padding: 3px; border: 1.5px solid rgba(58,42,30,.35); flex: 0 0 auto; width: 116px; }
-.s-order .seg.ony button { border: 0; background: transparent; color: var(--on-accent); min-height: 38px; border-radius: 999px;
-  font-weight: 700; font-size: 13.5px; cursor: pointer; padding: 0 6px; }
+  border-radius: 999px; padding: 2px; border: 1.5px solid rgba(58,42,30,.35); width: 100%; }
+.s-order .seg.ony button { border: 0; background: transparent; color: var(--on-accent); min-height: 28px; border-radius: 999px;
+  font-weight: 700; font-size: 12.5px; cursor: pointer; padding: 0 4px; }
 .s-order .seg.ony button.on { background: #fff; color: var(--accent-deep); box-shadow: 0 1px 0 0 var(--ink); }
 /* 日子三格（今天 / 明天 / 后天）与餐别四格（早 / 午 / 晚 / 夜宵）各占一行、铺满宽度：
    四个餐别塞不进原来那个 116px 的两格块里，摆两行也点得准 */
-.s-order .seg.ony.days { grid-template-columns: repeat(3, 1fr); width: 100%; margin-top: 8px; }
-.s-order .seg.ony.meals { grid-template-columns: repeat(4, 1fr); width: 100%; margin-top: 6px; }
-.s-order .seg.ony.days button, .s-order .seg.ony.meals button { min-height: 32px; font-size: 13px; padding: 0 4px; }
-/* 「按现在的时间先选了…」：只在餐别还是自动挑的那个时露面，说明默认是怎么来的 */
-.s-order .autohint { margin: 6px 2px 0; font-size: 11px;
-  color: color-mix(in oklch, var(--on-accent) 78%, transparent); }
-.s-order .selchips { display: flex; gap: 7px; overflow-x: auto; scrollbar-width: none; margin: 8px 0; min-height: 40px; align-items: center; }
+.s-order .seg.ony.days { grid-template-columns: repeat(3, 1fr); }
+/* 餐别那排只放图标：日出 / 太阳 / 月亮 / 月亮加星，四个放一行、点得准 */
+.s-order .seg.ony.meals { grid-template-columns: repeat(4, 1fr); margin-top: 4px; }
+.s-order .seg.ony.meals button { min-height: 28px; display: grid; place-items: center; }
+.s-order .seg.ony.meals button svg { width: 19px; height: 19px; stroke: currentColor; fill: none;
+  stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+/* 第三行：已选菜的胶囊（横向滚）+「给掌勺的话」图标 + 发送键，一行装下 */
+.s-order .oprow { display: flex; align-items: center; gap: 6px; margin-top: 5px; }
+.s-order .selchips { flex: 1 1 auto; min-width: 0; display: flex; gap: 7px; overflow-x: auto; scrollbar-width: none;
+  min-height: 40px; align-items: center; }
 .s-order .selchips::-webkit-scrollbar { display: none; }
 .s-order .selchips .ph { font-size: 13px; color: color-mix(in oklch, var(--on-accent) 72%, transparent); white-space: nowrap; }
 .s-order .sel { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; min-height: 40px; padding: 4px 4px 4px 12px;
@@ -228,35 +229,54 @@
   color: var(--fg); display: grid; place-items: center; cursor: pointer; padding: 0; }
 .s-order .sel .x svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2.2; }
 .s-order .sel .x:hover { background: var(--danger); color: #fff; }
-/* 给掌勺的话：贴在发送键上方的一条窄输入，保持组合器别太高 */
-.s-order .ordernote { width: 100%; min-height: 38px; margin: 0 0 8px; padding: 0 14px;
+/* 「给掌勺的话」：默认收着（只留 oprow 里那枚图标），点开才铺开这一行输入 */
+.s-order .notebtn { position: relative; flex: 0 0 auto; width: 40px; height: 40px; padding: 0; border-radius: 14px;
+  border: 2px solid var(--ink); background: #fff; color: var(--accent-deep); box-shadow: 0 2px 0 0 var(--ink);
+  display: grid; place-items: center; cursor: pointer; }
+.s-order .notebtn svg { width: 19px; height: 19px; stroke: currentColor; fill: none; stroke-width: 2; }
+.s-order .notebtn.open { background: color-mix(in oklch, #fff 72%, var(--accent)); box-shadow: 0 1px 0 0 var(--ink); }
+/* 填过话就点一颗小圆点：收起来也看得出这一单带了备注 */
+.s-order .notebtn.has::after { content: ''; position: absolute; top: 2px; right: 2px; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--danger); border: 1.5px solid var(--ink); }
+.s-order .noterow { margin-top: 6px; }
+.s-order .ordernote { width: 100%; min-height: 36px; margin: 0; padding: 0 14px;
   border-radius: 14px; border: 1.5px solid color-mix(in oklch, var(--on-accent) 40%, transparent);
   background: color-mix(in oklch, #fff 76%, transparent); color: var(--fg); font: inherit; font-size: 13.5px; }
 .s-order .ordernote::placeholder { color: color-mix(in oklch, var(--on-accent) 62%, transparent); }
 .s-order .clearwrap > .ordernote { padding-right: 40px; } /* 给右端那枚清空按钮腾地方 */
 .s-order .ordernote:focus { outline: 3px solid color-mix(in oklch, #fff 65%, transparent); outline-offset: 1px;
   background: #fff; border-color: var(--ink); }
-.s-order .sendbtn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 46px;
-  border-radius: 16px; border: 2px solid var(--ink); background: #fff; color: var(--on-accent);
-  box-shadow: 0 3px 0 0 var(--ink); font: inherit; font-size: 15px; font-weight: 700; cursor: pointer; }
-.s-order .sendbtn svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2; }
+/* 发送键：收窄成 oprow 里的一个按钮，不能再独占一行（原来那一行 46px 是被砍掉的高度之一）。
+   「哪天 + 哪餐」不重复写在按钮上 —— 上面两排就是选择器，按钮只留动作与道数。 */
+.s-order .sendbtn { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 40px; padding: 0 12px; border-radius: 14px; border: 2px solid var(--ink); background: #fff;
+  color: var(--on-accent); box-shadow: 0 2px 0 0 var(--ink); font: inherit; font-size: 13.5px; font-weight: 700;
+  cursor: pointer; white-space: nowrap; }
+.s-order .sendbtn svg { width: 17px; height: 17px; stroke: currentColor; fill: none; stroke-width: 2; }
+.s-order .sendbtn .cnt { font-weight: 700; opacity: .72; }
 .s-order .sendbtn:hover { background: color-mix(in oklch, #fff 92%, var(--accent)); }
 .s-order .sendbtn:active { transform: translateY(2px); box-shadow: 0 1px 0 0 var(--ink); }
-.s-order .sendbtn:disabled { opacity: .55; box-shadow: 0 2px 0 0 rgba(58,42,30,.35); cursor: default; }
+.s-order .sendbtn:disabled { opacity: .6; box-shadow: 0 2px 0 0 rgba(58,42,30,.35); cursor: default; }
 .s-order .sendbtn:disabled:hover { background: #fff; }
 
-.s-order .sechead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 2px 2px 10px; }
-.s-order .sechead .h3 { font-size: 16px; }
+.s-order .sechead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 2px 8px; }
+.s-order .sechead .h3 { font-size: 15px; }
 .s-order .sechead .hint { font-size: 11.5px; color: var(--muted); }
+/* 「随机加一道」：一枚 36px 的图标按钮（原来那枚带字的实心贴纸把整行右端都占住了） */
+.s-order .randbtn { flex: 0 0 auto; width: 36px; height: 36px; padding: 0; border-radius: 12px; cursor: pointer;
+  display: grid; place-items: center; border: 2px solid var(--ink); background: var(--accent); color: var(--on-accent);
+  box-shadow: 0 2px 0 0 var(--ink); }
+.s-order .randbtn svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2; }
+.s-order .randbtn:active { transform: translateY(2px); box-shadow: 0 1px 0 0 var(--ink); }
 /* 挑选网格上方的搜索框：比菜谱库那个矮一档，跟着 pick 卡片同一套边框语言 */
-.s-order .picksearch { display: flex; align-items: center; gap: 6px; margin-bottom: 10px;
+.s-order .picksearch { display: flex; align-items: center; gap: 6px; margin-bottom: 8px;
   background: var(--surface); border: 1.5px solid var(--border); border-radius: 999px;
-  padding: 2px 6px 2px 14px; min-height: 44px; transition: border-color .15s ease; }
+  padding: 2px 6px 2px 14px; min-height: 40px; transition: border-color .15s ease; }
 .s-order .picksearch:focus-within { border-color: var(--accent-deep);
   box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent-deep) 16%, transparent); }
 .s-order .picksearch > svg { width: 17px; height: 17px; stroke: var(--muted); fill: none; stroke-width: 2; flex: 0 0 auto; }
 .s-order .picksearch input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent;
-  font: inherit; font-size: 14px; color: var(--fg); padding: 7px 0; }
+  font: inherit; font-size: 14px; color: var(--fg); padding: 6px 0; }
 .s-order .picksearch input::placeholder { color: color-mix(in oklch, var(--muted) 80%, transparent); }
 .s-order .picksearch .sclear { width: 34px; height: 34px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
   border: 0; background: transparent; border-radius: 50%; color: var(--muted); cursor: pointer; }
@@ -281,13 +301,13 @@
 .s-order .pick.on .pt { border-color: var(--ink); }
 .s-order .pick.on .ck { background: var(--fg); border-color: var(--fg); color: #fff; }
 
-.s-order .manualrow { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+.s-order .manualrow { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
 .s-order .manualrow .clearwrap { flex: 1; min-width: 0; }
-.s-order .manualrow input { flex: 1; min-width: 0; min-height: 48px; padding: 11px 14px; border: 1.5px solid var(--border);
+.s-order .manualrow input { flex: 1; min-width: 0; min-height: 44px; padding: 10px 14px; border: 1.5px solid var(--border);
   border-radius: 14px; background: var(--surface); color: var(--fg); font: inherit; font-size: 15px; }
 .s-order .manualrow .clearwrap > input { padding-right: 42px; }
 .s-order .manualrow input:focus { border-color: var(--accent-deep); outline: 3px solid color-mix(in oklch, var(--accent-deep) 20%, transparent); outline-offset: 0; }
-.s-order .manualrow .btn-sticker { flex: 0 0 auto; min-height: 48px; }
+.s-order .manualrow .btn-sticker { flex: 0 0 auto; min-height: 44px; }
 
 .s-order .ocard { padding: 0; overflow: hidden; }
 .s-order .osum { width: 100%; display: grid; grid-template-columns: 52px 1fr auto auto; gap: 11px; align-items: center;
@@ -324,7 +344,8 @@
 .s-order .editbar .eb-top { display: flex; align-items: center; gap: 8px; }
 .s-order .editbar svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2; flex: 0 0 auto; }
 .s-order .editbar .ebt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.s-order .editbar .btn-sticker { flex: 0 0 auto; min-height: 34px; padding: 6px 12px; font-size: 12.5px; }
+.s-order .editbar .ebtx { flex: 0 0 auto; width: 30px; height: 30px; border-radius: 10px; box-shadow: 0 1px 0 0 var(--ink); }
+.s-order .editbar .ebtx svg { width: 14px; height: 14px; }
 /* 改单原因（可不填）：跟「给掌勺的话」那种窄输入一条 */
 .s-order .editbar .eb-why { width: 100%; min-height: 36px; padding: 0 12px; border-radius: 13px;
   border: 1.5px solid var(--border); background: #fff; color: var(--fg); font: inherit; font-size: 13px; }
