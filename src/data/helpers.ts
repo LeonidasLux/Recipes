@@ -51,6 +51,62 @@ export function nowStampSec(): string {
   return `${stamp(d)}:${pad(d.getSeconds())}`;
 }
 
+/* ─── 「哪天吃」─────────────────────────────────
+   单子上记的是绝对日期 key（`2026-10-12`），界面上再翻成「今天 / 明天 / 后天」
+   这类相对说法 —— 相对话只在**看的那一刻**才有意义，所以不落库。 */
+
+/** 相对今天的第 n 天（n 可以是负数：昨天就是 `dayKey(-1)`）的日期 key */
+export function dayKey(n = 0, d: Date = new Date()): string {
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+  return dateKey(x);
+}
+
+/** 日期 key 是不是一个正经的 `YYYY-MM-DD` */
+export function isDayKey(v: unknown): v is string {
+  return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
+}
+
+/**
+ * 日期 key 的说法：今天 / 明天 / 后天 / 昨天，更远就给「10月12日」
+ * （跨年的再带上年份）。认不出来的 key 原样回（正常数据走不到，`orderDay` 兜过底）。
+ */
+export function dayWord(key: string, d: Date = new Date()): string {
+  const rel: [number, string][] = [
+    [0, '今天'],
+    [1, '明天'],
+    [2, '后天'],
+    [-1, '昨天'],
+  ];
+  for (const [n, word] of rel) if (key === dayKey(n, d)) return word;
+  if (!isDayKey(key)) return key;
+  const [y, m, day] = key.split('-').map(Number);
+  return y === d.getFullYear() ? `${m}月${day}日` : `${y}年${m}月${day}日`;
+}
+
+/**
+ * 卡片 / 按钮上的日期前缀：**不是今天就给个词（「明天」「后天」），是今天给空串**。
+ * 今天是最常见的情况，就不用每处都写个「今天」占地方了。
+ */
+export function dayTag(key: string, d: Date = new Date()): string {
+  return key === dayKey(0, d) ? '' : dayWord(key, d);
+}
+
+/**
+ * 这张单是哪一天吃。
+ *
+ * 优先读 `dateKey`；老数据（写于加这个字段之前）没有，就按 `createdAt` 那一天算
+ * —— 那时候「下单当天吃」是唯一的用法。更老的数据里 createdAt 还是
+ * `今天 09:40` / `昨天 10:00` 这种相对串，一并认。
+ */
+export function orderDay(o: Order | null | undefined, d: Date = new Date()): string {
+  const key = o?.dateKey;
+  if (isDayKey(key)) return key;
+  const created = typeof o?.createdAt === 'string' ? o.createdAt : '';
+  if (isDayKey(created.slice(0, 10))) return created.slice(0, 10);
+  if (created.startsWith('昨天')) return dayKey(-1, d);
+  return dayKey(0, d);
+}
+
 /* ─── 订单状态 ───────────────────────────────── */
 
 export interface StatusMeta {
@@ -66,7 +122,58 @@ export function statusMeta(status: OrderStatus): StatusMeta {
 }
 
 export function mealLabel(meal: Meal): string {
-  return meal === 'dinner' ? '晚餐' : '午餐';
+  if (meal === 'breakfast') return '早餐';
+  if (meal === 'dinner') return '晚餐';
+  if (meal === 'night') return '夜宵';
+  return '午餐';
+}
+
+/** 口语化的餐别（组合器那句「今天中午」）：早上 / 中午 / 晚上 / 夜宵 */
+export function mealWord(meal: Meal): string {
+  if (meal === 'breakfast') return '早上';
+  if (meal === 'dinner') return '晚上';
+  if (meal === 'night') return '夜宵';
+  return '中午';
+}
+
+/** 四个餐别，界面上按这个顺序摆（早 → 午 → 晚 → 夜宵） */
+export const MEALS: readonly Meal[] = ['breakfast', 'lunch', 'dinner', 'night'] as const;
+
+/** 是不是合法餐别（读任意来源的数据 —— 老缓存 / 老仓库 —— 时用） */
+export function isMeal(v: unknown): v is Meal {
+  return MEALS.includes(v as Meal);
+}
+
+/**
+ * 各餐别对应的**时间区间**（当天 0 点起的分钟数，左闭右开；夜宵跨零点）。
+ *
+ * 点单时按「现在几点」先默认选一餐 —— 这个默认是给人省的：一天四顿，忘了改
+ * 就会点错餐别。区间只是默认值，用户随时能手动改（见 `mealForTime`）。
+ */
+export const MEAL_WINDOWS: readonly { meal: Meal; from: number; to: number }[] = [
+  { meal: 'breakfast', from: 5 * 60, to: 10 * 60 },
+  { meal: 'lunch', from: 10 * 60, to: 15 * 60 },
+  { meal: 'dinner', from: 15 * 60, to: 21 * 60 },
+  /* 夜宵从 21:00 一直算到第二天 05:00（跨零点），所以它的区间是「尾 < 头」 */
+  { meal: 'night', from: 21 * 60, to: 5 * 60 },
+];
+
+/** 某个餐别的时间区间文案：`05:00–10:00`（界面上告诉用户默认是怎么来的） */
+export function mealWindow(meal: Meal): string {
+  const w = MEAL_WINDOWS.find((x) => x.meal === meal) ?? MEAL_WINDOWS[0];
+  const hhmm = (min: number) => `${pad(Math.floor(min / 60))}:${pad(min % 60)}`;
+  return `${hhmm(w.from)}–${hhmm(w.to)}`;
+}
+
+/** 这个时刻（默认现在）该默认选哪一餐：落在哪个区间就是哪一餐 */
+export function mealForTime(d: Date = new Date()): Meal {
+  const min = d.getHours() * 60 + d.getMinutes();
+  for (const w of MEAL_WINDOWS) {
+    const hit = w.from < w.to ? min >= w.from && min < w.to : min >= w.from || min < w.to;
+    if (hit) return w.meal;
+  }
+  /* 区间是首尾相接的，走不到这儿；兜底给午餐，别返回 undefined */
+  return 'lunch';
 }
 
 /* ─── 订单 helper（多菜模型）─────────────────── */
@@ -81,13 +188,14 @@ export function orderChanges(o: Order): OrderChange[] {
 }
 
 /**
- * 一条改动记录的文字：`减掉「A」「B」、加了「C」、改成晚餐、给掌勺的话改成「少放辣」`
+ * 一条改动记录的文字：`减掉「A」「B」、加了「C」、挪到明天、改成晚餐、给掌勺的话改成「少放辣」`
  * （同步日志与卡片上的记录共用这一句话）。
  */
 export function changeText(c: OrderChange): string {
   const parts: string[] = [];
   if (c.removed.length) parts.push(`减掉${c.removed.map((n) => `「${n}」`).join('')}`);
   if (c.added.length) parts.push(`加了${c.added.map((n) => `「${n}」`).join('')}`);
+  if (c.date) parts.push(`挪到${dayWord(c.date)}`);
   if (c.meal) parts.push(`改成${mealLabel(c.meal)}`);
   if (c.note !== undefined) {
     parts.push(c.note ? `给掌勺的话改成「${c.note}」` : '清空了给掌勺的话');
@@ -97,7 +205,7 @@ export function changeText(c: OrderChange): string {
 
 /** 一条改动记录到底改了什么（什么都没有 = 空改动，不该落库） */
 export function hasChange(c: OrderChange): boolean {
-  return Boolean(c.removed.length || c.added.length || c.meal || c.note !== undefined);
+  return Boolean(c.removed.length || c.added.length || c.meal || c.date || c.note !== undefined);
 }
 
 /**
@@ -213,18 +321,6 @@ export function meOf(cfg: SyncConfig | null): PersonKey {
 /** 本机当前角色（config.view）：决定底部第二格是「点单」还是「掌勺」；缺省算点单 */
 export function viewOf(cfg: SyncConfig | null): ViewRole {
   return cfg?.view === 'cook' ? 'cook' : 'order';
-}
-
-/**
- * 这张单是不是「今天的单」。
- *
- * 订单时间戳是 `2026-10-07 09:40` 这类带年月日的绝对串（见 nowStamp），
- * 所以按「日期部分是不是今天」判断：点单页用它把「今日点单」与「历史点单」分开。
- * 老缓存 / 老仓库里可能还留着 `今天 09:40` 这类相对串，一并按「今天」认。
- */
-export function isTodayOrder(o: Order): boolean {
-  const s = o?.createdAt ?? '';
-  return s.startsWith(dateKey()) || s.startsWith('今天');
 }
 
 /* ─── 插画路径 ───────────────────────────────── */

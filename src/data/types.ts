@@ -3,7 +3,12 @@
 /** 两个人：a / b。角色（点菜 / 掌勺）不再绑定到人，而是由每张订单的方向决定 */
 export type PersonKey = 'a' | 'b';
 export type OrderStatus = 'pending' | 'accepted' | 'done';
-export type Meal = 'lunch' | 'dinner';
+/**
+ * 餐别：早餐 / 午餐 / 晚餐 / 夜宵。
+ * 点单时按**当前时间落在哪个时段**先默认选一个（见 `MEAL_WINDOWS` / `mealForTime`），
+ * 用户可以再手动改。
+ */
+export type Meal = 'breakfast' | 'lunch' | 'dinner' | 'night';
 /** 本机当前扮演的角色：决定底部第二格是「点单」还是「掌勺」（本地设置，不进仓库） */
 export type ViewRole = 'order' | 'cook';
 
@@ -40,6 +45,12 @@ export interface OrderItem {
 export interface Order {
   id: string;
   meal: Meal;
+  /**
+   * 这一顿打算哪天吃（`2026-10-12` 这种日期 key，不含时刻）。
+   * 点单时能选今天 / 明天 / 后天；老数据（写于加这个字段之前）没有，
+   * 规整时按 `createdAt` 那一天补上（见 `orderDay`）。
+   */
+  dateKey: string;
   status: OrderStatus;
   items: OrderItem[];
   note: string;
@@ -69,6 +80,8 @@ export interface OrderChange {
   added: string[];
   /** 这次把餐次改成了什么（没动餐次就没有这个字段） */
   meal?: Meal;
+  /** 这次把「哪天吃」挪到了哪天（没动日子就没有这个字段；存的是绝对日期 key） */
+  date?: string;
   /** 这次把「给掌勺的话」改成了什么（空串 = 清空了；没动过这个字段就没有） */
   note?: string;
   /**

@@ -9,7 +9,26 @@ import { ClearInput } from '../components/ClearInput';
 import { Icon } from '../components/Icons';
 import { anchorDeleteTip, DeleteTip, type DeleteTipState } from '../components/DeleteTip';
 import { OrderChanges } from '../components/OrderChanges';
-import { initial, isTodayOrder, itemCover, mealLabel, orderChanges, orderCover, orderItems, orderMain, orderSummary, todayLine } from '../data/helpers';
+import {
+  MEALS,
+  dateKey,
+  dayKey,
+  dayTag,
+  dayWord,
+  initial,
+  itemCover,
+  mealForTime,
+  mealLabel,
+  mealWindow,
+  mealWord,
+  orderChanges,
+  orderCover,
+  orderDay,
+  orderItems,
+  orderMain,
+  orderSummary,
+  todayLine,
+} from '../data/helpers';
 import { Cover } from '../components/Photo';
 import { useNames } from '../data/useNames';
 import { preserveTypedValue } from '../lib/inputs';
@@ -24,7 +43,11 @@ export default function OrderScreen() {
   const preview = usePreviewState();
   const [sp, setSp] = useSearchParams();
 
-  const [meal, setMeal] = useState<Meal>('lunch');
+  /* 按现在几点先给个默认餐别（区间见 MEAL_WINDOWS）：一天四顿，忘了改就点错餐别了 */
+  const autoMeal = useRef<Meal>(mealForTime()).current;
+  const [meal, setMeal] = useState<Meal>(autoMeal);
+  /** 哪天吃（默认今天，可选明天 / 后天） */
+  const [day, setDay] = useState<string>(() => dayKey(0));
   const [selected, setSelected] = useState<OrderItem[]>([]);
   const [manual, setManual] = useState('');
   /* 挑选网格的搜索词：菜谱多了以后靠它找菜 */
@@ -49,7 +72,7 @@ export default function OrderScreen() {
    */
   const [editingId, setEditingId] = useState<string | null>(null);
   /** 进改单前手上没发出去的那份草稿：改到一半点「取消修改」还能还回来 */
-  const draft = useRef<{ meal: Meal; selected: OrderItem[]; note: string } | null>(null);
+  const draft = useRef<{ day: string; meal: Meal; selected: OrderItem[]; note: string } | null>(null);
   /** 改单时顺手写的一句原因（**可不填** —— 自己的单不必解释；填了掌勺那边看得到） */
   const [changeReason, setChangeReason] = useState('');
 
@@ -133,9 +156,10 @@ export default function OrderScreen() {
   function startEdit(o: Order) {
     if (editingId === o.id) return;
     /* 已经改着另一张单：手上那份草稿只存一次，免得连点两张单把开新单的草稿弄丢 */
-    if (!editingId) draft.current = { meal, selected, note };
+    if (!editingId) draft.current = { day, meal, selected, note };
     setEditingId(o.id);
     setMeal(o.meal);
+    setDay(orderDay(o));
     setSelected(orderItems(o).map((it) => ({ recipeId: it.recipeId, dishName: it.dishName })));
     setNote(o.note ?? '');
     setChangeReason('');
@@ -149,6 +173,7 @@ export default function OrderScreen() {
     const d = draft.current;
     draft.current = null;
     if (!d) return;
+    setDay(d.day);
     setMeal(d.meal);
     setSelected(d.selected);
     setNote(d.note);
@@ -162,20 +187,21 @@ export default function OrderScreen() {
     setSending(true);
     const items = selected;
     const mealNow = meal;
+    const dayNow = day;
     const noteNow = note.trim();
     const editId = editingId;
     /* 已接的单改完会退回「待接」（见 store 的 updateOrder），这里按改之前的状态给提示 */
     const wasAccepted = Boolean(editId && db.orders.find((o) => o.id === editId)?.status === 'accepted');
     window.setTimeout(() => {
       if (editId) {
-        updateOrder(editId, { meal: mealNow, items, note: noteNow, reason: changeReason });
+        updateOrder(editId, { meal: mealNow, dateKey: dayNow, items, note: noteNow, reason: changeReason });
         toast(
           wasAccepted
             ? `已改好这一单 · 菜单变了，${names.partnerName}需要重新接单`
             : `已改好这一单 · ${names.partnerName}会看到`,
         );
       } else {
-        addOrder({ meal: mealNow, items, note: noteNow });
+        addOrder({ dateKey: dayNow, meal: mealNow, items, note: noteNow });
         toast(`已发给${names.partnerName} · 等待接单`);
       }
       draft.current = null;
@@ -244,10 +270,15 @@ export default function OrderScreen() {
     () => (preview === 'empty' ? [] : db.orders.filter((o) => o.placedBy === me)),
     [db.orders, preview, me],
   );
-  const todayOrders = useMemo(() => myOrders.filter(isTodayOrder), [myOrders]);
-  const historyOrders = useMemo(() => myOrders.filter((o) => !isTodayOrder(o)), [myOrders]);
+  /* 按「哪天吃」分三摞：今天 / 往后两天（明天 · 后天）/ 历史（昨天及更早） */
+  const todayKey = dateKey();
+  const todayOrders = useMemo(() => myOrders.filter((o) => orderDay(o) === todayKey), [myOrders, todayKey]);
+  const futureOrders = useMemo(() => myOrders.filter((o) => orderDay(o) > todayKey), [myOrders, todayKey]);
+  const historyOrders = useMemo(() => myOrders.filter((o) => orderDay(o) < todayKey), [myOrders, todayKey]);
 
   const canSend = selected.length > 0 && !sending;
+  /** 发送键上那句「明天早餐」：今天是默认，就不用占地方写「今天」 */
+  const whenLabel = `${dayTag(day)}${mealLabel(meal)}`;
 
   /* 挑选网格：搜索词命中菜名 / 备注，与菜谱库那套同一口径 */
   const pickSearching = pickQ.trim().length > 0;
@@ -298,23 +329,55 @@ export default function OrderScreen() {
         )}
         <div className="crow">
           <div className="clabel">
-            {/* 改单时不写「今天中午」——跨天落进历史的那张单未必是今天的 */}
-            <b>{editingOrder ? '改这一顿' : meal === 'lunch' ? '今天中午' : '今天晚上'}</b>
+            {/* 改单时不写「今天中午」——那张单可能是昨天的、也可能是后天的 */}
+            <b>{editingOrder ? '改这一顿' : `${dayWord(day)}${mealWord(meal)}`}</b>
             <span>
               {editingOrder
                 ? `改完点下面保存，${names.partnerName}会看到新菜单`
-                : '从菜谱库挑几道，凑成一顿'}
+                : '先定哪天吃、哪一顿，再从菜谱库挑几道'}
             </span>
           </div>
-          <div className="seg ony" role="group" aria-label="选择午晚餐">
-            <button type="button" className={meal === 'lunch' ? 'on' : ''} onClick={() => setMeal('lunch')}>
-              午餐
-            </button>
-            <button type="button" className={meal === 'dinner' ? 'on' : ''} onClick={() => setMeal('dinner')}>
-              晚餐
-            </button>
-          </div>
         </div>
+
+        {/* 哪天吃：今天 / 明天 / 后天 */}
+        <div className="seg ony days" role="group" aria-label="选择哪天吃">
+          {[0, 1, 2].map((n) => {
+            const key = dayKey(n);
+            return (
+              <button
+                type="button"
+                key={key}
+                className={day === key ? 'on' : ''}
+                aria-pressed={day === key}
+                onClick={() => setDay(key)}
+              >
+                {dayWord(key)}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* 哪一顿：早餐 / 午餐 / 晚餐 / 夜宵 */}
+        <div className="seg ony meals" role="group" aria-label="选择餐别">
+          {MEALS.map((m) => (
+            <button
+              type="button"
+              key={m}
+              className={meal === m ? 'on' : ''}
+              aria-pressed={meal === m}
+              onClick={() => setMeal(m)}
+            >
+              {mealLabel(m)}
+            </button>
+          ))}
+        </div>
+
+        {/* 默认是「按现在的时间」挑的 —— 说清依据，用户才知道要不要改 */}
+        {meal === autoMeal && (
+          <p className="autohint">
+            按现在的时间先选了「{mealLabel(autoMeal)}」（{mealWindow(autoMeal)}），点一下就能改
+          </p>
+        )}
 
         <div className="selchips" aria-live="polite">
           {selected.length === 0 ? (
@@ -356,8 +419,8 @@ export default function OrderScreen() {
               <span>
                 {selected.length
                   ? editingId
-                    ? `保存修改 · ${mealLabel(meal)} · ${selected.length} 道`
-                    : `发给${names.partnerName} · ${mealLabel(meal)} · ${selected.length} 道`
+                    ? `保存修改 · ${whenLabel} · ${selected.length} 道`
+                    : `发给${names.partnerName} · ${whenLabel} · ${selected.length} 道`
                   : '先选几道菜'}
               </span>
             </>
@@ -514,6 +577,36 @@ export default function OrderScreen() {
             </div>
           </section>
 
+          {/* 明天 / 后天的单：先摆出来，到了那天自然落到「今日点单」里 */}
+          {!loading && futureOrders.length > 0 && (
+            <section>
+              <div className="sechead">
+                <div>
+                  <h2 className="h3">往后两天</h2>
+                  <p className="hint">明天 / 后天的单 · 到那天就进「今日点单」</p>
+                </div>
+                <span className="meta">{futureOrders.length} 份</span>
+              </div>
+              <div className="stack" style={{ gap: 12 }}>
+                {futureOrders.map((o) => (
+                  <OrderCard
+                    key={o.id}
+                    order={o}
+                    db={db}
+                    partner={names.partnerName}
+                    open={open.has(o.id)}
+                    editing={editingId === o.id}
+                    onToggle={() => onCardClick(o.id)}
+                    onEdit={() => (editingId === o.id ? cancelEdit() : startEdit(o))}
+                    onRestore={() => restore(o)}
+                    onPressStart={(el) => startPress(el, o)}
+                    onPressEnd={cancelPress}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+
           {!loading && historyOrders.length > 0 && (
             <section>
               <button
@@ -620,6 +713,7 @@ function OrderCard({
           {/* 标题（尤其是剪藏来的长视频标题）按两行截断，见 .s-order .osum .ob .t */}
           <span className="t">{orderSummary(order)}</span>
           <span className="m">
+            {dayTag(orderDay(order))}
             {mealLabel(order.meal)} · {order.createdAt} · <StatusChip status={order.status} />
           </span>
         </span>

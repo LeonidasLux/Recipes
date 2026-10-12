@@ -9,7 +9,7 @@ import { DishSheet } from '../components/DishSheet';
 import { MenuSheet } from '../components/MenuSheet';
 import { OrderChanges } from '../components/OrderChanges';
 import { anchorDeleteTip, DeleteTip, type DeleteTipState } from '../components/DeleteTip';
-import { initial, itemCover, mealLabel, orderChanges, orderItems } from '../data/helpers';
+import { dayTag, initial, itemCover, mealLabel, orderChanges, orderDay, orderItems } from '../data/helpers';
 import { Cover } from '../components/Photo';
 import { useNames } from '../data/useNames';
 import { useBackClose } from '../lib/back';
@@ -48,7 +48,11 @@ export default function CookToday() {
 
   const cookOrders = db.orders.filter((o) => o.placedBy !== me);
   const orders = preview === 'empty' ? cookOrders.filter((o) => o.status === 'done') : cookOrders;
-  const activeOrders = orders.filter((o) => o.status !== 'done');
+  /* 没做完的按「哪天吃」排：今天要做的在最上面，明天 / 后天的跟在后面
+     （同一天里保持原来的先后 —— sort 是稳定的） */
+  const activeOrders = orders
+    .filter((o) => o.status !== 'done')
+    .sort((a, b) => orderDay(a).localeCompare(orderDay(b)));
   const doneOrders = orders.filter((o) => o.status === 'done');
 
   function advance(o: Order) {
@@ -101,7 +105,7 @@ export default function CookToday() {
     cancelPress();
     pressTimer.current = window.setTimeout(() => {
       pressTimer.current = null;
-      setTip(anchorDeleteTip(el, o.id, `${mealLabel(o.meal)}单`));
+      setTip(anchorDeleteTip(el, o.id, `${dayTag(orderDay(o))}${mealLabel(o.meal)}单`));
     }, 450);
   }
 
@@ -281,6 +285,7 @@ function CookCard({
       >
         <div style={{ minWidth: 0 }}>
           <div className="tt">
+            {dayTag(orderDay(order))}
             {mealLabel(order.meal)}单 · {items.length} 道菜
           </div>
           <div className="when">{order.createdAt} 点的单</div>

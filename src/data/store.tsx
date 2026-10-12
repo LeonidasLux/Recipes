@@ -26,13 +26,19 @@ import type {
 import { DB_KEY, migrate, normalizeOrders, normalizeProfiles, seed } from './seed';
 import {
   changeText,
+  dayKey,
+  dayTag,
   diffItems,
   hasChange,
+  isDayKey,
+  isMeal,
+  mealLabel,
   meOf,
   newId,
   nicknameOf,
   nowStamp,
   orderChanges,
+  orderDay,
   orderItems,
   orderSummary,
   partnerOf,
@@ -170,10 +176,13 @@ export interface StoreValue {
   deleteRecipe(id: string): void;
   /** 一次删多道菜谱（菜谱库多选删除用）：一次提交、一条日志 */
   deleteRecipes(ids: string[]): void;
-  /** 下单（内容改动，会触发推送）；单里的菜各记一次「点单次数」 */
-  addOrder(input: { meal: Meal; items: OrderItem[]; note?: string }): Order;
   /**
-   * 改一张**还没做完**的单（内容改动，会触发推送）：餐次 / 菜 / 给掌勺的话都能改。
+   * 下单（内容改动，会触发推送）；单里的菜各记一次「点单次数」。
+   * `dateKey` 是打算哪天吃（今天 / 明天 / 后天，见 `dayKey`）。
+   */
+  addOrder(input: { dateKey: string; meal: Meal; items: OrderItem[]; note?: string }): Order;
+  /**
+   * 改一张**还没做完**的单（内容改动，会触发推送）：餐次 / 哪天吃 / 菜 / 给掌勺的话都能改。
    * 换菜按「道次」的差把点单次数加上 / 退回来；已经「已接」的单改完退回「待接」，
    * 掌勺方得再看一眼新菜单（已完成的不给改，见 §2）。
    * 改了什么也会记一条 `order.changes`（`reason` 可不填 —— 点菜方改自己的单，不必解释），
@@ -181,7 +190,7 @@ export interface StoreValue {
    */
   updateOrder(
     id: string,
-    patch: { meal?: Meal; items?: OrderItem[]; note?: string; reason?: string },
+    patch: { meal?: Meal; dateKey?: string; items?: OrderItem[]; note?: string; reason?: string },
   ): void;
   /**
    * 把一张「已完成」的单恢复成没做完（内容改动，会触发推送）：
@@ -338,9 +347,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
       addOrder(input) {
         const me = meOf(state.db.config);
+        /* 餐别 / 日子都兜一道底：界面上给的就是合法值，脏值（被手改过的调用方）不让落库 */
+        const meal = isMeal(input.meal) ? input.meal : 'lunch';
+        const dateKey = isDayKey(input.dateKey) ? input.dateKey : dayKey(0);
         const order: Order = {
           id: newId('o'),
-          meal: input.meal,
+          meal,
+          dateKey,
           status: 'pending',
           createdAt: nowStamp(),
           updatedAt: nowStamp(),
@@ -356,7 +369,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             const r = it.recipeId ? db.recipes.find((x) => x.id === it.recipeId) : null;
             if (r) r.orderCount = (r.orderCount ?? 0) + 1;
           });
-          pushLog(db, 'ok', `已发 ${input.meal === 'dinner' ? '晚餐' : '午餐'}单：${orderSummary(order)}`);
+          pushLog(db, 'ok', `已发${dayTag(dateKey)}${mealLabel(meal)}单：${orderSummary(order)}`);
           return db;
         });
         return order;
@@ -388,10 +401,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const itemsAfter = patch.items
             ? patch.items.map((it) => ({ recipeId: it.recipeId, dishName: it.dishName }))
             : itemsBefore;
-          const mealAfter = patch.meal ?? o.meal;
+          const mealAfter = isMeal(patch.meal) ? patch.meal : o.meal;
+          const dayAfter = isDayKey(patch.dateKey) ? patch.dateKey : orderDay(o);
           const noteAfter = patch.note !== undefined ? patch.note : o.note ?? '';
 
-          /* 改了什么记一条 —— 掌勺那边得看得见菜单 / 餐次 / 备注动过。
+          /* 改了什么记一条 —— 掌勺那边得看得见菜单 / 餐次 / 日子 / 备注动过。
              原因可不填（点菜方改自己的单，不必解释）：空着就只写「改了什么」。 */
           const diff = diffItems(itemsBefore, itemsAfter);
           const record: OrderChange = {
@@ -401,6 +415,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             added: diff.added,
             reason: (patch.reason ?? '').trim(),
           };
+          if (dayAfter !== orderDay(o)) record.date = dayAfter;
           if (mealAfter !== o.meal) record.meal = mealAfter;
           if (noteAfter !== (o.note ?? '')) record.note = noteAfter;
           /* 一处都没改（比如进改单模式又原样保存）：不记记录、不写日志、连更新时间都不动 */
@@ -419,6 +434,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             o.items = itemsAfter;
           }
           o.meal = mealAfter;
+          o.dateKey = dayAfter;
           o.note = noteAfter;
           o.changes = [...orderChanges(o), record];
           /* 掌勺方已经接下这张单了：菜单一变就退回「待接」，让对方再看一眼 */
@@ -428,9 +444,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           pushLog(
             db,
             'ok',
-            `已修改点单：${orderSummary(o)}${backToPending ? '（菜单变了，已退回待接）' : ''}${
-              record.reason ? `（${record.reason}）` : ''
-            }`,
+            `已修改点单：${orderSummary(o)} · ${dayTag(o.dateKey)}${mealLabel(o.meal)}${
+              backToPending ? ' · 菜单变了，已退回待接' : ''
+            }${record.reason ? `（${record.reason}）` : ''}`,
           );
           return db;
         });

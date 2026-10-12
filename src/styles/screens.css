@@ -210,6 +210,14 @@
 .s-order .seg.ony button { border: 0; background: transparent; color: var(--on-accent); min-height: 38px; border-radius: 999px;
   font-weight: 700; font-size: 13.5px; cursor: pointer; padding: 0 6px; }
 .s-order .seg.ony button.on { background: #fff; color: var(--accent-deep); box-shadow: 0 1px 0 0 var(--ink); }
+/* 日子三格（今天 / 明天 / 后天）与餐别四格（早 / 午 / 晚 / 夜宵）各占一行、铺满宽度：
+   四个餐别塞不进原来那个 116px 的两格块里，摆两行也点得准 */
+.s-order .seg.ony.days { grid-template-columns: repeat(3, 1fr); width: 100%; margin-top: 8px; }
+.s-order .seg.ony.meals { grid-template-columns: repeat(4, 1fr); width: 100%; margin-top: 6px; }
+.s-order .seg.ony.days button, .s-order .seg.ony.meals button { min-height: 32px; font-size: 13px; padding: 0 4px; }
+/* 「按现在的时间先选了…」：只在餐别还是自动挑的那个时露面，说明默认是怎么来的 */
+.s-order .autohint { margin: 6px 2px 0; font-size: 11px;
+  color: color-mix(in oklch, var(--on-accent) 78%, transparent); }
 .s-order .selchips { display: flex; gap: 7px; overflow-x: auto; scrollbar-width: none; margin: 8px 0; min-height: 40px; align-items: center; }
 .s-order .selchips::-webkit-scrollbar { display: none; }
 .s-order .selchips .ph { font-size: 13px; color: color-mix(in oklch, var(--on-accent) 72%, transparent); white-space: nowrap; }

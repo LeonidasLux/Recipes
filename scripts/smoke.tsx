@@ -72,14 +72,25 @@ import {
 } from '../src/lib/photo';
 import { requestPhoto, resetPhotoQueue } from '../src/lib/photoQueue';
 import {
+  MEALS,
+  MEAL_WINDOWS,
   artUrl,
   dateKey,
+  dayKey,
+  dayTag,
+  dayWord,
   initial,
+  isDayKey,
+  isMeal,
+  mealForTime,
   mealLabel,
+  mealWindow,
+  mealWord,
   meOf,
   nicknameOf,
   nowStamp,
   nowStampSec,
+  orderDay,
   orderSummary,
   partnerOf,
   recipeInOpenOrder,
@@ -973,7 +984,12 @@ async function renderChecks() {
   ]);
   await expectIn('5 点单（未选菜 → 发送键禁用）', '/order', [
     '点一顿饭',
-    '今天中午',
+    /* 组合器标题按「哪天 + 哪一餐」拼，餐别是按时段默认挑的，所以用 helper 算出来对 */
+    `${dayWord(dayKey())}${mealWord(mealForTime())}`,
+    '早餐',
+    '夜宵',
+    '明天',
+    '后天',
     '从菜谱库挑选',
     '随机加一道',
     '今日点单',
@@ -981,7 +997,10 @@ async function renderChecks() {
     '番茄炖牛腩 等 2 道',
     '已接',
   ]);
-  await expectIn('5b 详情带来的预选菜', '/order?add=r2', ['溏心蛋葱油拌面', '发给小红 · 午餐 · 1 道']);
+  await expectIn('5b 详情带来的预选菜', '/order?add=r2', [
+    '溏心蛋葱油拌面',
+    `发给小红 · ${mealLabel(mealForTime())} · 1 道`,
+  ]);
   await expectIn('6 同步与仓库', '/sync', [
     '同步与仓库',
     '我是谁',
@@ -997,7 +1016,8 @@ async function renderChecks() {
   /* me = a 时，掌勺屏只显示对方（b）点的单：o2 待接、o3 已做完 */
   await expectIn('7 今日菜单', '/cook', [
     '今日菜单',
-    '晚餐单 · 2 道菜',
+    /* 种子里的 o2 是一张「明天」的单：掌勺那边卡片上要写清哪天吃 */
+    '明天晚餐单 · 2 道菜',
     '接下这顿',
     '已做完',
     '少放辣',
@@ -1064,8 +1084,8 @@ async function interactionChecks() {
       ok('选中两道菜 → 发送键显示「2 道」');
     }
 
-    /* 切晚餐 */
-    await m.click('.seg.ony button:nth-child(2)');
+    /* 切晚餐（餐别那组是 .seg.ony.meals：日子那组也在 .seg.ony 里，别点串了） */
+    await m.clickByText('.seg.ony.meals button', '晚餐');
     if (!m.text('.sendbtn').includes('晚餐')) fail('切晚餐', `实际是「${m.text('.sendbtn')}」`);
     else ok('切到晚餐 → 发送键跟着变');
 
@@ -1099,6 +1119,7 @@ async function interactionChecks() {
       ok('发送 → 落库为一单两菜、状态待接、含临时菜');
     }
     check(created.note === '少放辣，米饭少一点', '★ 备注随单落库（首尾空格去掉）', `实际「${created.note}」`);
+    check(created.dateKey === dayKey(0), '★ 没动日子时，单落在今天', created.dateKey);
     check(
       DATE_TIME_RE.test(created.createdAt) && DATE_TIME_RE.test(created.updatedAt),
       '★ 新订单的下单 / 更新时间都带年月日',
@@ -1113,6 +1134,153 @@ async function interactionChecks() {
     if (!m.$('.ocard.open .odetail')) fail('展开订单', '没有 .ocard.open');
     else ok('点订单卡可展开看每道菜');
 
+    await m.close();
+  }
+
+  console.log('\n[交互 · 点单：餐别按时段默认、哪天吃能选]');
+  localStorage.clear();
+  {
+    useDb();
+    const m = await mount('/order');
+    const auto = mealForTime();
+    check(
+      (m.$('.seg.ony.meals button.on')?.textContent ?? '').trim() === mealLabel(auto),
+      '★ 打开点单页就按现在的时间默认选好一餐',
+      m.text('.seg.ony.meals'),
+    );
+    check(
+      m.$$('.seg.ony.meals button').length === 4 && m.$$('.seg.ony.days button').length === 3,
+      '★ 四个餐别 + 三个日子（今天 / 明天 / 后天）都摆着',
+      `${m.text('.seg.ony.meals')} | ${m.text('.seg.ony.days')}`,
+    );
+    check(
+      m.html().includes(`先选了「${mealLabel(auto)}」（${mealWindow(auto)}）`),
+      '★ 说清默认是怎么来的（时间段 + 点一下就能改）',
+    );
+    check((m.$('.seg.ony.days button.on')?.textContent ?? '').trim() === dayWord(dayKey(0)), '日子默认今天');
+
+    /* 手动改餐别：那条「按现在的时间」提示就该收起来 */
+    await m.clickByText('.seg.ony.meals button', '早餐');
+    check(
+      (m.$('.seg.ony.meals button.on')?.textContent ?? '').trim() === '早餐',
+      '★ 手动改餐别（点「早餐」）',
+      m.text('.seg.ony.meals'),
+    );
+    check(!m.html().includes('按现在的时间先选了'), '改过之后就不再摆「按现在的时间…」那条提示');
+
+    /* 选「明天」+「夜宵」发一单 */
+    await m.clickByText('.seg.ony.days button', '明天');
+    await m.clickByText('.seg.ony.meals button', '夜宵');
+    await m.click('.dishgrid .pick:nth-child(3)'); /* 椰子鸡火锅 */
+    check(
+      m.text('.sendbtn').includes('发给小红 · 明天夜宵 · 1 道'),
+      '★ 发送键把日子与餐别都写清楚',
+      m.text('.sendbtn'),
+    );
+    await m.click('.sendbtn');
+    await m.wait(900);
+    const after = readDb();
+    const created = after.orders[0];
+    check(
+      created.dateKey === dayKey(1) && created.meal === 'night',
+      '★ 落库就是「明天 + 夜宵」',
+      JSON.stringify({ dateKey: created.dateKey, meal: created.meal }),
+    );
+    check((after.logs[0]?.text ?? '').includes('已发明天夜宵单'), '★ 同步日志也带上日子与餐别', after.logs[0]?.text);
+
+    const titles = m.$$('.ocard .ob .t').map((el) => (el.textContent ?? '').trim());
+    check(
+      titles.length === 2 && titles[0].includes('番茄炖牛腩') && titles[1].includes('椰子鸡火锅'),
+      '★ 今天那张排在前，「往后两天」里是刚发的明天那张',
+      titles.join(' | '),
+    );
+    check(
+      m.html().includes('往后两天') && m.html().includes('明天夜宵 · '),
+      '★ 明天的单落在「往后两天」那一段，卡片上写着日子',
+    );
+    await m.close();
+  }
+  {
+    /* 掌勺那边：今天要做的排在前面，明天 / 后天的跟在后面，卡片上写着哪天吃 */
+    useDb((db) => {
+      db.orders.unshift({
+        id: 'o9',
+        meal: 'breakfast',
+        dateKey: dayKey(0),
+        status: 'pending',
+        createdAt: `${dateKey()} 07:00`,
+        updatedAt: `${dateKey()} 07:00`,
+        placedBy: 'b',
+        note: '',
+        items: [{ recipeId: 'r5', dishName: '台式三杯鸡' }],
+        changes: [],
+      });
+    });
+    const m = await mount('/cook');
+    const titles = m.$$('.cookcard .tt').map((el) => (el.textContent ?? '').trim());
+    check(
+      titles.length === 2 && titles[0].includes('早餐单') && titles[1].includes('明天晚餐单'),
+      '★ 掌勺屏：今天那单在前、明天那张跟在后面（都写着餐别与日子）',
+      titles.join(' | '),
+    );
+    await m.close();
+  }
+  {
+    /* 详情页那句「已在 X 单里」也跟着日子走（明天那张单里的菜不该说成「今天」） */
+    useDb((db) => {
+      db.orders = [
+        {
+          id: 'oF',
+          meal: 'dinner',
+          dateKey: dayKey(1),
+          status: 'pending',
+          createdAt: `${dateKey()} 09:00`,
+          updatedAt: `${dateKey()} 09:00`,
+          placedBy: 'a',
+          note: '',
+          items: [{ recipeId: 'r1', dishName: '番茄炖牛腩' }],
+          changes: [],
+        },
+      ];
+    });
+    const m = await mount('/recipe/r1');
+    check(m.html().includes('已在明天单里'), '★ 详情页按那张单的日子说（明天），不一律说「今天」', m.text('.actionbar'));
+    await m.close();
+  }
+  {
+    /* 改单时日子也能改：明天那张挪到后天，改动记录 / 日志 / 卡片都跟着写清楚 */
+    useDb((db) => {
+      db.orders.unshift({
+        id: 'o8',
+        meal: 'dinner',
+        dateKey: dayKey(1),
+        status: 'pending',
+        createdAt: `${dateKey()} 09:00`,
+        updatedAt: `${dateKey()} 09:00`,
+        placedBy: 'a',
+        note: '',
+        items: [{ recipeId: 'r5', dishName: '台式三杯鸡' }],
+        changes: [],
+      });
+    });
+    const m = await mount('/order');
+    await m.clickByText('.ocard .ob .t', '台式三杯鸡');
+    /* 今天那张单排在这张前面，按钮要在这张卡片里点（别点到第一张的「修改这单」） */
+    const card = m.$$('.ocard').find((c) => (c.textContent ?? '').includes('台式三杯鸡'))!;
+    await m.clickEl(card.querySelector('.oactions .btn-sticker') as HTMLElement);
+    check(
+      (m.$('.seg.ony.days button.on')?.textContent ?? '').trim() === '明天',
+      '★ 改单时日子也载入进来（明天）',
+      m.text('.seg.ony.days'),
+    );
+    await m.clickByText('.seg.ony.days button', '后天');
+    await m.click('.sendbtn');
+    await m.wait(900);
+    const o8 = readDb().orders.find((x) => x.id === 'o8')!;
+    check(o8.dateKey === dayKey(2), '★ 改单能把日子挪到后天', `${o8.dateKey} / 期望 ${dayKey(2)}`);
+    check(o8.changes?.[0]?.date === dayKey(2), '★ 改动记录里记下挪到哪天了', JSON.stringify(o8.changes?.[0]));
+    check((readDb().logs[0]?.text ?? '').includes('后天晚餐'), '★ 同步日志里也写着挪到后天', readDb().logs[0]?.text);
+    check(m.html().includes('挪到后天'), '★ 卡片上那行改动记录写着「挪到后天」');
     await m.close();
   }
 
@@ -1144,9 +1312,14 @@ async function interactionChecks() {
       m.text('.selchips'),
     );
     check(
-      (m.$('.seg.ony button.on')?.textContent ?? '').trim() === '午餐',
+      (m.$('.seg.ony.meals button.on')?.textContent ?? '').trim() === '午餐',
       '★ 餐次也跟着填上（午餐）',
-      m.text('.seg.ony'),
+      m.text('.seg.ony.meals'),
+    );
+    check(
+      (m.$('.seg.ony.days button.on')?.textContent ?? '').trim() === dayWord(dayKey(0)),
+      '★ 日子也跟着填上（这张是今天的单）',
+      m.text('.seg.ony.days'),
     );
     check(m.value('.picksearch input') === '', '进改单模式顺手清掉挑选网格上的搜索词');
     check(
@@ -1167,7 +1340,7 @@ async function interactionChecks() {
     await m.click('.dishgrid .pick'); /* 椰子鸡火锅 */
     await m.type('.ordernote', '多放点辣');
     await m.type('.editbar .eb-why', '晚上想清淡一点');
-    await m.click('.seg.ony button:nth-child(2)');
+    await m.clickByText('.seg.ony.meals button', '晚餐');
     check(
       m.text('.sendbtn').includes('保存修改 · 晚餐 · 2 道'),
       '改完两菜一晚，按钮文案跟着变',
@@ -1333,7 +1506,9 @@ async function interactionChecks() {
   {
     useDb((db) => {
       /* 昨天点的单也还没做完：它落在折叠的「历史点单」里，一样要能改 */
-      db.orders.find((o) => o.id === 'o1')!.createdAt = '2020-01-01 12:00';
+      const o1 = db.orders.find((o) => o.id === 'o1')!;
+      o1.createdAt = `${dayKey(-1)} 12:00`;
+      o1.dateKey = dayKey(-1);
     });
     const m = await mount('/order');
     check(m.$$('.osum').length === 0, '今天没有单，那张落在历史里');
@@ -2676,7 +2851,7 @@ async function interactionChecks() {
   {
     const m = await mount('/order');
     await m.click('.pick');
-    check(m.html().includes('发给小红 · 午餐 · 1 道'), '我点单 → 叫对方「小红」');
+    check(m.html().includes(`发给小红 · ${mealLabel(mealForTime())} · 1 道`), '我点单 → 叫对方「小红」');
     await m.close();
   }
   {
@@ -2686,7 +2861,7 @@ async function interactionChecks() {
     });
     const m = await mount('/order');
     await m.click('.pick');
-    check(m.html().includes('发给小辉 · 午餐 · 1 道'), '★ 换成另一半 → 对方变成「小辉」');
+    check(m.html().includes(`发给小辉 · ${mealLabel(mealForTime())} · 1 道`), '★ 换成另一半 → 对方变成「小辉」');
     await m.close();
   }
   {
@@ -2709,7 +2884,7 @@ async function interactionChecks() {
   {
     const m = await mount('/order');
     await m.click('.pick');
-    check(m.html().includes('发给对方 · 午餐 · 1 道'), '对方没名字 → 退回「对方」，不显示空白');
+    check(m.html().includes(`发给对方 · ${mealLabel(mealForTime())} · 1 道`), '对方没名字 → 退回「对方」，不显示空白');
     await m.close();
   }
   {
@@ -2745,7 +2920,7 @@ async function interactionChecks() {
     /* 改完名字，别的屏立刻用新名字 */
     const m = await mount('/order');
     await m.click('.pick');
-    check(m.html().includes('发给大厨老王 · 午餐 · 1 道'), '★ 改完名字，点单页立刻用新称呼');
+    check(m.html().includes(`发给大厨老王 · ${mealLabel(mealForTime())} · 1 道`), '★ 改完名字，点单页立刻用新称呼');
     await m.close();
   }
 
@@ -3795,7 +3970,92 @@ function helperChecks() {
     '状态文案',
   );
   check(statusMeta('done').cls === 'done', '状态样式类');
-  check(mealLabel('lunch') === '午餐' && mealLabel('dinner') === '晚餐', '餐次文案');
+  check(
+    MEALS.join('/') === 'breakfast/lunch/dinner/night'
+      && mealLabel('breakfast') === '早餐' && mealLabel('lunch') === '午餐'
+      && mealLabel('dinner') === '晚餐' && mealLabel('night') === '夜宵'
+      && mealWord('breakfast') === '早上' && mealWord('lunch') === '中午'
+      && mealWord('dinner') === '晚上' && mealWord('night') === '夜宵',
+    '★ 四个餐别：早餐 / 午餐 / 晚餐 / 夜宵（标签与口语说法）',
+    MEALS.map((m) => `${m}=${mealLabel(m)}`).join(' '),
+  );
+  check(
+    mealLabel('brunch' as never) === '午餐' && !isMeal('brunch') && isMeal('night'),
+    '★ 认不出的餐别一律当午餐（读老数据 / 被手改过的数据时兜底）',
+  );
+
+  console.log('\n[辅助函数 · 按时间默认餐别]');
+  /* 四个时段首尾相接：05:00–10:00 早餐、10:00–15:00 午餐、15:00–21:00 晚餐、21:00–05:00 夜宵 */
+  const at = (hh: number, mm: number) => mealForTime(new Date(2026, 9, 12, hh, mm));
+  check(
+    MEAL_WINDOWS.length === 4
+      && MEAL_WINDOWS.map((w) => w.meal).join('/') === 'breakfast/lunch/dinner/night'
+      && MEAL_WINDOWS[3].to < MEAL_WINDOWS[3].from,
+    '★ 四个时段各占一头（夜宵跨零点：尾 < 头）',
+    JSON.stringify(MEAL_WINDOWS),
+  );
+  check(
+    at(5, 0) === 'breakfast' && at(9, 59) === 'breakfast'
+      && at(10, 0) === 'lunch' && at(14, 59) === 'lunch'
+      && at(15, 0) === 'dinner' && at(20, 59) === 'dinner'
+      && at(21, 0) === 'night' && at(23, 59) === 'night',
+    '★ 按现在几点给默认餐别（区间边界：05 / 10 / 15 / 21 点整换档）',
+    `${at(9, 59)}/${at(10, 0)}/${at(14, 59)}/${at(15, 0)}/${at(20, 59)}/${at(21, 0)}`,
+  );
+  check(
+    at(0, 30) === 'night' && at(4, 59) === 'night',
+    '★ 凌晨（00:00–05:00）算夜宵那一档',
+    `${at(0, 30)}/${at(4, 59)}`,
+  );
+  check(
+    mealWindow('breakfast') === '05:00–10:00' && mealWindow('dinner') === '15:00–21:00'
+      && mealWindow('night') === '21:00–05:00',
+    '★ 区间文案（界面上那条默认提示要用）',
+    `${mealWindow('breakfast')} / ${mealWindow('night')}`,
+  );
+
+  console.log('\n[辅助函数 · 哪天吃]');
+  const today0 = new Date(2026, 9, 12, 9, 0);
+  check(
+    dayKey(0, today0) === '2026-10-12' && dayKey(1, today0) === '2026-10-13'
+      && dayKey(2, today0) === '2026-10-14' && dayKey(-1, today0) === '2026-10-11',
+    '★ 相对今天推日期（今天 / 明天 / 后天 / 昨天）',
+    [dayKey(0, today0), dayKey(1, today0), dayKey(2, today0), dayKey(-1, today0)].join(' '),
+  );
+  check(dayKey(1, new Date(2026, 11, 31, 20, 0)) === '2027-01-01', '★ 跨月 / 跨年推日期也对');
+  check(
+    dayWord('2026-10-12', today0) === '今天' && dayWord('2026-10-13', today0) === '明天'
+      && dayWord('2026-10-14', today0) === '后天' && dayWord('2026-10-11', today0) === '昨天',
+    '★ 日期 key 翻成「今天 / 明天 / 后天 / 昨天」',
+    [dayWord('2026-10-12', today0), dayWord('2026-10-13', today0), dayWord('2026-10-14', today0), dayWord('2026-10-11', today0)].join(' '),
+  );
+  check(
+    dayWord('2026-10-20', today0) === '10月20日' && dayWord('2027-01-03', today0) === '2027年1月3日',
+    '★ 更远的日子给日期（跨年带上年份）',
+    `${dayWord('2026-10-20', today0)} / ${dayWord('2027-01-03', today0)}`,
+  );
+  check(
+    dayTag('2026-10-12', today0) === '' && dayTag('2026-10-13', today0) === '明天',
+    '★ 今天是空串（不必处处写「今天」），别的日子给词',
+  );
+  check(isDayKey('2026-10-12') && !isDayKey('2026-10-12 09:00') && !isDayKey(undefined), 'isDayKey 只认纯日期');
+
+  console.log('\n[辅助函数 · 单子哪天吃（老数据兜底）]');
+  const legacyDay = (o: Partial<Order>) => orderDay({ ...order, ...o } as Order, today0);
+  check(legacyDay({ dateKey: '2026-10-14' }) === '2026-10-14', '有 dateKey 就用 dateKey');
+  check(
+    legacyDay({ dateKey: undefined, createdAt: '2026-10-09 18:30' }) === '2026-10-09',
+    '★ 老单没有 dateKey → 按 createdAt 那一天补（那时就是下单当天吃）',
+  );
+  check(
+    legacyDay({ dateKey: undefined, createdAt: '昨天 10:00' }) === '2026-10-11'
+      && legacyDay({ dateKey: undefined, createdAt: '今天 10:00' }) === '2026-10-12',
+    '★ 更老的数据里 createdAt 是「今天 / 昨天」这种相对串，也认',
+  );
+  check(
+    legacyDay({ dateKey: '乱写的', createdAt: '' }) === '2026-10-12',
+    '★ 脏 dateKey + 读不出日期的 createdAt → 兜到今天（不会显示空日子）',
+  );
 
   console.log('\n[辅助函数 · 在单检测 / 首字 / 路径]');
   const openOrders: Order[] = [
@@ -3809,7 +4069,7 @@ function helperChecks() {
   check(artUrl('a.svg') === '/art/a.svg', '插画路径');
 
   console.log('\n[seed / migrate 数据契约]');
-  check(SCHEMA === 3 && DB_KEY === 'jishiben-db-v1', 'schema 版本与 localStorage key 稳定');
+  check(SCHEMA === 4 && DB_KEY === 'jishiben-db-v1', 'schema 版本与 localStorage key 稳定');
   const s = seed();
   check(s.schema === SCHEMA && s.recipes.length === 6 && s.orders.length === 3, '种子数据规模');
   check(s.logs.length === 4, '种子日志全量保留（不再按 8 条截断）');
@@ -3865,6 +4125,37 @@ function helperChecks() {
     check(
       legacyOrder[0]?.items?.length === 1 && legacyOrder[0].items[0].dishName === '老式单菜',
       '单菜订单规整成 items[]',
+    );
+    check(
+      isDayKey(legacyOrder[0].dateKey) && legacyOrder[0].dateKey === dayKey(0),
+      '★ 老单没有 dateKey（createdAt 也是空的）→ 兜到今天，不会让界面读到 undefined',
+      legacyOrder[0].dateKey,
+    );
+    const sloppy = normalizeOrders([
+      {
+        id: 'oX', meal: 'brunch', dateKey: '2026-10-13', status: 'pending',
+        items: [], note: '', createdAt: '2026-10-09 08:00', updatedAt: '', placedBy: 'a',
+      },
+    ] as never);
+    check(sloppy[0].meal === 'lunch', '★ 认不出的餐别规整成午餐（早 / 午 / 晚 / 夜宵 之外的值不认）', sloppy[0].meal);
+    check(sloppy[0].dateKey === '2026-10-13', '合法的 dateKey 原样留着（不被 createdAt 覆盖）', sloppy[0].dateKey);
+    const nightOrder = normalizeOrders([
+      {
+        id: 'oY', meal: 'night', dateKey: '2026-10-13', status: 'accepted',
+        items: [], note: '', createdAt: '', updatedAt: '', placedBy: 'a',
+        changes: [
+          { at: 'x', by: 'a', removed: [], added: [], meal: 'night', date: '2026-10-14', reason: '' },
+          { at: 'y', by: 'a', removed: [], added: [], meal: 'brunch', date: '瞎写', reason: '' },
+        ],
+      },
+    ] as never);
+    check(nightOrder[0].meal === 'night', '★ 夜宵是合法餐别，老缓存里带过来的「夜宵单」不会被改成午餐', nightOrder[0].meal);
+    check(
+      nightOrder[0].changes?.length === 1 &&
+        nightOrder[0].changes[0].meal === 'night' &&
+        nightOrder[0].changes[0].date === '2026-10-14',
+      '★ 改动记录里的「改成哪一餐 / 挪到哪天」只认合法值，什么都没有的那条直接丢掉',
+      JSON.stringify(nightOrder[0].changes),
     );
     check(normalizeOrders('不是数组').length === 0 && normalizeOrders([1, null]).length === 2, '订单不是数组时兜底为空');
     /* 掌勺方改菜单的记录：老单没有这个字段 → 补空数组；脏记录按字段逐个兜底；

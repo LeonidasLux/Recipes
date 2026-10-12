@@ -1,8 +1,8 @@
 import type { DB, Order, OrderChange, PersonKey, Profile, Profiles, Recipe, SyncConfig } from './types';
-import { hasChange, nowStamp, nowStampSec, stamp } from './helpers';
+import { dayKey, hasChange, isDayKey, isMeal, nowStamp, nowStampSec, orderDay, stamp } from './helpers';
 import { guessArt } from '../lib/share';
 
-export const SCHEMA = 3;
+export const SCHEMA = 4;
 export const DB_KEY = 'jishiben-db-v1';
 
 /** 示例数据里的相对时刻：daysAgo 天前的 hh:mm，落成带年月日的完整时间戳 */
@@ -11,6 +11,11 @@ function past(daysAgo: number, hh: number, mm: number): string {
   d.setDate(d.getDate() - daysAgo);
   d.setHours(hh, mm, 0, 0);
   return stamp(d);
+}
+
+/** 示例数据里的「哪天吃」：相对今天的第 n 天（负数是过去） */
+function day(n: number): string {
+  return dayKey(n);
 }
 
 /** 还不知道名字时的兜底 —— 首次设置填完就会被真名替换 */
@@ -71,7 +76,7 @@ export function seed(): DB {
         steps: '1. 葱切段，冷油小火熬到葱变焦黄，滤出葱油。\n2. 水开下面，煮 2 分钟捞出过冰水。\n3. 鸡蛋煮 6 分半，冰水泡过再剥壳。\n4. 面拌葱油、生抽和一点糖，摆上溏心蛋。',
         createdAt: past(49, 21, 5),
         updatedAt: past(6, 12, 40),
-        orderCount: 1, /* 今天的晚餐单里点过它 */
+        orderCount: 1, /* 明天那张晚餐单里点过它 */
       },
       {
         id: 'r3',
@@ -123,13 +128,14 @@ export function seed(): DB {
         steps: '1. 糯米提前泡 4 小时，上锅蒸 25 分钟。\n2. 椰浆加糖和一小撮盐，小火煮化。\n3. 趁热把椰浆拌进糯米，盖上焖 15 分钟。\n4. 配芒果片，淋剩下的椰浆。',
         createdAt: past(63, 14, 0),
         updatedAt: past(17, 10, 21),
-        orderCount: 1, /* 今天的晚餐单里点过它 */
+        orderCount: 1, /* 明天那张晚餐单里点过它 */
       },
     ],
     orders: [
       {
         id: 'o1',
         meal: 'lunch',
+        dateKey: day(0),
         status: 'accepted',
         createdAt: past(0, 8, 20),
         updatedAt: past(0, 9, 2),
@@ -143,6 +149,8 @@ export function seed(): DB {
       {
         id: 'o2',
         meal: 'dinner',
+        /* 明天的一单：说明「今天 / 明天 / 后天」这套是拿来用的，掌勺那边也看得到日子 */
+        dateKey: day(1),
         status: 'pending',
         createdAt: past(0, 9, 40),
         updatedAt: past(0, 9, 40),
@@ -156,6 +164,7 @@ export function seed(): DB {
       {
         id: 'o3',
         meal: 'lunch',
+        dateKey: day(-1),
         status: 'done',
         createdAt: past(1, 10, 15),
         updatedAt: past(1, 12, 2),
@@ -238,7 +247,18 @@ export function normalizeRecipes(raw: unknown): Recipe[] {
   return recipes;
 }
 
-/** 把任意来源的订单规整成 v2+ 的多菜形状（一单一道菜的旧结构补 items[]） */
+/**
+ * 把任意来源的订单规整成当前形状。补全 / 校正的都是「界面会直接读到」的字段：
+ *   · 一单一道菜的旧结构（v1）补成 `items[]`；
+ *   · 餐别只认早 / 午 / 晚 / 夜宵四种（更早的数据只有午 / 晚，正好都是合法值），
+ *     别的值一律当午餐，免得卡片上印出个空餐别；
+ *   · `dateKey`（哪天吃）：写于加这个字段之前的老数据没有，按 `createdAt` 那一天补
+ *     —— 那时「下单当天吃」是唯一的用法，见 `orderDay`；
+ *   · `changes[]`：老单没有这个字段，缺什么补什么（别让界面读到 undefined）。
+ *     老形状是「一条只装一道菜」（kind + dishName），而同一批改动当时**共用同一时刻 /
+ *     同一人 / 同一句原因** —— 按这三样把老记录并回一批，界面上就成了「一批一行」。
+ *     新形状（`removed[]` / `added[]`）原样通过，不参与合并。
+ */
 export function normalizeOrders(raw: unknown): Order[] {
   const orders = Array.isArray(raw) ? (raw as Order[]) : [];
   orders.forEach((o) => {
@@ -248,10 +268,8 @@ export function normalizeOrders(raw: unknown): Order[] {
       o.items = [{ recipeId: legacy.recipeId ?? null, dishName: legacy.dishName }];
     }
     if (!Array.isArray(o.items)) o.items = [];
-    /* 掌勺方改菜单的记录：老单没有这个字段，缺什么补什么（别让界面读到 undefined）。
-       老形状是「一条只装一道菜」（kind + dishName），而同一批改动当时**共用同一时刻 /
-       同一人 / 同一句原因** —— 按这三样把老记录并回一批，界面上就成了「一批一行」。
-       新形状（`removed[]` / `added[]`）原样通过，不参与合并。 */
+    if (!isMeal(o.meal)) o.meal = 'lunch';
+    o.dateKey = orderDay(o);
     const rawChanges = Array.isArray(o.changes) ? o.changes.filter((c) => c && typeof c === 'object') : [];
     const merged = new Map<string, OrderChange>();
     const nextChanges: OrderChange[] = [];
@@ -269,9 +287,10 @@ export function normalizeOrders(raw: unknown): Order[] {
         added,
         reason: typeof c.reason === 'string' ? c.reason : '',
       };
-        /* 点菜方改单可能还动了餐次 / 「给掌勺的话」：只认合法值，别的当没动过 */
-        if (c.meal === 'lunch' || c.meal === 'dinner') entry.meal = c.meal;
-        if (typeof c.note === 'string') entry.note = c.note;
+      /* 点菜方改单可能还动了餐次 / 日子 / 「给掌勺的话」：只认合法值，别的当没动过 */
+      if (isMeal(c.meal)) entry.meal = c.meal;
+      if (isDayKey(c.date)) entry.date = c.date;
+      if (typeof c.note === 'string') entry.note = c.note;
       if (isLegacy) {
         const bucket = c.kind === 'add' ? entry.added : entry.removed;
         const key = `${entry.at}|${entry.by}|${entry.reason}`;
@@ -296,6 +315,10 @@ export function normalizeOrders(raw: unknown): Order[] {
  *   v1 每单一道菜 → v2 多道菜 items[]
  *   v2 角色（orderer / cook）→ v3 两个人（a / b）：昵称与订单方向按旧身份对号入座
  *   v3 起「角色」变成底部第二格的本地视图（config.view），沿旧身份给个合理缺省
+ *   v3 → v4 订单多了 `dateKey`（今天 / 明天 / 后天）：老单按 `createdAt` 那天补，
+ *        这一步在 `normalizeOrders` 里每次读入都做（仓库里存量的老单也算），
+ *        所以不为它单独留一段迁移 —— 但 v2 那段角色搬家**只对 v3 以前的缓存做**，
+ *        否则会把 v3 用户已经选好的「我是谁 / 我的角色」冲回默认值。
  *
  * v3 把「角色」从人身上拿掉（两人都能点单也能掌勺），因此旧角色只用来认领人槽。
  * 本项目上线前未投入使用，迁移只求旧缓存不炸，不追求方向语义精确。
@@ -309,8 +332,8 @@ export function migrate(db: DB): DB {
   db.orders = normalizeOrders(db.orders);
   db.profiles = normalizeProfiles(db.profiles);
 
-  /* v2 → v3 */
-  if (db.schema !== SCHEMA) {
+  /* v1 / v2 → v3：旧角色形状的身份与订单方向搬家（只做一次，见上面那段说明） */
+  if (!db.schema || db.schema < 3) {
     const legacyCfg = db.config as
       | (SyncConfig & { role?: 'orderer' | 'cook'; nickname?: string })
       | null;
@@ -330,9 +353,8 @@ export function migrate(db: DB): DB {
     db.orders.forEach((o) => {
       if (o.placedBy !== 'a' && o.placedBy !== 'b') o.placedBy = me;
     });
-
-    db.schema = SCHEMA;
   }
+  db.schema = SCHEMA;
 
   /* 本机角色缺省（老缓存 / 被手改过的配置）：一律补「点单」 */
   if (db.config && db.config.view !== 'cook') db.config.view = 'order';

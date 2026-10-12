@@ -7,7 +7,7 @@ import { ClearArea, ClearInput } from '../components/ClearInput';
 import { useRecipePhoto } from '../components/Photo';
 import { PhotoViewer } from '../components/PhotoViewer';
 import { Icon } from '../components/Icons';
-import { artUrl, initial, newId, recipeInOpenOrder } from '../data/helpers';
+import { artUrl, dayTag, initial, newId, orderDay, recipeInOpenOrder } from '../data/helpers';
 import { imagePath } from '../lib/github';
 import { dataUrlMime, isPhotoDataUrl, photoToDataUrl, rememberPhoto } from '../lib/photo';
 import { preserveTypedValue } from '../lib/inputs';
@@ -40,6 +40,8 @@ export default function RecipeDetail() {
   }, []);
 
   const inOpenOrder = recipe ? recipeInOpenOrder(db.orders, recipe.id) : null;
+  /* 它落在哪一天的单里（今天 / 明天 / 后天…）：按钮与提示按那一天说，别一律说成「今天」 */
+  const inOpenDay = inOpenOrder ? dayTag(orderDay(inOpenOrder)) || '今天' : '';
 
   /* 屏内返回按钮与手机物理返回键共用同一套判断（能回就回，回不去才落到菜谱库） */
   const goBack = usePageBack('/library');
@@ -107,7 +109,7 @@ export default function RecipeDetail() {
   function openOrderWithThis() {
     if (!recipe) return;
     if (inOpenOrder) {
-      toast('这道菜已经在今天的单里了', false);
+      toast(`这道菜已经在${inOpenDay}的单里了`, false);
       return;
     }
     navigate(`/order?add=${encodeURIComponent(recipe.id)}`);
@@ -391,12 +393,12 @@ export default function RecipeDetail() {
         <div className="stack" style={{ gap: 8 }}>
           <button className="btn-primary" onClick={openOrderWithThis} disabled={Boolean(inOpenOrder)}>
             <Icon name="cart" style={{ width: 18, height: 18 }} />
-            <span>{inOpenOrder ? '已在今天单里' : '去点单 · 带上这道菜'}</span>
+            <span>{inOpenOrder ? `已在${inOpenDay}单里` : '去点单 · 带上这道菜'}</span>
           </button>
           {inOpenOrder && (
             <p className="meta" style={{ textAlign: 'center', margin: 0 }}>
               <Link className="openlink" to="/order">
-                已在今天单里 · 去点单查看 →
+                已在{inOpenDay}单里 · 去点单查看 →
               </Link>
             </p>
           )}
