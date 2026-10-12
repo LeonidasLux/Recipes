@@ -129,7 +129,9 @@ export function AboutSheet({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="aboutsheet" role="dialog" aria-modal="true" aria-label="关于记食本">
-      <button type="button" className="ab-mask" aria-label="关闭关于" onClick={onClose} />
+      {/* 遮罩只负责压暗与挡住下层：**点它不关**（这一层里有「下载并安装」这种重量级动作，
+          误触关掉就得重新查一次更新）。关掉只有三条明确的路：右上角 ×、Esc、手机返回键。 */}
+      <div className="ab-mask" aria-hidden="true" />
 
       <div className="card sticker ab-card">
         <button type="button" className="ab-close" aria-label="关闭" onClick={onClose}>

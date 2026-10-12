@@ -5364,11 +5364,14 @@ async function edgeChecks() {
     await m.click('.ab-close');
     check(m.$('.aboutsheet') === null, '点 × 关掉弹窗');
 
+    /* 遮罩只挡不关：这一层里有「下载并安装」这种重量级动作，点偏一下就关掉会很难受 */
     await m.click('#aboutBtn');
     await m.click('.ab-mask');
-    check(m.$('.aboutsheet') === null, '点遮罩也能关掉');
+    check(m.$('.aboutsheet') !== null, '★ 点遮罩不关（防误触）');
+    check(m.$('.ab-mask')?.tagName !== 'BUTTON', '★ 遮罩不再是可点的按钮（读屏里也不该念出「关闭关于」）');
+    check(m.html().includes('关于记食本'), '遮罩还在，弹窗内容也还在');
 
-    await m.click('#aboutBtn');
+    /* 还开着，直接按 Esc —— 这是另一条明确的关闭路（还有右上角的 × 与手机返回键） */
     await act(async () => {
       window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     });

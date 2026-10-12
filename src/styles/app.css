@@ -634,7 +634,8 @@ textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible {
 /* ─── 「关于」弹窗（设置页）────────────────── */
 /* 与菜品详情同一层（z-index 30）：盖住底部导航（3），Toast（40）仍浮在上面 */
 .aboutsheet { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 24px 18px; }
-.ab-mask { position: absolute; inset: 0; border: 0; padding: 0; cursor: pointer;
+/* 只压暗、不接点击（关于弹窗不给点遮罩关闭，防误触） */
+.ab-mask { position: absolute; inset: 0; cursor: default;
   background: color-mix(in oklch, var(--ink) 44%, transparent); animation: odfade .16s ease; }
 .ab-card { position: relative; width: min(360px, 100%); padding: 18px 18px 20px; animation: odpop .18s ease; }
 .ab-close { position: absolute; top: 10px; right: 10px; width: 36px; height: 36px; border-radius: 50%;
