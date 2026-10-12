@@ -1,5 +1,5 @@
-import type { DB, Order, PersonKey, Profile, Profiles, Recipe, SyncConfig } from './types';
-import { nowStamp, nowStampSec, stamp } from './helpers';
+import type { DB, Order, OrderChange, PersonKey, Profile, Profiles, Recipe, SyncConfig } from './types';
+import { hasChange, nowStamp, nowStampSec, stamp } from './helpers';
 import { guessArt } from '../lib/share';
 
 export const SCHEMA = 3;
@@ -239,6 +239,45 @@ export function normalizeOrders(raw: unknown): Order[] {
       o.items = [{ recipeId: legacy.recipeId ?? null, dishName: legacy.dishName }];
     }
     if (!Array.isArray(o.items)) o.items = [];
+    /* 掌勺方改菜单的记录：老单没有这个字段，缺什么补什么（别让界面读到 undefined）。
+       老形状是「一条只装一道菜」（kind + dishName），而同一批改动当时**共用同一时刻 /
+       同一人 / 同一句原因** —— 按这三样把老记录并回一批，界面上就成了「一批一行」。
+       新形状（`removed[]` / `added[]`）原样通过，不参与合并。 */
+    const rawChanges = Array.isArray(o.changes) ? o.changes.filter((c) => c && typeof c === 'object') : [];
+    const merged = new Map<string, OrderChange>();
+    const nextChanges: OrderChange[] = [];
+    rawChanges.forEach((raw) => {
+      const c = raw as OrderChange & { kind?: 'add' | 'remove'; dishName?: string };
+      const names = (v: unknown) =>
+        Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+      const removed = names(c.removed);
+      const added = names(c.added);
+      const isLegacy = !removed.length && !added.length && typeof c.dishName === 'string';
+      const entry: OrderChange = {
+        at: typeof c.at === 'string' ? c.at : '—',
+        by: c.by === 'b' ? ('b' as const) : ('a' as const),
+        removed,
+        added,
+        reason: typeof c.reason === 'string' ? c.reason : '',
+      };
+        /* 点菜方改单可能还动了餐次 / 「给掌勺的话」：只认合法值，别的当没动过 */
+        if (c.meal === 'lunch' || c.meal === 'dinner') entry.meal = c.meal;
+        if (typeof c.note === 'string') entry.note = c.note;
+      if (isLegacy) {
+        const bucket = c.kind === 'add' ? entry.added : entry.removed;
+        const key = `${entry.at}|${entry.by}|${entry.reason}`;
+        const hit = merged.get(key);
+        if (hit) {
+          hit[c.kind === 'add' ? 'added' : 'removed'].push(c.dishName as string);
+          return;
+        }
+        bucket.push(c.dishName as string);
+        merged.set(key, entry);
+      }
+      /* 什么都没改的（脏数据）直接丢掉，别在界面上留一行空的 */
+      if (hasChange(entry)) nextChanges.push(entry);
+    });
+    o.changes = nextChanges;
   });
   return orders;
 }

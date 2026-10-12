@@ -13,6 +13,7 @@ import type {
   LogEntry,
   Meal,
   Order,
+  OrderChange,
   OrderItem,
   OrderStatus,
   PersonKey,
@@ -23,7 +24,34 @@ import type {
   ViewRole,
 } from './types';
 import { DB_KEY, migrate, normalizeOrders, normalizeProfiles, seed } from './seed';
-import { meOf, newId, nicknameOf, nowStamp, orderSummary, partnerOf, PERSON_KEYS, viewOf } from './helpers';
+import {
+  changeText,
+  diffItems,
+  hasChange,
+  meOf,
+  newId,
+  nicknameOf,
+  nowStamp,
+  orderChanges,
+  orderItems,
+  orderSummary,
+  partnerOf,
+  PERSON_KEYS,
+  viewOf,
+} from './helpers';
+
+/**
+ * 数一张单里每道菜谱各点了几道（临时手输的菜没有菜谱 id，不计）。
+ * 改单时拿前后两份对差，给菜谱的「点单次数」加减 —— 同一道菜点两次就算两次。
+ */
+function countItemIds(items: OrderItem[]): Map<string, number> {
+  const m = new Map<string, number>();
+  items.forEach((it) => {
+    if (!it.recipeId) return;
+    m.set(it.recipeId, (m.get(it.recipeId) ?? 0) + 1);
+  });
+  return m;
+}
 
 /* ============================================================
    状态 = 数据 + 本地改动计数（rev）+ 同步状态
@@ -142,6 +170,29 @@ export interface StoreValue {
   deleteRecipes(ids: string[]): void;
   /** 下单（内容改动，会触发推送）；单里的菜各记一次「点单次数」 */
   addOrder(input: { meal: Meal; items: OrderItem[]; note?: string }): Order;
+  /**
+   * 改一张**还没做完**的单（内容改动，会触发推送）：餐次 / 菜 / 给掌勺的话都能改。
+   * 换菜按「道次」的差把点单次数加上 / 退回来；已经「已接」的单改完退回「待接」，
+   * 掌勺方得再看一眼新菜单（已完成的不给改，见 §2）。
+   * 改了什么也会记一条 `order.changes`（`reason` 可不填 —— 点菜方改自己的单，不必解释），
+   * 掌勺那边展开这张单就看得到。
+   */
+  updateOrder(
+    id: string,
+    patch: { meal?: Meal; items?: OrderItem[]; note?: string; reason?: string },
+  ): void;
+  /**
+   * 把一张「已完成」的单恢复成没做完（内容改动，会触发推送）：
+   * 退回「已接」—— 也就是掌勺方点「全部做好了」之前那一格，两边都不用重新接一次单。
+   * 「已完成」点错了（其实还没做完、手滑点了），或者点菜方觉得这顿没结束，都走这里。
+   */
+  restoreOrder(id: string): void;
+  /**
+   * 掌勺方改一张「已接」单的菜单（内容改动，会触发推送）：一次可以减几道、加几道，
+   * **整批共用一句原因**（`reason` 必填），每道菜各记一条 `order.changes`（都挂这句原因）。
+   * 状态保持「已接」（掌勺方自己接的单，不用重接）；改完至少留一道（想清空就去删整单）。
+   */
+  changeOrderDishes(id: string, input: { add: OrderItem[]; remove: number[]; reason: string }): void;
   /** 删订单（内容改动，会触发推送）；点单 / 掌勺两边都会同步消失，单里菜谱的点单次数退回 */
   deleteOrder(id: string): void;
   setOrderStatus(id: string, status: OrderStatus): void;
@@ -292,6 +343,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           placedBy: me,
           note: input.note ?? '',
           items: input.items.map((it) => ({ recipeId: it.recipeId, dishName: it.dishName })),
+          changes: [],
         };
         commit((db) => {
           db.orders.unshift(order);
@@ -318,6 +370,129 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               `${status === 'accepted' ? '已接下 ' : '已完成 '}${orderSummary(o)}，状态已推送`,
             );
           }
+          return db;
+        });
+      },
+
+      updateOrder(id, patch) {
+        commit((db) => {
+          const o = db.orders.find((x) => x.id === id);
+          /* 已完成的不给改：界面也不给入口，这里再兜一层（拉回来的单可能刚好被掌勺方标完） */
+          if (!o || o.status === 'done') return db;
+
+          const itemsBefore = orderItems(o);
+          const itemsAfter = patch.items
+            ? patch.items.map((it) => ({ recipeId: it.recipeId, dishName: it.dishName }))
+            : itemsBefore;
+          const mealAfter = patch.meal ?? o.meal;
+          const noteAfter = patch.note !== undefined ? patch.note : o.note ?? '';
+
+          /* 改了什么记一条 —— 掌勺那边得看得见菜单 / 餐次 / 备注动过。
+             原因可不填（点菜方改自己的单，不必解释）：空着就只写「改了什么」。 */
+          const diff = diffItems(itemsBefore, itemsAfter);
+          const record: OrderChange = {
+            at: nowStamp(),
+            by: meOf(db.config),
+            removed: diff.removed,
+            added: diff.added,
+            reason: (patch.reason ?? '').trim(),
+          };
+          if (mealAfter !== o.meal) record.meal = mealAfter;
+          if (noteAfter !== (o.note ?? '')) record.note = noteAfter;
+          /* 一处都没改（比如进改单模式又原样保存）：不记记录、不写日志、连更新时间都不动 */
+          if (!hasChange(record)) return db;
+
+          if (patch.items) {
+            /* 点单次数按「道次」的差算：丢掉的那道退回来、新加的那道记一次，剩下的原样不动 */
+            const before = countItemIds(itemsBefore);
+            const after = countItemIds(itemsAfter);
+            new Set([...before.keys(), ...after.keys()]).forEach((rid) => {
+              const delta = (after.get(rid) ?? 0) - (before.get(rid) ?? 0);
+              if (!delta) return;
+              const r = db.recipes.find((x) => x.id === rid);
+              if (r) r.orderCount = Math.max(0, (r.orderCount ?? 0) + delta);
+            });
+            o.items = itemsAfter;
+          }
+          o.meal = mealAfter;
+          o.note = noteAfter;
+          o.changes = [...orderChanges(o), record];
+          /* 掌勺方已经接下这张单了：菜单一变就退回「待接」，让对方再看一眼 */
+          const backToPending = o.status === 'accepted';
+          if (backToPending) o.status = 'pending';
+          o.updatedAt = record.at;
+          pushLog(
+            db,
+            'ok',
+            `已修改点单：${orderSummary(o)}${backToPending ? '（菜单变了，已退回待接）' : ''}${
+              record.reason ? `（${record.reason}）` : ''
+            }`,
+          );
+          return db;
+        });
+      },
+
+      restoreOrder(id) {
+        commit((db) => {
+          const o = db.orders.find((x) => x.id === id);
+          /* 只恢复「已完成」的单：没做完的本来就没做完，不用动 */
+          if (!o || o.status !== 'done') return db;
+          o.status = 'accepted';
+          o.updatedAt = nowStamp();
+          pushLog(db, 'ok', `已恢复成没做完：${orderSummary(o)}，状态已推送`);
+          return db;
+        });
+      },
+
+      changeOrderDishes(id, input) {
+        commit((db) => {
+          const o = db.orders.find((x) => x.id === id);
+          /* 只动「已接」的单：还没接的先接下，已经做完的去点「恢复成没做完」 */
+          if (!o || o.status !== 'accepted') return db;
+          /* 原因必填（界面也拦一道）：它是要给点菜那边看的，空着不如不记 */
+          const reason = input.reason.trim();
+          if (!reason) return db;
+
+          const items = orderItems(o);
+          const gone = new Set(input.remove);
+          const kept: OrderItem[] = [];
+          const removed: OrderItem[] = [];
+          items.forEach((it, i) => (gone.has(i) ? removed : kept).push(it));
+
+          /* 要加的：单里还剩的、以及这一批里已经在的要加的，都不再加第二遍 */
+          const added: OrderItem[] = [];
+          input.add.forEach((raw) => {
+            const it: OrderItem = { recipeId: raw.recipeId, dishName: raw.dishName };
+            const same = (k: OrderItem) =>
+              it.recipeId ? k.recipeId === it.recipeId : k.dishName === it.dishName;
+            if (kept.some(same) || added.some(same)) return;
+            added.push(it);
+          });
+
+          /* 空改动不提交；一次也不能减空（加了菜算数：减两样换两样是常见用法） */
+          if (!removed.length && !added.length) return db;
+          if (kept.length + added.length < 1) return db;
+
+          o.items = [...kept, ...added];
+          /* 点单次数跟点单那套一个口径：减掉的退回来、加上的记一次，都不低于 0 */
+          const bump = (it: OrderItem, delta: number) => {
+            const r = it.recipeId ? db.recipes.find((x) => x.id === it.recipeId) : null;
+            if (r) r.orderCount = Math.max(0, (r.orderCount ?? 0) + delta);
+          };
+          removed.forEach((it) => bump(it, -1));
+          added.forEach((it) => bump(it, 1));
+
+          /* 一批改动**只记一条**：减了哪几道、加了哪几道都在这条里，共用这一句原因 */
+          const record: OrderChange = {
+            at: nowStamp(),
+            by: meOf(db.config),
+            removed: removed.map((it) => it.dishName),
+            added: added.map((it) => it.dishName),
+            reason,
+          };
+          o.changes = [...orderChanges(o), record];
+          o.updatedAt = record.at;
+          pushLog(db, 'ok', `改了菜单：${changeText(record)}（${reason}）`);
           return db;
         });
       },

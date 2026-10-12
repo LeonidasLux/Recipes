@@ -1033,6 +1033,545 @@ async function interactionChecks() {
     await m.close();
   }
 
+  console.log('\n[交互 · 修改还没做完的单]');
+  localStorage.clear();
+  {
+    /* 种子里 o1 就是「我（小辉）」今天点的午餐单、状态已接：番茄炖牛腩 + 巴斯克芝士蛋糕 */
+    useDb();
+    const countOf = (id: string) => readDb().recipes.find((r) => r.id === id)!.orderCount;
+    const r1Before = countOf('r1');
+    const r3Before = countOf('r3');
+    const r4Before = countOf('r4');
+
+    const m = await mount('/order');
+    await m.type('.picksearch input', '椰'); /* 先留个搜索词：进改单模式该把它清掉 */
+    await m.click('.osum');
+    check(m.html().includes('修改这单'), '★ 展开一张没做完的单 → 有「修改这单」入口');
+
+    await m.click('.oactions .btn-sticker');
+    check(m.$('.editbar') !== null, '★ 点「修改这单」→ composer 顶上出现改单状态栏');
+    check(
+      m.text('.editbar').includes('正在修改：番茄炖牛腩 等 2 道'),
+      '★ 状态栏写清正在改哪张单',
+      m.text('.editbar'),
+    );
+    check(
+      m.$$('.sel').length === 2 && m.text('.selchips').includes('巴斯克芝士蛋糕'),
+      '★ 这单的菜填进了 composer',
+      m.text('.selchips'),
+    );
+    check(
+      (m.$('.seg.ony button.on')?.textContent ?? '').trim() === '午餐',
+      '★ 餐次也跟着填上（午餐）',
+      m.text('.seg.ony'),
+    );
+    check(m.value('.picksearch input') === '', '进改单模式顺手清掉挑选网格上的搜索词');
+    check(
+      m.text('.clabel').includes('改这一顿'),
+      '★ 改单时组合器标题写着「改这一顿」（跨天的单不该说成「今天中午」）',
+      m.text('.clabel'),
+    );
+    check(
+      m.text('.sendbtn').includes('保存修改 · 午餐 · 2 道'),
+      '★ 发送键变成「保存修改」',
+      m.text('.sendbtn'),
+    );
+
+    /* 三样都改：换掉一道菜（巴斯克 → 椰子鸡火锅）、切晚餐、改给掌勺的话 */
+    await m.clickEl(m.$$('.sel')[1].querySelector('.x') as HTMLElement);
+    check(m.$$('.sel').length === 1, '点胶囊上的 × 去掉一道菜', `剩 ${m.$$('.sel').length} 颗`);
+    await m.type('.picksearch input', '椰');
+    await m.click('.dishgrid .pick'); /* 椰子鸡火锅 */
+    await m.type('.ordernote', '多放点辣');
+    await m.type('.editbar .eb-why', '晚上想清淡一点');
+    await m.click('.seg.ony button:nth-child(2)');
+    check(
+      m.text('.sendbtn').includes('保存修改 · 晚餐 · 2 道'),
+      '改完两菜一晚，按钮文案跟着变',
+      m.text('.sendbtn'),
+    );
+
+    await m.click('.sendbtn');
+    await m.wait(900);
+    const after = readDb();
+    const o1 = after.orders.find((o) => o.id === 'o1')!;
+    check(after.orders.length === 3, '★ 是「改」不是「另开一单」：单数不变', `实际 ${after.orders.length} 张`);
+    check(o1.id === 'o1', '改的还是原来那张单（id 不变）');
+    check(
+      o1.items.length === 2 && o1.items[0].recipeId === 'r1' && o1.items[1].recipeId === 'r3',
+      '★ 菜品换成番茄炖牛腩 + 椰子鸡火锅',
+      JSON.stringify(o1.items),
+    );
+    check(
+      o1.meal === 'dinner' && o1.note === '多放点辣',
+      '★ 餐次 / 给掌勺的话都改上了',
+      `${o1.meal} / 「${o1.note}」`,
+    );
+    check(
+      o1.status === 'pending',
+      '★ 已经「已接」的单改完退回「待接」（掌勺方得再看一眼新菜单）',
+      o1.status,
+    );
+    check(
+      (after.logs[0]?.text ?? '').includes('已修改点单') && after.logs[0].text.includes('等 2 道'),
+      '★ 改单只写一条同步日志',
+      after.logs[0]?.text,
+    );
+    check(after.logs[0].text.includes('退回待接'), '日志里说清退回了待接', after.logs[0]?.text);
+    /* 点单次数按「道次」的差算：新加的 +1、换掉的 −1、没动的不变 */
+    check(countOf('r3') === r3Before + 1, '★ 新加的那道 +1', `${r3Before} → ${countOf('r3')}`);
+    check(countOf('r4') === r4Before - 1, '★ 换掉的那道 −1', `${r4Before} → ${countOf('r4')}`);
+    check(countOf('r1') === r1Before, '留着没动的那道次数不变', `${r1Before} → ${countOf('r1')}`);
+    /* 点菜方改单也记一条改动（原因可不填，这里填了） */
+    check(o1.changes?.length === 1, '★ 点菜方改单也记一条改动记录', JSON.stringify(o1.changes));
+    check(
+      o1.changes[0].removed.join('、') === '巴斯克芝士蛋糕' &&
+        o1.changes[0].added.join('、') === '椰子鸡火锅',
+      '★ 记下减了哪道、加了哪道',
+      JSON.stringify(o1.changes[0]),
+    );
+    check(
+      o1.changes[0].meal === 'dinner' && o1.changes[0].note === '多放点辣',
+      '★ 餐次与「给掌勺的话」的改动也记上',
+      JSON.stringify(o1.changes[0]),
+    );
+    check(
+      o1.changes[0].reason === '晚上想清淡一点' &&
+        o1.changes[0].by === 'a' &&
+        DATE_TIME_RE.test(o1.changes[0].at || ''),
+      '★ 填了原因就一起存（谁 / 什么时候也记着）',
+      JSON.stringify(o1.changes[0]),
+    );
+    check(
+      m.text('.ochanges').includes(
+        '我减掉「巴斯克芝士蛋糕」、加了「椰子鸡火锅」、改成晚餐、给掌勺的话改成「多放点辣」：晚上想清淡一点',
+      ),
+      '★ 卡片上那行把改了什么写全（掌勺那边展开就看得到）',
+      m.text('.ochanges'),
+    );
+    check(
+      m.$('.editbar') === null && m.$$('.sel').length === 0 && m.value('.ordernote') === '',
+      '★ 保存后 composer 交出去、退出改单模式',
+    );
+    check(m.text('.sendbtn').includes('先选几道菜'), '发送键变回开新单的文案', m.text('.sendbtn'));
+    check(m.html().includes('菜单变了，小红需要重新接单'), '★ toast 提醒对方要重新接单');
+    check(m.html().includes('待接'), '★ 卡片上的状态 chip 跟着变回「待接」');
+    await m.close();
+  }
+  {
+    /* 不填原因照样能改（自己的单不必解释）：记录照记，只写「改了什么」；
+       只动了备注也记一条 —— 掌勺方得知道「少放辣」变成了「多放辣」 */
+    useDb();
+    const m = await mount('/order');
+    await m.click('.osum');
+    await m.click('.oactions .btn-sticker');
+    check(
+      m.$('.editbar .eb-why') !== null &&
+        m.$('.editbar .eb-why')!.getAttribute('placeholder') === '为什么改（可不填），掌勺那边看得到',
+      '★ 改单模式里有「为什么改（可不填）」那一格',
+    );
+
+    await m.type('.ordernote', '多放辣');
+    await m.click('.sendbtn');
+    await m.wait(900);
+    const o1 = readDb().orders.find((o) => o.id === 'o1')!;
+    check(o1.changes?.length === 1, '★ 只改了备注也记一条', JSON.stringify(o1.changes));
+    check(
+      o1.changes[0].note === '多放辣' &&
+        o1.changes[0].reason === '' &&
+        !o1.changes[0].removed.length &&
+        !o1.changes[0].added.length &&
+        !o1.changes[0].meal,
+      '★ 没填原因就是空的：只记「改了备注」，没有减 / 加 / 餐次',
+      JSON.stringify(o1.changes[0]),
+    );
+    check(m.text('.ochanges').includes('我给掌勺的话改成「多放辣」'), '★ 卡片上那行只写改了备注');
+    check(!m.text('.ochanges').includes('：'), '★ 没填原因就不留一个孤零零的冒号');
+
+    /* 进改单模式又原样保存 → 空改动不记 */
+    await m.click('.oactions .btn-sticker');
+    await m.click('.sendbtn');
+    await m.wait(900);
+    check(
+      readDb().orders.find((o) => o.id === 'o1')!.changes?.length === 1,
+      '★ 一处没改就保存：不记空改动',
+      JSON.stringify(readDb().orders.find((o) => o.id === 'o1')!.changes),
+    );
+    await m.close();
+  }
+  {
+    /* 取消修改：单一点都不动，进改单前手上那份没发出去的草稿还回来 */
+    useDb();
+    const m = await mount('/order');
+    await m.type('.manualrow input', '手抓饼加蛋');
+    await m.click('.manualrow .btn-sticker');
+    await m.type('.ordernote', '今晚想吃');
+
+    await m.click('.osum');
+    await m.click('.oactions .btn-sticker');
+    check(m.$('.editbar') !== null, '进了改单模式');
+    await m.clickByText('.editbar .btn-sticker', '取消修改');
+    const o1 = readDb().orders.find((o) => o.id === 'o1')!;
+    check(
+      o1.items.length === 2 && o1.meal === 'lunch' && o1.status === 'accepted',
+      '★ 取消修改：那张单原封不动',
+      JSON.stringify({ items: o1.items.length, meal: o1.meal, status: o1.status }),
+    );
+    check(
+      m.$$('.sel').length === 1 && m.text('.selchips').includes('手抓饼加蛋'),
+      '★ 取消修改把进改单前那份草稿放回 composer',
+      m.text('.selchips'),
+    );
+    check(m.value('.ordernote') === '今晚想吃', '备注也还原了', `实际「${m.value('.ordernote')}」`);
+    check(
+      m.$('.editbar') === null && m.text('.sendbtn').includes('发给小红'),
+      '回到开新单的样子',
+      m.text('.sendbtn'),
+    );
+
+    /* 卡片里那个按钮是开关：再点一次同样是「退出改单」 */
+    await m.click('.oactions .btn-sticker');
+    check(m.$('.editbar') !== null, '再进改单模式');
+    await m.click('.oactions .btn-sticker');
+    check(m.$('.editbar') === null, '★ 卡片上的入口再点一次就退出改单');
+    await m.close();
+  }
+  {
+    /* 已做完的单不给入口；跨天落进「历史点单」的未完成单照样能改 */
+    useDb((db) => {
+      db.orders.find((o) => o.id === 'o1')!.status = 'done';
+    });
+    const m = await mount('/order');
+    await m.click('.osum');
+    check(!m.html().includes('修改这单'), '★ 已做完的单没有「修改这单」入口');
+    check(m.html().includes('小红已做完这顿'), '已完成的单照旧显示完成信息');
+    await m.close();
+  }
+  {
+    useDb((db) => {
+      /* 昨天点的单也还没做完：它落在折叠的「历史点单」里，一样要能改 */
+      db.orders.find((o) => o.id === 'o1')!.createdAt = '2020-01-01 12:00';
+    });
+    const m = await mount('/order');
+    check(m.$$('.osum').length === 0, '今天没有单，那张落在历史里');
+    await m.clickByText('.morebar', '历史点单');
+    await m.click('.osum');
+    check(m.html().includes('修改这单'), '★ 历史点单里没做完的单也能改');
+    await m.click('.oactions .btn-sticker');
+    check(m.text('.editbar').includes('正在修改：番茄炖牛腩 等 2 道'), '同样填进 composer', m.text('.editbar'));
+    await m.close();
+  }
+  {
+    /* 正改着的单被删掉：改单模式跟着退出，别把一份交不掉的表单留在界面上 */
+    useDb();
+    const m = await mount('/order');
+    await m.click('.osum');
+    await m.click('.oactions .btn-sticker');
+    check(m.$('.editbar') !== null, '进了改单模式');
+    await m.longPress('.osum');
+    await m.click('.tip-del');
+    check(!readDb().orders.some((o) => o.id === 'o1'), '长按把这张单删了');
+    check(m.$('.editbar') === null, '★ 单没了 → 改单模式跟着退出');
+    check(m.text('.sendbtn').includes('先选几道菜'), '发送键回到开新单', m.text('.sendbtn'));
+    await m.close();
+  }
+
+  console.log('\n[交互 · 掌勺方加减菜（一次改几道，整批写一句原因）]');
+  localStorage.clear();
+  {
+    /* 种子里 o2 是小红点的晚餐单（待接）：接单之后掌勺方才谈得上改菜单 */
+    useDb();
+    const countOf = (id: string) => readDb().recipes.find((r) => r.id === id)!.orderCount;
+    const before = { r1: countOf('r1'), r2: countOf('r2'), r3: countOf('r3'), r6: countOf('r6') };
+    const order = () => readDb().orders.find((o) => o.id === 'o2')!;
+    const changes = () => order().changes ?? [];
+
+    const m = await mount('/cook');
+    check(!m.html().includes('加减菜'), '★ 还没接的单不给「加减菜」入口（先接下这顿）');
+    await m.clickInCard('.cookcard', '待接', '.btn-sticker');
+    await m.wait(800);
+    check(m.html().includes('加减菜'), '★ 接下的单卡片上多一枚「加减菜」');
+
+    await m.click('.cc-act .btn-sticker');
+    check(m.$('.menusheet') !== null, '★ 点「加减菜」→ 弹出改菜单弹层');
+    check(
+      m.text('.ms-label').includes('现在 2 道菜') && m.text('.ms-sum').includes('还没改'),
+      '弹层列出这单现在有几道菜，底部先写着「还没改」',
+      `${m.text('.ms-label')} / ${m.text('.ms-sum')}`,
+    );
+
+    /* 一处都没改就保存 → 什么都不动 */
+    await m.click('.ms-foot .ms-ok');
+    check(order().items.length === 2 && changes().length === 0, '★ 一处没改时保存：整单不动');
+    check(m.html().includes('先加一道或减一道再保存'), '提示先改一道');
+
+    /* 勾一道要减的 */
+    await m.clickEl(m.$$('.ms-dish .ms-toggle')[0]);
+    check(
+      m.$$('.ms-dish.on').length === 1 && m.text('.ms-sum').includes('减 1 道'),
+      '点「减掉」→ 那道划掉、按钮变「不减了」，底部汇总跟着变',
+      m.text('.ms-sum'),
+    );
+    /* 两道都想减、又没加菜 → 第二道不给标，不然这一单就空了 */
+    await m.clickEl(m.$$('.ms-dish .ms-toggle')[1]);
+    check(
+      m.$$('.ms-dish.on').length === 1 && m.html().includes('一单至少留一道菜'),
+      '★ 两道都想减、又没加菜 → 第二道不给标（不然这单就空了）',
+      m.text('.ms-sum'),
+    );
+
+    /* 再挑要加的：挑两道、取消一道，再手输一道 */
+    await m.clickByText('.ms-pick', '番茄炖牛腩');
+    await m.clickByText('.ms-pick', '椰子鸡火锅');
+    check(
+      m.$$('.ms-chip').length === 2 && m.text('.ms-sum').includes('加 2 道'),
+      '★ 挑中的两道进「这次要加」（胶囊里看得见）',
+      m.text('.ms-sum'),
+    );
+    await m.clickEl(m.$$('.ms-chip .x')[1]);
+    check(m.$$('.ms-chip').length === 1, '点胶囊上的 × 可以取消要加的那道');
+    await m.type('.ms-manual input', '凉拌黄瓜');
+    await m.click('.ms-manual .btn-sticker');
+    check(m.$$('.ms-chip').length === 2, '手输的菜也进「要加」那一栏');
+    /* 这一批里加了菜 → 原来两道都能减（「换掉」这种用法） */
+    await m.clickEl(m.$$('.ms-dish .ms-toggle')[1]);
+    check(
+      m.$$('.ms-dish.on').length === 2 && m.text('.ms-sum').includes('减 2 道 · 加 2 道'),
+      '★ 一批里加了菜 → 原来两道都能减；底部汇总写清这批要动几道',
+      m.text('.ms-sum'),
+    );
+
+    /* 原因空着不给保存 */
+    await m.click('.ms-foot .ms-ok');
+    check(order().items.length === 2 && changes().length === 0, '★ 原因空着：整批都不落库');
+    check(m.$('.ms-foot .field').className.includes('invalid'), '★ 原因没填 → 输入框标红');
+    check(m.html().includes('得写一句为什么'), '给出「得写原因」的提示');
+    check(m.$('.menusheet') !== null, '弹层不关，等着补原因');
+
+    await m.type('.ms-foot .ms-input', '牛腩和面都没买到，换两道');
+    await m.click('.ms-foot .ms-ok');
+    const after = order();
+    check(
+      after.items.length === 2 && after.items.map((it) => it.dishName).join('、') === '番茄炖牛腩、凉拌黄瓜',
+      '★ 一次提交：原来两道都减掉、挑的那道和手输的那道都加上',
+      JSON.stringify(after.items.map((it) => it.dishName)),
+    );
+    check(
+      after.items[0].recipeId === 'r1' && after.items[1].recipeId === null,
+      '加进来的菜各带各的 recipeId（手输的为空）',
+      JSON.stringify(after.items),
+    );
+    check(after.status === 'accepted', '改菜单不动状态（还是已接）');
+    /* 记录：减两道 + 加两道 = **一条**（都在这条里，配同一句原因） */
+    check(
+      changes().length === 1,
+      '★ 一批改动只记一条（不是按道拆成好几条）',
+      JSON.stringify(changes()),
+    );
+    check(
+      changes()[0].removed.join('、') === '溏心蛋葱油拌面、芒果糯米饭' &&
+        changes()[0].added.join('、') === '番茄炖牛腩、凉拌黄瓜',
+      '★ 这一条里减的、加的都写全了（先减后加）',
+      JSON.stringify(changes()[0]),
+    );
+    check(
+      changes()[0].reason === '牛腩和面都没买到，换两道' &&
+        changes()[0].by === 'a' &&
+        DATE_TIME_RE.test(changes()[0].at || ''),
+      '★ 这条记录带着「谁 / 什么时候（带年月日）/ 为什么」',
+      JSON.stringify(changes()[0]),
+    );
+    /* 点单次数按道次差走：减掉的各退一次、加上的各记一次、中途取消的那道不留痕 */
+    check(
+      countOf('r2') === before.r2 - 1 &&
+        countOf('r6') === before.r6 - 1 &&
+        countOf('r1') === before.r1 + 1,
+      '★ 点单次数：减掉的各 −1、加上的各 +1',
+      JSON.stringify({
+        r1: [before.r1, countOf('r1')],
+        r2: [before.r2, countOf('r2')],
+        r6: [before.r6, countOf('r6')],
+      }),
+    );
+    check(countOf('r3') === before.r3, '★ 中途取消掉的那道（椰子鸡火锅）一点痕迹都不留');
+    check(
+      (readDb().logs[0]?.text ?? '').includes('改了菜单') &&
+        readDb().logs[0].text.includes('减掉「溏心蛋葱油拌面」「芒果糯米饭」') &&
+        readDb().logs[0].text.includes('加了「番茄炖牛腩」「凉拌黄瓜」') &&
+        readDb().logs[0].text.includes('牛腩和面都没买到，换两道'),
+      '★ 整批只写一条同步日志（减了哪些、加了哪些、为什么）',
+      readDb().logs[0]?.text,
+    );
+    check(m.$('.menusheet') === null, '改完关掉弹层');
+    check(m.html().includes('菜单改好了（减 2 道 · 加 2 道）'), 'toast 报出这批改了几道');
+    check(
+      /* 读卡片上的整段文字：HTML 里这句被标签隔开，不能直接查 innerHTML */
+      m.text('.ochanges').includes('这单改过') &&
+        m.text('.ochanges').includes(
+          '我减掉「溏心蛋葱油拌面」「芒果糯米饭」、加了「番茄炖牛腩」「凉拌黄瓜」：牛腩和面都没买到，换两道',
+        ),
+      '★ 掌勺页卡片上就一行（自己的改动写「我」）',
+      m.text('.ochanges'),
+    );
+    check(m.$$('.ochanges .oc-list li').length === 1, '★ 卡片上这块只占一行', String(m.$$('.ochanges .oc-list li').length));
+
+    /* 单里现有的菜在挑选列表里禁用 */
+    await m.click('.cc-act .btn-sticker');
+    const disabled = m.$$('.ms-pick').filter((el) => (el as HTMLButtonElement).disabled).length;
+    check(
+      disabled === after.items.filter((it) => it.recipeId).length,
+      '★ 单里已有（且在菜谱库里）的那道在挑选列表里禁用',
+      `${m.$$('.ms-pick').length} 道里禁用了 ${disabled} 道`,
+    );
+    check(m.html().includes('已在单里'), '禁用那道写着「已在单里」');
+
+    /* 至少留一道：两道都想减 → 第二道不给标；但这一批里加了菜就允许全换 */
+    await m.clickEl(m.$$('.ms-dish .ms-toggle')[0]);
+    await m.clickEl(m.$$('.ms-dish .ms-toggle')[1]);
+    check(
+      m.$$('.ms-dish.on').length === 1 && m.html().includes('一单至少留一道菜'),
+      '★ 不给减空：至少留一道（想清空就去删整单）',
+    );
+    await m.clickByText('.ms-pick', '台式三杯鸡');
+    await m.clickEl(m.$$('.ms-dish .ms-toggle')[1]);
+    check(
+      m.$$('.ms-dish.on').length === 2 && m.text('.ms-sum').includes('减 2 道 · 加 1 道'),
+      '★ 一批里加了菜 → 原来两道都能减（「换掉」这种用法）',
+      m.text('.ms-sum'),
+    );
+
+    /* 返回键先关掉这一层，而不是把人从掌勺页退出去 */
+    await act(async () => pressBack());
+    check(m.$('.menusheet') === null && m.$('.s-cook') !== null, '★ 返回键先关掉改菜单弹层，不退屏');
+    check(order().items.length === 2, '★ 关掉弹层（没保存）：单一点都不动');
+    await m.close();
+  }
+
+  console.log('\n[交互 · 已完成的单恢复成没做完]');
+  localStorage.clear();
+  {
+    /* 点菜那边：展开那张单，掌勺方改了哪几道、为什么都看得到 */
+    useDb((db) => {
+      db.orders.find((o) => o.id === 'o1')!.changes = [
+        /* 老形状（一条只装一道菜）也得读得出来 —— 顺带验一遍搬新形状的迁移 */
+        { at: '2026-10-11 20:10', by: 'b', kind: 'remove', dishName: '椰子鸡火锅', reason: '没买到椰青' } as never,
+        { at: '2026-10-12 09:30', by: 'b', removed: ['巴斯克芝士蛋糕'], added: ['手撕包菜'], reason: '没买到芝士' },
+      ];
+    });
+    const m = await mount('/order');
+    await m.click('.osum');
+    const text = m.text('.ochanges');
+    check(text.includes('这单改过'), '★ 点单页展开那张单能看到改动记录');
+    check(
+      text.includes('2026-10-12 09:30') &&
+        text.includes('小红减掉「巴斯克芝士蛋糕」、加了「手撕包菜」：没买到芝士'),
+      '★ 一批改动就一行：时间 / 谁 / 减了哪几道 / 加了哪几道 / 为什么',
+      text,
+    );
+    check(
+      text.includes('小红减掉「椰子鸡火锅」：没买到椰青') && text.indexOf('椰子鸡火锅') < text.indexOf('手撕包菜'),
+      '★ 老形状那条也照常显示，且按时间排在前面',
+      text,
+    );
+    check(
+      m.$$('.ochanges .oc-list li').length === 2,
+      '★ 两条记录 = 两行（一条记录不会拆成好几行）',
+      String(m.$$('.ochanges .oc-list li').length),
+    );
+    await m.close();
+  }
+  {
+    /* 没改过菜单的单不摆这一块 */
+    useDb();
+    const m = await mount('/order');
+    await m.click('.osum');
+    check(m.$('.ochanges') === null, '★ 没改过菜单的单不摆改动记录');
+    await m.close();
+  }
+  {
+    /* 点单页：掌勺方标了「已完成」，但这顿其实还没做完 → 退回没做完，之后还能改 */
+    useDb((db) => {
+      db.orders.find((o) => o.id === 'o1')!.status = 'done';
+    });
+    const m = await mount('/order');
+    await m.click('.osum');
+    check(m.html().includes('恢复成没做完'), '★ 已完成的单给的是「恢复成没做完」入口');
+    check(!m.html().includes('修改这单'), '已完成的单不给「修改这单」（先恢复再改）');
+
+    await m.click('.oactions .btn-sticker');
+    const after = readDb();
+    const o1 = after.orders.find((o) => o.id === 'o1')!;
+    check(o1.status === 'accepted', '★ 恢复成没做完 → 退回「已接」（不必重新接一次单）', o1.status);
+    check(
+      after.orders.length === 3 && o1.items.length === 2 && o1.meal === 'lunch',
+      '★ 只是状态回退：单没多、菜没动',
+      JSON.stringify({ 单数: after.orders.length, 菜: o1.items.length, 餐次: o1.meal }),
+    );
+    check(
+      (after.logs[0]?.text ?? '').includes('已恢复成没做完'),
+      '★ 恢复写一条同步日志',
+      after.logs[0]?.text,
+    );
+    check(m.html().includes('已恢复成没做完 · 小红会看到'), '给出恢复提示');
+    check(m.html().includes('已接'), '★ 卡片上的状态 chip 跟着变回「已接」');
+    check(m.html().includes('修改这单'), '★ 恢复之后那张单又能改了');
+    check(m.html().includes('没做完的能改'), '页头提示照旧');
+    await m.close();
+  }
+  {
+    /* 没做完的单不摆这个入口（它本来就没做完） */
+    useDb();
+    const m = await mount('/order');
+    await m.click('.osum');
+    check(
+      !m.html().includes('恢复成没做完'),
+      '★ 没做完的单没有「恢复成没做完」入口',
+    );
+    await m.close();
+  }
+  {
+    /* 掌勺页：自己点错了「全部做好了」 → 从「已做完」里恢复 */
+    useDb();
+    const m = await mount('/cook');
+    await m.clickInCard('.cookcard', '待接', '.btn-sticker');
+    await m.wait(800);
+    /* 已接的卡片上有「加减菜」和「全部做好了」两枚按钮，这里点的是主按钮 */
+    await m.clickInCard('.cookcard', '溏心蛋葱油拌面', '.btn-sticker.primary');
+    await m.wait(800);
+    check(
+      readDb().orders.find((o) => o.id === 'o2')!.status === 'done',
+      '先把那张单标完成',
+      readDb().orders.find((o) => o.id === 'o2')!.status,
+    );
+    check(m.$$('.cookcard').length === 0, '做完的单从今天要做的那一摞里收起');
+
+    await m.clickByText('.morebar', '已做完');
+    /* 种子里 o3 本来就是昨天做完的一张，所以这里展开是两张：刚做完的 o2 + 老的那张 */
+    check(
+      m.$$('.cookcard').length === 2 && m.$$('.donerow').length === 2,
+      '展开「已做完」看到那张单',
+      `实际 ${m.$$('.cookcard').length} 张`,
+    );
+    check(m.html().includes('恢复成没做完'), '★ 已做完的卡片上有「恢复成没做完」');
+
+    await m.click('.donerow .btn-sticker');
+    await m.wait(800);
+    check(
+      readDb().orders.find((o) => o.id === 'o2')!.status === 'accepted',
+      '★ 掌勺方恢复 → 退回「已接」',
+      readDb().orders.find((o) => o.id === 'o2')!.status,
+    );
+    check(readDb().logs.some((l) => l.text.includes('已恢复成没做完')), '恢复写同步日志');
+    check(m.html().includes('已恢复成没做完 · 小红会看到'), '给出恢复提示');
+    check(m.html().includes('全部做好了'), '★ 卡片回到今天这一摞、按钮变回「全部做好了」');
+    check(
+      m.$$('.donerow').length === 1 && m.text('.morebar').includes('1 份'),
+      '★ 恢复的那张离开「已做完」，老的那张还在（折叠条照旧只露数量）',
+      `donerow=${m.$$('.donerow').length} / ${m.text('.morebar')}`,
+    );
+    await m.close();
+  }
+
   console.log('\n[交互 · 掌勺接单]');
   useDb();
   {
@@ -1052,7 +1591,7 @@ async function interactionChecks() {
     } else {
       ok('接单后按钮变成「全部做好了」');
     }
-    await m.clickInCard('.cookcard', '溏心蛋葱油拌面', '.btn-sticker');
+    await m.clickInCard('.cookcard', '溏心蛋葱油拌面', '.btn-sticker.primary');
     await m.wait(800);
     const nowDone = readDb().orders.find((o) => o.id === pending.id)!;
     if (nowDone.status !== 'done') fail('全部做好了', `status = ${nowDone.status}`);
@@ -3047,6 +3586,72 @@ function helperChecks() {
       '单菜订单规整成 items[]',
     );
     check(normalizeOrders('不是数组').length === 0 && normalizeOrders([1, null]).length === 2, '订单不是数组时兜底为空');
+    /* 掌勺方改菜单的记录：老单没有这个字段 → 补空数组；脏记录按字段逐个兜底；
+       老形状「一条只装一道菜」（kind + dishName）原地搬成「这一批加减了哪几道」 */
+    check(legacyOrder[0].changes?.length === 0, '★ 缺 changes 的老单补空数组');
+    const dirtyChanges = normalizeOrders([
+      {
+        id: 'o2',
+        meal: 'dinner',
+        status: 'accepted',
+        items: [],
+        note: '',
+        createdAt: '',
+        updatedAt: '',
+        placedBy: 'a',
+        changes: [
+          { at: 'x', by: 'b', removed: ['青菜', 7], added: [], reason: '冰箱里有' },
+          { by: '???', kind: '???', dishName: 7 },
+          { at: 'y', kind: 'add', dishName: '手撕包菜' },
+          null,
+        ],
+      } as never,
+    ]);
+    check(
+      dirtyChanges[0].changes?.length === 2 &&
+        dirtyChanges[0].changes[0].at === 'x' &&
+        dirtyChanges[0].changes[0].by === 'b' &&
+        dirtyChanges[0].changes[0].removed.join() === '青菜' &&
+        dirtyChanges[0].changes[0].added.length === 0 &&
+        dirtyChanges[0].changes[0].reason === '冰箱里有' &&
+        /* 老形状那条：搬成「加了」，「人」与「原因」缺了就各自兜底 */
+        dirtyChanges[0].changes[1].added.join() === '手撕包菜' &&
+        dirtyChanges[0].changes[1].removed.length === 0 &&
+        dirtyChanges[0].changes[1].by === 'a' &&
+        dirtyChanges[0].changes[1].reason === '',
+      '★ 改菜单记录逐字段兜底（人 / 加减了哪几道 / 原因），老形状搬成新形状',
+      JSON.stringify(dirtyChanges[0].changes),
+    );
+    /* 上一版把一批拆成了好几条（同一时刻 / 同一人 / 同一句原因）→ 规整时并回一条 */
+    const legacyBatch = normalizeOrders([
+      {
+        id: 'o3',
+        meal: 'dinner',
+        status: 'accepted',
+        items: [],
+        note: '',
+        createdAt: '',
+        updatedAt: '',
+        placedBy: 'a',
+        changes: [
+          { at: '2026-10-12 09:30', by: 'a', kind: 'remove', dishName: '溏心蛋葱油拌面', reason: '没买到' },
+          { at: '2026-10-12 09:30', by: 'a', kind: 'remove', dishName: '芒果糯米饭', reason: '没买到' },
+          { at: '2026-10-12 09:30', by: 'a', kind: 'add', dishName: '手撕包菜', reason: '没买到' },
+          /* 另一次改动（原因不同）不该被并进来 */
+          { at: '2026-10-12 09:31', by: 'a', kind: 'add', dishName: '凉拌黄瓜', reason: '再加个凉的' },
+        ],
+      } as never,
+    ]);
+    const merged = legacyBatch[0].changes ?? [];
+    check(
+      merged.length === 2 &&
+        merged[0].removed.join('、') === '溏心蛋葱油拌面、芒果糯米饭' &&
+        merged[0].added.join('、') === '手撕包菜' &&
+        merged[0].reason === '没买到' &&
+        merged[1].added.join('、') === '凉拌黄瓜',
+      '★ 老数据里被拆开的同一批（同一时刻 / 同一人 / 同一句原因）规整时并回一条',
+      JSON.stringify(merged),
+    );
 
     /* 老缓存 / 老仓库的菜谱没有点单次数（或不是合法数字）→ 一律补 0 */
     const noCount = normalizeRecipes([
@@ -4884,6 +5489,57 @@ async function edgeChecks() {
     check(c.$('.topbar .navrow > .rolesw') !== null, '★ 掌勺：开关同样挂在标题行右端');
     check(c.$('.topbar > .greeting') !== null, '★ 掌勺：日期行同样是顶栏第一行');
     await c.close();
+  }
+  useDb();
+
+  console.log('\n[边界 · 菜谱库标题括号里带菜谱条数]');
+  localStorage.clear();
+  {
+    const db = useDb();
+    const m = await mount('/library');
+    check(
+      m.text('.topbar .navrow .ptitle') === `我的菜谱库（${db.recipes.length}）`,
+      `★ 标题在括号里报出菜谱库条数（${db.recipes.length}）`,
+      `实际「${m.text('.topbar .navrow .ptitle')}」`,
+    );
+    check(
+      m.$('.ptitle .pcount') !== null,
+      '★ 条数单独包在 .pcount 里（好跟主标题分开上样式）',
+    );
+    /* 搜索只筛列表，标题里报的是本库全量 */
+    await m.type('.searchbar input', '牛腩');
+    check(m.html().includes('找到 1 道'), '搜「牛腩」筛出 1 道', m.text('.matchline'));
+    check(
+      m.text('.topbar .navrow .ptitle') === `我的菜谱库（${db.recipes.length}）`,
+      '★ 搜索时标题里的数仍是本库全量，不跟着搜索结果变',
+      `实际「${m.text('.topbar .navrow .ptitle')}」`,
+    );
+    /* 删掉一条 → 这个数立刻跟着小 */
+    await m.type('.searchbar input', '');
+    await m.longPress('.dishrow');
+    await m.clickEl(m.$$('.cardlist .dishrow')[0]); /* 长按松手补的那次 click（被吞掉） */
+    await m.click('.actionbar .btn-danger');
+    await m.click('.actionbar .btn-danger');
+    await m.wait(100);
+    check(
+      m.text('.topbar .navrow .ptitle') === `我的菜谱库（${db.recipes.length - 1}）`,
+      '★ 删掉一条后标题里的数跟着减一',
+      `实际「${m.text('.topbar .navrow .ptitle')}」`,
+    );
+    await m.close();
+  }
+  {
+    /* 空库：标题里的数就是 0（空态卡照旧） */
+    useDb((db) => {
+      db.recipes = [];
+    });
+    const m = await mount('/library');
+    check(
+      m.text('.topbar .navrow .ptitle') === '我的菜谱库（0）' && m.html().includes('还没有菜谱'),
+      '★ 空库时标题显示「我的菜谱库（0）」',
+      `实际「${m.text('.topbar .navrow .ptitle')}」`,
+    );
+    await m.close();
   }
   useDb();
 

@@ -8,7 +8,8 @@ import { SkeletonRows, StateCard, StatusChip, Thumb } from '../components/Bits';
 import { ClearInput } from '../components/ClearInput';
 import { Icon } from '../components/Icons';
 import { anchorDeleteTip, DeleteTip, type DeleteTipState } from '../components/DeleteTip';
-import { initial, isTodayOrder, itemCover, mealLabel, orderCover, orderItems, orderMain, orderSummary, todayLine } from '../data/helpers';
+import { OrderChanges } from '../components/OrderChanges';
+import { initial, isTodayOrder, itemCover, mealLabel, orderChanges, orderCover, orderItems, orderMain, orderSummary, todayLine } from '../data/helpers';
 import { Cover } from '../components/Photo';
 import { useNames } from '../data/useNames';
 import { preserveTypedValue } from '../lib/inputs';
@@ -16,7 +17,7 @@ import { useBackClose } from '../lib/back';
 import type { DB, Meal, Order, OrderItem } from '../data/types';
 
 export default function OrderScreen() {
-  const { db, addOrder, deleteOrder, me } = useStore();
+  const { db, addOrder, updateOrder, restoreOrder, deleteOrder, me } = useStore();
   const { toast } = useToast();
   /* 点单屏：下单的人是「我」，做饭的是对方 */
   const names = useNames();
@@ -40,10 +41,30 @@ export default function OrderScreen() {
   const pressTimer = useRef<number | null>(null);
   const longPressed = useRef(false);
 
+  /**
+   * 正在改哪张单（null = 不是改单，上面那个 composer 就是在开新单）。
+   *
+   * 改单复用同一个 composer：把这张单的餐次 / 菜 / 备注填进去，按钮变成「保存修改」。
+   * 不另开一屏 —— 挑菜、搜菜、手输那套一块都不用重写，改的还是同一张单（id 不变）。
+   */
+  const [editingId, setEditingId] = useState<string | null>(null);
+  /** 进改单前手上没发出去的那份草稿：改到一半点「取消修改」还能还回来 */
+  const draft = useRef<{ meal: Meal; selected: OrderItem[]; note: string } | null>(null);
+  /** 改单时顺手写的一句原因（**可不填** —— 自己的单不必解释；填了掌勺那边看得到） */
+  const [changeReason, setChangeReason] = useState('');
+
   const preselected = useRef(false);
 
   /* 长按弹出的删除提示是遮罩：手机返回键先收起它，而不是退出应用 */
   useBackClose(tip !== null, closeTip);
+
+  const editingOrder = editingId ? db.orders.find((o) => o.id === editingId) ?? null : null;
+
+  /* 正改着的那张单没了（被删了），或被掌勺方标完成 / 拉回来是完成态 → 当成「取消修改」退出：
+     composer 收回进改单前那份草稿，别把一份交不掉的表单留在界面上 */
+  useEffect(() => {
+    if (editingId && (!editingOrder || editingOrder.status === 'done')) cancelEdit();
+  }, [editingId, editingOrder]);
 
   /* 详情页「去点单 · 带上这道菜」带过来的 ?add=id */
   useEffect(() => {
@@ -102,21 +123,67 @@ export default function OrderScreen() {
     setManual('');
   }
 
-  function send() {
+  /* ─── 开新单 / 改旧单（共用上面那个 composer）────────────── */
+
+  /**
+   * 进改单模式：把这张单的餐次、菜、给掌勺的话填进 composer。
+   * composer 钉在列表上方（不在 .scroll 里），所以不用把它滚到眼前，
+   * 点完这一下用户就看得见顶上多了一条「正在修改」。
+   */
+  function startEdit(o: Order) {
+    if (editingId === o.id) return;
+    /* 已经改着另一张单：手上那份草稿只存一次，免得连点两张单把开新单的草稿弄丢 */
+    if (!editingId) draft.current = { meal, selected, note };
+    setEditingId(o.id);
+    setMeal(o.meal);
+    setSelected(orderItems(o).map((it) => ({ recipeId: it.recipeId, dishName: it.dishName })));
+    setNote(o.note ?? '');
+    setChangeReason('');
+    setPickQ('');
+  }
+
+  /** 不改了：退出改单模式，把进改单前那份草稿放回 composer */
+  function cancelEdit() {
+    setEditingId(null);
+    setChangeReason('');
+    const d = draft.current;
+    draft.current = null;
+    if (!d) return;
+    setMeal(d.meal);
+    setSelected(d.selected);
+    setNote(d.note);
+  }
+
+  function submit() {
     if (!selected.length) {
-      toast('先选几道菜再发', false);
+      toast(editingId ? '一单至少留一道菜（不想吃了就长按删掉整单）' : '先选几道菜再发', false);
       return;
     }
     setSending(true);
     const items = selected;
     const mealNow = meal;
     const noteNow = note.trim();
+    const editId = editingId;
+    /* 已接的单改完会退回「待接」（见 store 的 updateOrder），这里按改之前的状态给提示 */
+    const wasAccepted = Boolean(editId && db.orders.find((o) => o.id === editId)?.status === 'accepted');
     window.setTimeout(() => {
-      addOrder({ meal: mealNow, items, note: noteNow });
+      if (editId) {
+        updateOrder(editId, { meal: mealNow, items, note: noteNow, reason: changeReason });
+        toast(
+          wasAccepted
+            ? `已改好这一单 · 菜单变了，${names.partnerName}需要重新接单`
+            : `已改好这一单 · ${names.partnerName}会看到`,
+        );
+      } else {
+        addOrder({ meal: mealNow, items, note: noteNow });
+        toast(`已发给${names.partnerName} · 等待接单`);
+      }
+      draft.current = null;
+      setChangeReason('');
+      setEditingId(null);
       setSelected([]);
       setNote('');
       setSending(false);
-      toast(`已发给${names.partnerName} · 等待接单`);
     }, 720);
   }
 
@@ -158,6 +225,12 @@ export default function OrderScreen() {
     toast(`已删除「${title}」`);
   }
 
+  /** 掌勺方标了「已完成」但其实还没做完（手滑 / 提前点）→ 退回「已接」，接着还能改 */
+  function restore(o: Order) {
+    restoreOrder(o.id);
+    toast(`已恢复成没做完 · ${names.partnerName}会看到`);
+  }
+
   function onCardClick(id: string) {
     if (longPressed.current) {
       longPressed.current = false;
@@ -197,10 +270,41 @@ export default function OrderScreen() {
       </header>
 
       <section className="composer">
+        {/* 改单模式：一条状态栏说清「正在改哪张单」，右端给出口 */}
+        {editingOrder && (
+          <div className="editbar">
+            <div className="eb-top">
+              <Icon name="pencil" />
+              <span className="ebt">正在修改：{orderSummary(editingOrder)}</span>
+              <button type="button" className="btn-sticker" onClick={cancelEdit}>
+                取消修改
+              </button>
+            </div>
+            {/* 原因可不填：填了掌勺那边展开这张单就看得到；不填就只记「改了什么」 */}
+            <ClearInput
+              className="eb-why"
+              type="text"
+              maxLength={30}
+              autoComplete="off"
+              spellCheck={false}
+              value={changeReason}
+              placeholder="为什么改（可不填），掌勺那边看得到"
+              aria-label="为什么改"
+              onChange={(e) => setChangeReason(e.target.value)}
+              onClear={() => setChangeReason('')}
+              {...preserveTypedValue(setChangeReason)}
+            />
+          </div>
+        )}
         <div className="crow">
           <div className="clabel">
-            <b>{meal === 'lunch' ? '今天中午' : '今天晚上'}</b>
-            <span>从菜谱库挑几道，凑成一顿</span>
+            {/* 改单时不写「今天中午」——跨天落进历史的那张单未必是今天的 */}
+            <b>{editingOrder ? '改这一顿' : meal === 'lunch' ? '今天中午' : '今天晚上'}</b>
+            <span>
+              {editingOrder
+                ? `改完点下面保存，${names.partnerName}会看到新菜单`
+                : '从菜谱库挑几道，凑成一顿'}
+            </span>
           </div>
           <div className="seg ony" role="group" aria-label="选择午晚餐">
             <button type="button" className={meal === 'lunch' ? 'on' : ''} onClick={() => setMeal('lunch')}>
@@ -241,17 +345,19 @@ export default function OrderScreen() {
           {...preserveTypedValue(setNote)}
         />
 
-        <button className="sendbtn" disabled={!canSend} onClick={send}>
+        <button className="sendbtn" disabled={!canSend} onClick={submit}>
           {sending ? (
             <>
-              <span className="spinner" aria-hidden /> 正在发送…
+              <span className="spinner" aria-hidden /> {editingId ? '正在保存…' : '正在发送…'}
             </>
           ) : (
             <>
-              <Icon name="send" />
+              <Icon name={editingId ? 'save' : 'send'} />
               <span>
                 {selected.length
-                  ? `发给${names.partnerName} · ${mealLabel(meal)} · ${selected.length} 道`
+                  ? editingId
+                    ? `保存修改 · ${mealLabel(meal)} · ${selected.length} 道`
+                    : `发给${names.partnerName} · ${mealLabel(meal)} · ${selected.length} 道`
                   : '先选几道菜'}
               </span>
             </>
@@ -372,7 +478,7 @@ export default function OrderScreen() {
             <div className="sechead">
               <div>
                 <h2 className="h3">今日点单</h2>
-                <p className="hint">点一张单可展开看里面每道菜 · 长按可删除</p>
+                <p className="hint">点一张单可展开 · 没做完的能改 · 长按可删除</p>
               </div>
               <span className="meta">{todayOrders.length} 份</span>
             </div>
@@ -396,7 +502,10 @@ export default function OrderScreen() {
                     db={db}
                     partner={names.partnerName}
                     open={open.has(o.id)}
+                    editing={editingId === o.id}
                     onToggle={() => onCardClick(o.id)}
+                    onEdit={() => (editingId === o.id ? cancelEdit() : startEdit(o))}
+                    onRestore={() => restore(o)}
                     onPressStart={(el) => startPress(el, o)}
                     onPressEnd={cancelPress}
                   />
@@ -428,7 +537,10 @@ export default function OrderScreen() {
                       db={db}
                       partner={names.partnerName}
                       open={open.has(o.id)}
+                      editing={editingId === o.id}
                       onToggle={() => onCardClick(o.id)}
+                      onEdit={() => (editingId === o.id ? cancelEdit() : startEdit(o))}
+                      onRestore={() => restore(o)}
                       onPressStart={(el) => startPress(el, o)}
                       onPressEnd={cancelPress}
                     />
@@ -454,7 +566,10 @@ function OrderCard({
   db,
   partner,
   open,
+  editing,
   onToggle,
+  onEdit,
+  onRestore,
   onPressStart,
   onPressEnd,
 }: {
@@ -463,7 +578,13 @@ function OrderCard({
   /** 做饭的那个人的昵称（我下的单由对方掌勺） */
   partner: string;
   open: boolean;
+  /** 这张单正被改成什么样（上面那个 composer 里） */
+  editing: boolean;
   onToggle: () => void;
+  /** 进 / 出改单模式（出口与 composer 上那条状态栏一致） */
+  onEdit: () => void;
+  /** 已完成的单 → 恢复成没做完（退回「已接」，恢复完就能接着改） */
+  onRestore: () => void;
   /** 按下这张单的卡头（长按计时起点） */
   onPressStart: (el: HTMLElement) => void;
   /** 松手 / 划走 / 取消长按 */
@@ -474,7 +595,11 @@ function OrderCard({
   const main = orderMain(order);
 
   return (
-    <div className={`card sticker ocard${order.status === 'done' ? ' done' : ''}${open ? ' open' : ''}`}>
+    <div
+      className={`card sticker ocard${order.status === 'done' ? ' done' : ''}${open ? ' open' : ''}${
+        editing ? ' editing' : ''
+      }`}
+    >
       <button
         className="osum"
         aria-expanded={open}
@@ -522,6 +647,9 @@ function OrderCard({
 
         {order.note && <div className="onote">给掌勺的话：{order.note}</div>}
 
+        {/* 掌勺方加 / 减过菜：谁、什么时候、为什么 —— 与掌勺那边看到的是同一块 */}
+        <OrderChanges changes={orderChanges(order)} db={db} />
+
         <div className="foot">
           {order.status === 'done' ? (
             <>
@@ -530,6 +658,21 @@ function OrderCard({
             </>
           ) : (
             `${partner}回传状态后，这里会自动更新（每 1 分钟拉取）`
+          )}
+        </div>
+
+        {/* 没做完的能改；已完成的先恢复成没做完，再改（入口都在这一行） */}
+        <div className="oactions">
+          {order.status === 'done' ? (
+            <button type="button" className="btn-sticker" onClick={onRestore}>
+              <Icon name="sync" />
+              恢复成没做完
+            </button>
+          ) : (
+            <button type="button" className="btn-sticker" aria-pressed={editing} onClick={onEdit}>
+              <Icon name={editing ? 'x' : 'pencil'} />
+              {editing ? '取消修改' : '修改这单'}
+            </button>
           )}
         </div>
       </div>

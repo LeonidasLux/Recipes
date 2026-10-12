@@ -135,9 +135,12 @@
 .s-cook .cook-note svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 1.9; flex: 0 0 auto; margin-top: 2px; }
 .s-cook .cc-act { display: flex; gap: 10px; border-top: 1.5px dashed var(--border); padding-top: 10px; }
 .s-cook .cc-act .btn-sticker { flex: 1; }
-.s-cook .doneflag { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 700; color: var(--muted);
+/* 已做完的卡片底部：一行「做完啦…」+ 一枚「恢复成没做完」 */
+.s-cook .donerow { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
   border-top: 1.5px dashed var(--border); padding-top: 10px; }
+.s-cook .doneflag { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 700; color: var(--muted); }
 .s-cook .doneflag svg { width: 15px; height: 15px; stroke: var(--ok); fill: none; stroke-width: 2.2; }
+.s-cook .donerow .btn-sticker { flex: 0 0 auto; min-height: 36px; padding: 6px 14px; font-size: 12.5px; }
 .s-cook .cookcard.done { opacity: .72; }
 .s-cook .notice { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 11px 16px; }
 .s-cook .notice svg { width: 15px; height: 15px; stroke: var(--muted); fill: none; stroke-width: 2; }
@@ -306,6 +309,20 @@
 .s-order .odetail .foot { font-size: 11.5px; color: var(--muted); margin-top: 8px; display: flex; align-items: center; gap: 5px; }
 .s-order .odetail .foot svg { width: 12px; height: 12px; stroke: var(--ok); fill: none; stroke-width: 2.4; }
 .s-order .ocard.done { opacity: .7; }
+/* 改一张还没做完的单：composer 顶上那条状态栏 + 卡片里的入口按钮 */
+.s-order .editbar { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; padding: 8px 10px;
+  border: 2px dashed var(--accent-deep); border-radius: 15px; background: var(--accent-soft);
+  font-size: 12.5px; font-weight: 600; color: var(--accent-ink); }
+.s-order .editbar .eb-top { display: flex; align-items: center; gap: 8px; }
+.s-order .editbar svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2; flex: 0 0 auto; }
+.s-order .editbar .ebt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.s-order .editbar .btn-sticker { flex: 0 0 auto; min-height: 34px; padding: 6px 12px; font-size: 12.5px; }
+/* 改单原因（可不填）：跟「给掌勺的话」那种窄输入一条 */
+.s-order .editbar .eb-why { width: 100%; min-height: 36px; padding: 0 12px; border-radius: 13px;
+  border: 1.5px solid var(--border); background: #fff; color: var(--fg); font: inherit; font-size: 13px; }
+.s-order .editbar .clearwrap > .eb-why { padding-right: 40px; }
+.s-order .oactions { display: flex; justify-content: flex-end; margin-top: 10px; }
+.s-order .ocard.editing { border-color: var(--accent-deep); box-shadow: 0 3px 0 0 var(--accent-deep); }
 .s-order .odetail .dit .st { font-size: 11.5px; }
 .s-order .grid-empty { grid-column: 1 / -1; padding: 22px 14px; }
 

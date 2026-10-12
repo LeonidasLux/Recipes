@@ -197,6 +197,8 @@ export default function Library() {
           <div className="navrow">
             <h1 className="ptitle" style={{ margin: 0 }}>
               我的菜谱库
+              {/* 菜谱库总数：搜索只筛列表，这里始终报本库的全量 */}
+              <span className="pcount">（{db.recipes.length}）</span>
             </h1>
             {/* 右上角：点一下立刻同步一次（有本地改动就推，没有就拉），不用特地去设置页 */}
             <SyncButton />

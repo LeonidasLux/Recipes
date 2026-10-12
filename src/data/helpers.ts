@@ -2,6 +2,7 @@ import type {
   DB,
   Meal,
   Order,
+  OrderChange,
   OrderItem,
   OrderStatus,
   PersonKey,
@@ -72,6 +73,59 @@ export function mealLabel(meal: Meal): string {
 
 export function orderItems(o: Order): OrderItem[] {
   return o?.items ?? [];
+}
+
+/** 掌勺方在这张单上记过的加减菜记录（老数据 / 老仓库没有这个字段） */
+export function orderChanges(o: Order): OrderChange[] {
+  return o?.changes ?? [];
+}
+
+/**
+ * 一条改动记录的文字：`减掉「A」「B」、加了「C」、改成晚餐、给掌勺的话改成「少放辣」`
+ * （同步日志与卡片上的记录共用这一句话）。
+ */
+export function changeText(c: OrderChange): string {
+  const parts: string[] = [];
+  if (c.removed.length) parts.push(`减掉${c.removed.map((n) => `「${n}」`).join('')}`);
+  if (c.added.length) parts.push(`加了${c.added.map((n) => `「${n}」`).join('')}`);
+  if (c.meal) parts.push(`改成${mealLabel(c.meal)}`);
+  if (c.note !== undefined) {
+    parts.push(c.note ? `给掌勺的话改成「${c.note}」` : '清空了给掌勺的话');
+  }
+  return parts.join('、');
+}
+
+/** 一条改动记录到底改了什么（什么都没有 = 空改动，不该落库） */
+export function hasChange(c: OrderChange): boolean {
+  return Boolean(c.removed.length || c.added.length || c.meal || c.note !== undefined);
+}
+
+/**
+ * 两张菜列表的差（按「菜谱 id / 菜名」逐份对消）：返回少的（被减掉的）与多的（加上去的）菜名。
+ * 同一道菜在单里出现两次也按份数算 —— 点菜方改单时拿它生成改动记录。
+ */
+export function diffItems(
+  before: OrderItem[],
+  after: OrderItem[],
+): { removed: string[]; added: string[] } {
+  const keyOf = (it: OrderItem) => (it.recipeId ? `r:${it.recipeId}` : `n:${it.dishName}`);
+  const pool = new Map<string, OrderItem[]>();
+  before.forEach((it) => {
+    const k = keyOf(it);
+    pool.set(k, [...(pool.get(k) ?? []), it]);
+  });
+  const added: OrderItem[] = [];
+  after.forEach((it) => {
+    const k = keyOf(it);
+    const bucket = pool.get(k) ?? [];
+    const hit = bucket.shift();
+    if (hit) pool.set(k, bucket);
+    else added.push(it);
+  });
+  return {
+    removed: [...pool.values()].flat().map((it) => it.dishName),
+    added: added.map((it) => it.dishName),
+  };
 }
 
 export function itemNames(o: Order): string[] {

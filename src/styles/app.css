@@ -107,6 +107,8 @@ img { -webkit-user-drag: none; }
   text-shadow: 0 2px 0 color-mix(in oklch, var(--accent-soft) 70%, transparent);
 }
 .ptitle small { display: block; font-family: var(--font-body); font-size: 13px; font-weight: 400; color: var(--muted); letter-spacing: 0; text-shadow: none; }
+/* 标题里缀的菜谱数量：小一号 + 等宽 + 弱色，读得出数但抢不了主标题 */
+.pcount { font-family: var(--font-mono); font-size: 16px; font-weight: 700; letter-spacing: 0; color: var(--muted); text-shadow: none; }
 
 .navrow { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .navrow .left { display: flex; align-items: center; gap: 10px; min-width: 0; }
@@ -526,6 +528,100 @@ textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible {
 .ds-manual { margin: 0; }
 .ds-link { justify-content: center; }
 @keyframes odpop { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: none; } }
+
+/* ─── 改这顿的菜单（掌勺方加 / 减菜，每次都要写原因）──────
+   与菜品详情、关于同一层（z-index 30）：盖住底部导航（3），Toast（40）仍浮在上面 */
+.menusheet { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 18px 14px; }
+.ms-mask { position: absolute; inset: 0; border: 0; padding: 0; cursor: pointer;
+  background: color-mix(in oklch, var(--ink) 44%, transparent); animation: odfade .16s ease; }
+.ms-card { position: relative; width: min(420px, 100%); max-height: calc(100dvh - 36px); overflow: hidden;
+  padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 10px; animation: odpop .18s ease; }
+/* 菜谱列表可以滚，但「原因 + 保存」这一块永远留在眼前 */
+.ms-body { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
+.ms-foot { flex: 0 0 auto; display: flex; flex-direction: column; gap: 8px;
+  border-top: 1.5px dashed var(--border); padding-top: 10px; }
+.ms-sum { font-size: 12.5px; font-weight: 700; color: var(--muted); }
+.ms-sum.on { color: var(--accent-ink); }
+.ms-close { position: absolute; top: 10px; right: 10px; z-index: 1; width: 36px; height: 36px; border-radius: 50%;
+  border: 0; background: color-mix(in oklch, var(--ink) 10%, transparent); color: var(--fg);
+  display: grid; place-items: center; cursor: pointer; }
+.ms-close:hover { background: color-mix(in oklch, var(--ink) 20%, transparent); }
+.ms-close svg { width: 17px; height: 17px; stroke: currentColor; fill: none; stroke-width: 2.2; }
+.ms-title { margin: 0; padding-right: 40px; font-family: var(--font-display); font-size: 20px; line-height: 1.25; }
+.ms-sub { margin: 0; font-size: 12px; line-height: 1.45; color: var(--muted); }
+.ms-sec { display: flex; flex-direction: column; gap: 8px; }
+.ms-label { font-size: 12.5px; font-weight: 700; color: var(--muted); }
+.ms-dishes { display: flex; flex-direction: column; }
+.ms-dish { display: grid; grid-template-columns: 34px 1fr auto; gap: 9px; align-items: center;
+  padding: 7px 0; border-top: 1.5px dashed var(--border); }
+.ms-dish:first-child { border-top: 0; }
+.ms-dish.on { background: var(--accent-soft); border-radius: 12px; padding: 7px 10px; }
+.ms-dish.on .ms-name { text-decoration: line-through; color: var(--muted); }
+.ms-thumb { width: 34px; height: 34px; border-radius: 10px; overflow: hidden; border: 1.5px solid var(--border);
+  background: var(--accent-soft); display: grid; place-items: center; }
+.ms-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ms-thumb .mono { font-family: var(--font-display); font-size: 14px; color: var(--accent-ink); }
+.ms-name { font-size: 14px; font-weight: 500; line-height: 1.3; min-width: 0; word-break: break-word; }
+.ms-toggle { flex: 0 0 auto; min-height: 32px; padding: 4px 12px; border-radius: 999px; border: 1.5px solid var(--ink);
+  background: var(--surface); color: var(--fg); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.ms-toggle:hover { background: color-mix(in oklch, var(--danger) 12%, var(--surface)); }
+.ms-toggle.on { background: var(--fg); border-color: var(--fg); color: #fff; }
+.ms-toggle.on:hover { background: var(--ink); }
+.ms-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ms-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 4px 3px 10px; border-radius: 999px;
+  background: var(--accent-soft); border: 1.5px solid var(--border); font-size: 12.5px; font-weight: 600; }
+.ms-chip .x { width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%;
+  background: color-mix(in oklch, var(--ink) 10%, transparent); color: var(--fg);
+  display: grid; place-items: center; cursor: pointer; }
+.ms-chip .x svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 2.4; }
+.ms-input { width: 100%; min-height: 42px; padding: 0 14px; border-radius: 13px;
+  border: 1.5px solid var(--border); background: #fff; color: var(--fg); font: inherit; font-size: 13.5px; }
+.ms-foot .field .clearwrap > .ms-input { padding-right: 40px; }
+.ms-ract { display: flex; gap: 8px; }
+.ms-ract .btn-sticker { flex: 1; min-height: 40px; font-size: 13.5px; }
+/* 「确认减掉 / 加进这单」比「算了」宽一点：那一枚才是这层里要点的 */
+.ms-ract .ms-ok { flex: 1.4; }
+.ms-search { position: relative; display: flex; align-items: center; gap: 8px; padding: 0 12px; min-height: 42px;
+  border: 1.5px solid var(--border); border-radius: 14px; background: var(--surface); }
+.ms-search svg { width: 16px; height: 16px; stroke: var(--muted); fill: none; stroke-width: 2; flex: 0 0 auto; }
+.ms-search input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--fg);
+  font: inherit; font-size: 14px; padding: 0; min-height: 38px; }
+.ms-search input:focus { outline: none; }
+.ms-sclear { width: 26px; height: 26px; border: 0; background: color-mix(in oklch, var(--ink) 9%, transparent);
+  border-radius: 50%; color: var(--muted); display: grid; place-items: center; cursor: pointer; padding: 0; }
+.ms-sclear svg { width: 14px; height: 14px; stroke: currentColor; }
+.ms-list { display: flex; flex-direction: column; gap: 6px; max-height: 188px; overflow-y: auto; }
+.ms-empty { margin: 0; font-size: 12.5px; color: var(--muted); }
+.ms-pick { display: grid; grid-template-columns: 34px 1fr auto; gap: 9px; align-items: center; padding: 6px 8px;
+  border: 1.5px solid var(--border); border-radius: 13px; background: var(--surface); color: var(--fg);
+  font: inherit; text-align: left; cursor: pointer; min-width: 0; }
+.ms-pick:hover { border-color: var(--ink); }
+.ms-pick:disabled { opacity: .55; cursor: default; }
+.ms-pick.on { border-color: var(--ink); background: color-mix(in oklch, var(--accent) 10%, #fff); }
+.ms-pick .pt { width: 34px; height: 34px; border-radius: 10px; overflow: hidden; border: 1.5px solid var(--border);
+  background: var(--accent-soft); display: grid; place-items: center; }
+.ms-pick .pt img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ms-pick .t { font-size: 13.5px; font-weight: 600; line-height: 1.3; min-width: 0;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ms-pick .tag { font-size: 11.5px; font-weight: 700; color: var(--accent-ink); background: var(--accent-soft);
+  border-radius: 999px; padding: 3px 9px; }
+.ms-pick.on .tag { color: #fff; background: var(--fg); }
+.ms-manual { display: flex; gap: 8px; align-items: center; }
+.ms-manual .clearwrap { flex: 1; min-width: 0; }
+.ms-manual .clearwrap > input { width: 100%; min-height: 42px; padding: 0 14px; border-radius: 14px;
+  border: 1.5px solid var(--border); background: var(--surface); color: var(--fg); font: inherit; font-size: 14px; }
+.ms-manual .clearwrap > input { padding-right: 40px; }
+.ms-manual .btn-sticker { flex: 0 0 auto; min-height: 42px; padding: 6px 16px; font-size: 13.5px; }
+
+/* ─── 掌勺方改过菜单的记录（点单 / 掌勺两屏的订单卡共用）──────── */
+.ochanges { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; padding: 8px 10px;
+  border-radius: 11px; background: color-mix(in oklch, var(--ink) 5%, transparent); }
+.ochanges .oc-t { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700; color: var(--muted); }
+.ochanges .oc-t svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 2; }
+.ochanges .oc-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+.ochanges .oc-list li { font-size: 12px; line-height: 1.45; color: var(--fg); word-break: break-word; }
+.ochanges .oc-at { font-family: var(--font-mono); font-size: 11px; color: var(--muted); margin-right: 5px; }
+.ochanges .oc-why { color: var(--accent-ink); }
 
 /* ─── 「关于」弹窗（设置页）────────────────── */
 /* 与菜品详情同一层（z-index 30）：盖住底部导航（3），Toast（40）仍浮在上面 */

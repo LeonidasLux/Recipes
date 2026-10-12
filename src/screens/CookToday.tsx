@@ -6,15 +6,17 @@ import { RoleSwitch } from '../components/RoleSwitch';
 import { SkeletonRows, StateCard, StatusChip } from '../components/Bits';
 import { Icon } from '../components/Icons';
 import { DishSheet } from '../components/DishSheet';
+import { MenuSheet } from '../components/MenuSheet';
+import { OrderChanges } from '../components/OrderChanges';
 import { anchorDeleteTip, DeleteTip, type DeleteTipState } from '../components/DeleteTip';
-import { initial, itemCover, mealLabel, orderItems } from '../data/helpers';
+import { initial, itemCover, mealLabel, orderChanges, orderItems } from '../data/helpers';
 import { Cover } from '../components/Photo';
 import { useNames } from '../data/useNames';
 import { useBackClose } from '../lib/back';
 import type { Order, OrderItem } from '../data/types';
 
 export default function CookToday() {
-  const { db, deleteOrder, setOrderStatus, me } = useStore();
+  const { db, deleteOrder, setOrderStatus, restoreOrder, changeOrderDishes, me } = useStore();
   const { toast } = useToast();
   /* 掌勺屏：只做对方点的单；我自己点的那份留在「点单」里 */
   const names = useNames();
@@ -26,12 +28,16 @@ export default function CookToday() {
   const [showDone, setShowDone] = useState(false);
   /* 点了哪道菜 → 弹它的详情；null 表示没弹 */
   const [dish, setDish] = useState<OrderItem | null>(null);
+  /* 正在给哪张单改菜单（加 / 减菜弹层）；null 表示没弹 */
+  const [menuId, setMenuId] = useState<string | null>(null);
   /* 长按某张单的卡头 → 弹删除提示（今日菜单 / 已做完都支持） */
   const [tip, setTip] = useState<DeleteTipState | null>(null);
   const pressTimer = useRef<number | null>(null);
 
   /* 菜品详情是遮罩：手机返回键先关它，而不是退出应用（点遮罩 / × / Esc 照旧） */
   useBackClose(dish !== null, () => setDish(null));
+  /* 改菜单弹层也是遮罩：返回键先关它 */
+  useBackClose(menuId !== null, () => setMenuId(null));
   /* 删除提示也是遮罩：返回键先收起它 */
   useBackClose(tip !== null, closeTip);
 
@@ -53,6 +59,32 @@ export default function CookToday() {
       setPendingId(null);
       toast(next === 'accepted' ? `已接下 · ${names.partnerName}会看到` : '已标完成 · 已同步');
     }, 600);
+  }
+
+  /** 「全部做好了」点错了 / 其实还没做完 → 退回「已接」，卡片回到今天要做的那一摞 */
+  function restore(o: Order) {
+    setPendingId(o.id);
+    window.setTimeout(() => {
+      restoreOrder(o.id);
+      setPendingId(null);
+      toast(`已恢复成没做完 · ${names.partnerName}会看到`);
+    }, 600);
+  }
+
+  /* ─── 改菜单（加 / 减菜，整批写一句原因）──────────
+     只对「已接」的单动：还没接的先接下，做完的去「恢复成没做完」。
+     一次可以减几道、加几道（混着来也行），改完整批提交一句原因，点菜那边看得明白。 */
+  const menuOrder = menuId ? db.orders.find((o) => o.id === menuId) ?? null : null;
+
+  function saveMenu(input: { add: OrderItem[]; remove: number[]; reason: string }) {
+    if (!menuOrder) return;
+    const { add, remove, reason } = input;
+    changeOrderDishes(menuOrder.id, { add, remove, reason });
+    setMenuId(null);
+    const parts = [remove.length ? `减 ${remove.length} 道` : '', add.length ? `加 ${add.length} 道` : '']
+      .filter(Boolean)
+      .join(' · ');
+    toast(`菜单改好了（${parts}） · ${names.partnerName}会看到`);
   }
 
   /* ─── 长按删除 ─────────────────────────────────
@@ -133,6 +165,8 @@ export default function CookToday() {
                       partner={names.partnerName}
                       pending={pendingId === o.id}
                       onAdvance={() => advance(o)}
+                      onRestore={() => restore(o)}
+                      onOpenMenu={() => setMenuId(o.id)}
                       onOpenDish={setDish}
                       onPressStart={(el) => startPress(el, o)}
                       onPressEnd={cancelPress}
@@ -163,8 +197,10 @@ export default function CookToday() {
                           order={o}
                           db={db}
                           partner={names.partnerName}
-                          pending={false}
+                          pending={pendingId === o.id}
                           onAdvance={() => {}}
+                          onRestore={() => restore(o)}
+                          onOpenMenu={() => setMenuId(o.id)}
                           onOpenDish={setDish}
                           onPressStart={(el) => startPress(el, o)}
                           onPressEnd={cancelPress}
@@ -189,6 +225,15 @@ export default function CookToday() {
       {tip && <DeleteTip tip={tip} onDelete={() => removeOrder(tip.id, tip.title)} onClose={closeTip} />}
 
       {dish && <DishSheet item={dish} db={db} onClose={() => setDish(null)} />}
+
+      {menuOrder && (
+        <MenuSheet
+          order={menuOrder}
+          db={db}
+          onSave={saveMenu}
+          onClose={() => setMenuId(null)}
+        />
+      )}
     </div>
   );
 }
@@ -199,6 +244,8 @@ function CookCard({
   partner,
   pending,
   onAdvance,
+  onRestore,
+  onOpenMenu,
   onOpenDish,
   onPressStart,
   onPressEnd,
@@ -209,6 +256,10 @@ function CookCard({
   partner: string;
   pending: boolean;
   onAdvance: () => void;
+  /** 已做完的单 → 恢复成没做完（退回「已接」） */
+  onRestore: () => void;
+  /** 已接的单 → 弹「改这顿的菜单」（加 / 减菜，每次都要写原因） */
+  onOpenMenu: () => void;
   /** 点某道菜 → 上层弹它的详情 */
   onOpenDish: (item: OrderItem) => void;
   /** 按卡头（长按计时起点） */
@@ -272,11 +323,21 @@ function CookCard({
         </div>
       )}
 
+      {/* 我自己改过这单的菜单（加 / 减了什么、为什么）—— 与点菜那边看到的是同一块 */}
+      <OrderChanges changes={orderChanges(order)} db={db} />
+
       {isDone ? (
-        <span className="doneflag">
-          <Icon name="check" />
-          做完啦，{partner}已收到
-        </span>
+        <div className="donerow">
+          <span className="doneflag">
+            <Icon name="check" />
+            做完啦，{partner}已收到
+          </span>
+          {/* 点错了 / 其实还没做完：退回「已接」，卡片回到上面那一摞 */}
+          <button className="btn-sticker" disabled={pending} onClick={onRestore}>
+            <Icon name="sync" />
+            {pending ? '正在同步…' : '恢复成没做完'}
+          </button>
+        </div>
       ) : (
         <div className="cc-act">
           {order.status === 'pending' ? (
@@ -284,9 +345,16 @@ function CookCard({
               {pending ? '正在同步…' : '接下这顿'}
             </button>
           ) : (
-            <button className="btn-sticker primary" disabled={pending} onClick={onAdvance}>
-              {pending ? '正在同步…' : '全部做好了'}
-            </button>
+            <>
+              {/* 家里缺料 / 多了食材：加减一道，写清为什么 */}
+              <button className="btn-sticker" onClick={onOpenMenu}>
+                <Icon name="pencil" />
+                加减菜
+              </button>
+              <button className="btn-sticker primary" disabled={pending} onClick={onAdvance}>
+                {pending ? '正在同步…' : '全部做好了'}
+              </button>
+            </>
           )}
         </div>
       )}
