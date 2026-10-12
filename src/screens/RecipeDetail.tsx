@@ -26,7 +26,7 @@ export default function RecipeDetail() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   /** 点开看大图（只有真有照片时才可能为 true） */
   const [zoom, setZoom] = useState(false);
-  const [draft, setDraft] = useState({ title: '', url: '', image: '', steps: '', note: '' });
+  const [draft, setDraft] = useState({ title: '', url: '', image: '', steps: '', ingredients: '', note: '' });
 
   /* 照片：本机缓存优先，没有就去仓库取一张（取到了写回缓存） */
   const { src: photo } = useRecipePhoto(recipe?.image, { fetch: true });
@@ -46,7 +46,14 @@ export default function RecipeDetail() {
 
   function startEdit() {
     if (!recipe) return;
-    setDraft({ title: recipe.title, url: recipe.url, image: recipe.image, steps: recipe.steps, note: recipe.note });
+    setDraft({
+      title: recipe.title,
+      url: recipe.url,
+      image: recipe.image,
+      steps: recipe.steps,
+      ingredients: recipe.ingredients,
+      note: recipe.note,
+    });
     setEditing(true);
   }
 
@@ -81,6 +88,7 @@ export default function RecipeDetail() {
       url: draft.url.trim(),
       image,
       steps: draft.steps.trim(),
+      ingredients: draft.ingredients.trim(),
       note: draft.note.trim(),
     });
     setEditing(false);
@@ -275,6 +283,17 @@ export default function RecipeDetail() {
                       />
                     </div>
                     <div className="field">
+                      <label htmlFor="editIngredients">原材料</label>
+                      <ClearArea
+                        id="editIngredients"
+                        value={draft.ingredients}
+                        onChange={(e) => setDraft((d) => ({ ...d, ingredients: e.target.value }))}
+                        onClear={() => setDraft((d) => ({ ...d, ingredients: '' }))}
+                        {...preserveTypedValue((v) => setDraft((d) => ({ ...d, ingredients: v })))}
+                        placeholder="一行一样，比如「牛腩 500g」「番茄 3 个」。"
+                      />
+                    </div>
+                    <div className="field">
                       <label htmlFor="editNote">我的备注</label>
                       <ClearArea
                         id="editNote"
@@ -330,6 +349,12 @@ export default function RecipeDetail() {
                     <div className="card sticker notecard" style={{ padding: 16, marginBottom: 14 }}>
                       <h3 style={{ margin: '0 0 8px' }}>做法</h3>
                       <p className="steps-text">{recipe.steps}</p>
+                    </div>
+                  )}
+                  {recipe.ingredients.trim() && (
+                    <div className="card sticker notecard" style={{ padding: 16, marginBottom: 14 }}>
+                      <h3 style={{ margin: '0 0 8px' }}>原材料</h3>
+                      <p className="steps-text">{recipe.ingredients}</p>
                     </div>
                   )}
                   <div className="card sticker notecard" style={{ padding: 16 }}>

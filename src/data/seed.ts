@@ -54,6 +54,7 @@ export function seed(): DB {
         art: 'tomato-beef.svg',
         image: '',
         note: '高压锅 40 分钟更省事；八角可放可不放，不放汤色更清。',
+        ingredients: '牛腩 500g\n番茄 3 个（约 600g）\n姜 3 片\n八角 1 颗\n番茄膏 1 勺\n盐、冰糖适量',
         steps: '1. 牛腩冷水下锅焯水，撇沫捞出。\n2. 番茄去皮切块，一半先炒出沙，一半后放。\n3. 加热水没过牛腩，小火炖 40 分钟。\n4. 收汁前调味，撒葱花。',
         createdAt: past(48, 10, 12),
         updatedAt: past(1, 20, 30),
@@ -66,6 +67,7 @@ export function seed(): DB {
         art: 'scallion-noodle.svg',
         image: '',
         note: '葱油一次多熬一点，密封冷藏能存两周。',
+        ingredients: '小葱 200g\n面条 2 人份\n鸡蛋 2 个\n生抽 2 勺\n老抽 半勺\n糖 1 小勺\n食用油 200ml',
         steps: '1. 葱切段，冷油小火熬到葱变焦黄，滤出葱油。\n2. 水开下面，煮 2 分钟捞出过冰水。\n3. 鸡蛋煮 6 分半，冰水泡过再剥壳。\n4. 面拌葱油、生抽和一点糖，摆上溏心蛋。',
         createdAt: past(49, 21, 5),
         updatedAt: past(6, 12, 40),
@@ -78,6 +80,7 @@ export function seed(): DB {
         art: 'coconut-chicken.svg',
         image: '',
         note: '两只椰青取水打底，不用再加一滴清水。',
+        ingredients: '椰青 2 只\n三黄鸡 1 只（约 1kg）\n马蹄 6 颗\n姜 3 片\n蘸料：生抽、小米辣、小青柠',
         steps: '1. 两只椰青取水，椰肉挖成条。\n2. 鸡块冷水下锅焯水后洗净。\n3. 椰水加等量清水煮开，下鸡块煮 8 分钟。\n4. 先喝汤，再涮菜。',
         createdAt: past(53, 18, 0),
         updatedAt: past(7, 8, 15),
@@ -90,6 +93,7 @@ export function seed(): DB {
         art: 'basque-cake.svg',
         image: '',
         note: '奶油奶酪要室温软化，面糊过筛两遍更细腻。',
+        ingredients: '奶油奶酪 250g\n细砂糖 60g\n鸡蛋 2 个\n淡奶油 150g\n低筋面粉 10g',
         steps: '1. 奶油奶酪室温软化，加糖打顺滑。\n2. 分次加蛋液拌匀，再加淡奶油。\n3. 筛入面粉，面糊过筛两遍。\n4. 220℃ 烤 25 分钟，表面焦黑即可，冷藏一夜更好吃。',
         createdAt: past(56, 15, 30),
         updatedAt: past(8, 21, 9),
@@ -102,6 +106,7 @@ export function seed(): DB {
         art: 'three-cup-chicken.svg',
         image: '',
         note: '九层塔要关火再放，香气差很多。',
+        ingredients: '鸡腿 2 只\n老姜 1 块\n蒜瓣 6 粒\n九层塔 1 把\n麻油 3 勺\n酱油 3 勺\n米酒 3 勺\n糖 1 勺',
         steps: '1. 鸡腿切块，用米酒抓一下。\n2. 麻油小火煸姜片到卷边，下蒜瓣。\n3. 下鸡块煎上色，加酱油、米酒、糖。\n4. 收汁后关火，拌入九层塔。',
         createdAt: past(59, 9, 45),
         updatedAt: past(12, 19, 26),
@@ -114,6 +119,7 @@ export function seed(): DB {
         art: 'mango-sticky-rice.svg',
         image: '',
         note: '椰浆里加一小撮盐再淋，甜而不腻。',
+        ingredients: '糯米 150g\n芒果 1 个\n椰浆 200ml\n糖 2 勺\n盐 一小撮',
         steps: '1. 糯米提前泡 4 小时，上锅蒸 25 分钟。\n2. 椰浆加糖和一小撮盐，小火煮化。\n3. 趁热把椰浆拌进糯米，盖上焖 15 分钟。\n4. 配芒果片，淋剩下的椰浆。',
         createdAt: past(63, 14, 0),
         updatedAt: past(17, 10, 21),
@@ -197,9 +203,10 @@ export function normalizeProfiles(raw: unknown): Profiles {
 }
 
 /**
- * 把任意来源的菜谱规整成当前 schema。补全项只有三个：
+ * 把任意来源的菜谱规整成当前 schema。补全项只有这几个：
  *   · `createdAt`：老缓存 / 老仓库（写于加这个字段之前）没有，用 `updatedAt` 顶上；
  *   · `steps`（做法）：同样可能缺，补空串。
+ *   · `ingredients`（原材料）：写于加它之前的老数据没有，补空串。
  *   · `orderCount`（点单次数）：同样可能缺（或不是数字），补 0。
  * 另外把已经不再记录的 `author` / `source`（来源平台）从存量数据里摘掉 ——
  * 这两个字段连同相关逻辑一起删了，留着只会让老缓存 / 老仓库一路带下去。
@@ -217,6 +224,8 @@ export function normalizeRecipes(raw: unknown): Recipe[] {
       r.createdAt = typeof r.updatedAt === 'string' && r.updatedAt ? r.updatedAt : '—';
     }
     if (typeof r.steps !== 'string') r.steps = '';
+    /* 原材料字段写于加它之前的老缓存 / 老仓库没有：补空串（详情页只在有内容时才显示那张卡） */
+    if (typeof r.ingredients !== 'string') r.ingredients = '';
     /* 照片字段写于加它之前的老缓存 / 老仓库没有：补空串，别让渲染期读到 undefined */
     if (typeof r.image !== 'string') r.image = '';
     /* 手写 / 早期版本加进来的菜谱 art 常常是空串（只在「添加」那一刻猜过一次）：

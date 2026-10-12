@@ -157,13 +157,15 @@ export interface StoreValue {
     art: string;
     /** 照片在仓库里的路径（空串 = 没有）；图先让同步引擎上传，路径随菜谱一起落库 */
     image: string;
+    /** 原材料（一行一样；没写就是空串） */
+    ingredients: string;
     steps: string;
     note: string;
     /** 调用方可以指定 id：上传照片时得先知道图片路径（images/<id>.jpg） */
     id?: string;
   }): Recipe;
-  /** 改菜谱的菜名 / 原文出处 / 照片 / 做法 / 备注（内容改动，会触发推送） */
-  updateRecipe(id: string, patch: { title?: string; url?: string; image?: string; steps?: string; note?: string }): void;
+  /** 改菜谱的菜名 / 原文出处 / 照片 / 原材料 / 做法 / 备注（内容改动，会触发推送） */
+  updateRecipe(id: string, patch: { title?: string; url?: string; image?: string; ingredients?: string; steps?: string; note?: string }): void;
   /** 删菜谱（内容改动，会触发推送）；订单里的菜名是快照，不受影响 */
   deleteRecipe(id: string): void;
   /** 一次删多道菜谱（菜谱库多选删除用）：一次提交、一条日志 */
@@ -297,6 +299,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           url: input.url,
           art: input.art,
           image: input.image,
+          ingredients: input.ingredients,
           steps: input.steps,
           note: input.note,
           createdAt: nowStamp(),
@@ -318,6 +321,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (patch.title !== undefined) r.title = patch.title;
           if (patch.url !== undefined) r.url = patch.url;
           if (patch.image !== undefined) r.image = patch.image;
+          if (patch.ingredients !== undefined) r.ingredients = patch.ingredients;
           if (patch.steps !== undefined) r.steps = patch.steps;
           if (patch.note !== undefined) r.note = patch.note;
           r.updatedAt = nowStamp();

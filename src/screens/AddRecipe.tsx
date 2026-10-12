@@ -16,6 +16,7 @@ import { preserveTypedValue } from '../lib/inputs';
 interface RecipeDraft {
   title: string;
   steps: string;
+  ingredients: string;
   url: string;
   note: string;
 }
@@ -57,6 +58,7 @@ export default function AddRecipe() {
   const [title, setTitle] = useState('');
   const [url, setUrl] = useState('');
   const [steps, setSteps] = useState('');
+  const [ingredients, setIngredients] = useState('');
   const [note, setNote] = useState('');
   /** 点过保存但还没菜名（这时才把「菜名」标红） */
   const [titleBad, setTitleBad] = useState(false);
@@ -153,7 +155,7 @@ export default function AddRecipe() {
       dataUrl: '',
       state: 'wait',
       error: '',
-      draft: { title: '', steps: '', url: '', note: '' },
+      draft: { title: '', steps: '', ingredients: '', url: '', note: '' },
     }));
     batchStop.current = false;
     setBatchTriedSave(false);
@@ -183,6 +185,7 @@ export default function AddRecipe() {
           draft: {
             title: ai.title,
             steps: ai.steps,
+            ingredients: ai.ingredients,
             url: '',
             note: ai.note,
           },
@@ -258,6 +261,7 @@ export default function AddRecipe() {
       }
       /* AI 抽不出来时，本地解析的标题（比如搜索链接的搜索词）不会被清掉 */
       if (ai.title) setTitle(ai.title);
+      if (ai.ingredients) setIngredients(ai.ingredients);
       if (ai.steps) setSteps(ai.steps);
       /* 备注不覆盖用户已经写下的内容 */
       if (ai.note) setNote((n) => (n.trim() ? n : ai.note));
@@ -277,7 +281,7 @@ export default function AddRecipe() {
       return;
     }
     setSaving(true);
-    const input = recipeInputFrom({ title, steps, url, note }, photo);
+    const input = recipeInputFrom({ title, steps, ingredients, url, note }, photo);
     window.setTimeout(() => {
       addRecipe(input);
       toast('已保存 · 已同步');
@@ -438,13 +442,14 @@ export default function AddRecipe() {
             <RecipeFields
               prefix="m"
               titleInvalid={titleBad}
-              value={{ title, steps, url, note }}
+              value={{ title, steps, ingredients, url, note }}
               onChange={(patch) => {
                 if (patch.title !== undefined) {
                   setTitle(patch.title);
                   setTitleBad(false);
                 }
                 if (patch.steps !== undefined) setSteps(patch.steps);
+                if (patch.ingredients !== undefined) setIngredients(patch.ingredients);
                 if (patch.url !== undefined) setUrl(patch.url);
                 if (patch.note !== undefined) setNote(patch.note);
               }}
@@ -596,6 +601,18 @@ function RecipeFields({
       </div>
 
       <div className="field">
+        <label htmlFor={`${prefix}Ingredients`}>原材料</label>
+        <ClearArea
+          id={`${prefix}Ingredients`}
+          placeholder="一行一样，比如「牛腩 500g」「番茄 3 个」"
+          value={value.ingredients}
+          onChange={(e) => onChange({ ingredients: e.target.value })}
+          onClear={() => onChange({ ingredients: '' })}
+          {...preserveTypedValue((v) => onChange({ ingredients: v }))}
+        />
+      </div>
+
+      <div className="field">
         <label htmlFor={`${prefix}Url`}>原文链接</label>
         <ClearInput
           id={`${prefix}Url`}
@@ -642,6 +659,7 @@ function recipeInputFrom(draft: RecipeDraft, dataUrl: string) {
     art: guessArt(title),
     image,
     steps: draft.steps.trim(),
+    ingredients: draft.ingredients.trim(),
     note: draft.note.trim(),
   };
 }

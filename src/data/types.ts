@@ -19,6 +19,8 @@ export interface Recipe {
    * 本机只缓存一份 data URL 供离线显示，读图见 `src/lib/photo.ts`。
    */
   image: string;
+  /** 原材料：一行一样（「牛腩 500g」这种）；没写就是空串 */
+  ingredients: string;
   /** 做法（步骤）。手动加的菜谱主要就靠这一段；剪藏来的可以留空 */
   steps: string;
   note: string;

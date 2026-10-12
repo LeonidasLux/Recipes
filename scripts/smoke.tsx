@@ -484,7 +484,19 @@ function installFakeGithub(opts: {
       const title = (opts.aiTitles ?? [])[aiCount] ?? '';
       aiCount++;
       if (opts.aiDelayMs) await new Promise((r) => setTimeout(r, opts.aiDelayMs));
-      return json({ choices: [{ message: { content: JSON.stringify({ title, steps: '1. 焯水' }) } }] });
+      return json({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                title,
+                ingredients: title ? `${title}的原料` : '',
+                steps: '1. 焯水',
+              }),
+            },
+          },
+        ],
+      });
     }
 
     /* Git Trees：仓库里 images/ 的清单（只给路径 + sha，不含图的正文） */
@@ -1706,7 +1718,10 @@ async function interactionChecks() {
   {
     const m = await mount('/add');
     /* 手填不藏在「手动添加」按钮后面：字段一直摆着，直接写就行（少一层展开收起） */
-    check(m.$('#mTitle') !== null && m.$('#mSteps') !== null, '★ 一进来就能直接填菜名和做法');
+    check(
+      m.$('#mTitle') !== null && m.$('#mSteps') !== null && m.$('#mIngredients') !== null,
+      '★ 一进来就能直接填菜名、做法和原材料',
+    );
     check(m.$('#manualBtn') === null, '没有多余的「手动添加」按钮');
     check(m.$('#mAuthor') === null && m.$('#mSource') === null, '★ 表单里不再有「作者 / 来源」两格');
     check(m.$('[aria-label="查看大图"]') === null, '★ 没选截图时封面是插画 / 首字，不给点（示意图放大没意义）');
@@ -1714,8 +1729,16 @@ async function interactionChecks() {
       m.html().indexOf('粘贴小红书') < m.html().indexOf('id="mTitle"'),
       '顺序是先「贴链接 / 传截图」再填菜谱本身',
     );
+    /* 原材料夹在做法与备注中间（原文链接也在这段里，顺序是 做法 → 原材料 → 原文链接 → 备注） */
+    const html = m.html();
+    check(
+      html.indexOf('id="mSteps"') < html.indexOf('id="mIngredients"') &&
+        html.indexOf('id="mIngredients"') < html.indexOf('id="mNote"'),
+      '★ 原材料排在做法和备注中间',
+    );
 
     await m.type('#mTitle', '外婆的梅干菜扣肉');
+    await m.type('#mIngredients', '梅干菜 80g\n五花肉 500g\n生抽 2 勺\n冰糖 10g');
     await m.type('#mSteps', '1. 梅干菜泡软\n2. 五花肉焯水\n3. 上锅蒸 1 小时');
     await m.type('#mNote', '蒸久一点更糯');
     await m.click('.actionbar .btn-primary');
@@ -1723,6 +1746,11 @@ async function interactionChecks() {
     const added = readDb().recipes[0];
     check(added?.title === '外婆的梅干菜扣肉', '★ 手动添加保存成功');
     check(added?.steps === '1. 梅干菜泡软\n2. 五花肉焯水\n3. 上锅蒸 1 小时', '★ 做法落库', JSON.stringify(added?.steps));
+    check(
+      added?.ingredients === '梅干菜 80g\n五花肉 500g\n生抽 2 勺\n冰糖 10g',
+      '★ 原材料落库（换行原样保留）',
+      JSON.stringify(added?.ingredients),
+    );
     check(added?.note === '蒸久一点更糯', '备注落库');
     check(
       added?.url === '',
@@ -1790,6 +1818,7 @@ async function interactionChecks() {
                 message: {
                   content: JSON.stringify({
                     title: '番茄牛腩',
+                    ingredients: '牛腩 500g\n番茄 3 个',
                     steps: '1. 牛腩冷水下锅焯水\n2. 小火炖 40 分钟',
                     note: '八角可放可不放',
                   }),
@@ -1827,6 +1856,11 @@ async function interactionChecks() {
 
     check(m.value('#mTitle') === '番茄牛腩', '★ AI 的菜名填进输入框', `实际「${m.value('#mTitle')}」`);
     check(
+      m.value('#mIngredients') === '牛腩 500g\n番茄 3 个',
+      '★ AI 把原材料也拆出来填进「原材料」',
+      JSON.stringify(m.value('#mIngredients')),
+    );
+    check(
       m.value('#mSteps') === '1. 牛腩冷水下锅焯水\n2. 小火炖 40 分钟',
       '★ AI 把做法也拆出来填进「做法」',
       JSON.stringify(m.value('#mSteps')),
@@ -1839,9 +1873,11 @@ async function interactionChecks() {
     await m.wait(1000);
     const added = readDb().recipes[0];
     check(
-      added?.title === '番茄牛腩' && added?.steps === '1. 牛腩冷水下锅焯水\n2. 小火炖 40 分钟',
+      added?.title === '番茄牛腩'
+        && added?.steps === '1. 牛腩冷水下锅焯水\n2. 小火炖 40 分钟'
+        && added?.ingredients === '牛腩 500g\n番茄 3 个',
       '★ AI 识别结果能一路存进仓库',
-      JSON.stringify({ title: added?.title, steps: added?.steps }),
+      JSON.stringify({ title: added?.title, ingredients: added?.ingredients, steps: added?.steps }),
     );
     await m.close();
     ds.restore();
@@ -1902,7 +1938,7 @@ async function interactionChecks() {
         reply: () =>
           jsonRes({
             choices: [
-              { message: { content: '{"title":"红烧肉","steps":"1. 焯水后炒糖色","note":"小火慢炖"}' } },
+              { message: { content: '{"title":"红烧肉","ingredients":"五花肉 800g\\n冰糖 30g","steps":"1. 焯水后炒糖色","note":"小火慢炖"}' } },
             ],
           }),
       },
@@ -1931,6 +1967,7 @@ async function interactionChecks() {
     const sent = JSON.stringify(call?.body ?? {});
     check(sent.includes(SHOT_DATA_URL), '★ 选完截图自动识图，整张图交给了 DeepSeek');
     check(m.value('#mTitle') === '红烧肉', '★ 识图结果把菜名填进表单', m.value('#mTitle'));
+    check(m.value('#mIngredients') === '五花肉 800g\n冰糖 30g', '★ 识图结果里的原材料也填进表单');
     check(m.value('#mSteps') === '1. 焯水后炒糖色', '做法也填进去了');
     check(!sent.includes('r.jina.ai'), '没有链接就不去读页面');
 
@@ -1988,6 +2025,7 @@ async function interactionChecks() {
       [m.value('#b0Title'), m.value('#b1Title'), m.value('#b2Title')].join(' / '),
     );
     check(m.value('#b1Steps') === '1. 焯水', '做法也各自填好');
+    check(m.value('#b1Ingredients') === '糖醋排骨的原料', '★ 原材料也各自填好');
     check(m.$('#mTitle') === null, '批量时不摆单条那张表单');
     check(m.$$('[aria-label^="查看第"]').length === 3, '每张图的封面都点得开看大图');
 
@@ -2005,6 +2043,11 @@ async function interactionChecks() {
       added.some((r) => r.title === '糖醋小排' && r.note === '第 2 张的备注'),
       '★ 用户改过的内容按改后的存',
       JSON.stringify(added.map((r) => r.title)),
+    );
+    check(
+      added.every((r) => r.ingredients.endsWith('的原料')),
+      '★ 批量入库的三条各带自己的原材料',
+      JSON.stringify(added.map((r) => r.ingredients)),
     );
     check(
       new Set(added.map((r) => r.image)).size === 3 && added.every((r) => /^images\/r_.+\.png$/.test(r.image)),
@@ -2708,19 +2751,26 @@ async function interactionChecks() {
 
     await m.ime('#mTitle', '可乐鸡翅');
     await m.ime('#mSteps', '1. 焯水\n2. 煎到两面金黄\n3. 加可乐焖 20 分钟');
+    await m.ime('#mIngredients', '鸡翅中 8 个\n可乐 1 罐');
     await m.ime('#mNote', '收汁时开盖');
     await m.blur('#mNote');
     check(
-      m.value('#mTitle') === '可乐鸡翅' && m.value('#mNote') === '收汁时开盖' && m.value('#mSteps').includes('焖 20 分钟'),
-      '标题 / 做法 / 备注输入框不丢字',
+      m.value('#mTitle') === '可乐鸡翅'
+        && m.value('#mNote') === '收汁时开盖'
+        && m.value('#mSteps').includes('焖 20 分钟')
+        && m.value('#mIngredients').includes('可乐 1 罐'),
+      '标题 / 做法 / 原材料 / 备注输入框不丢字',
     );
 
     await m.click('.actionbar .btn-primary');
     await m.wait(1000);
     const added = readDb().recipes[0];
     check(
-      added?.title === '可乐鸡翅' && added?.note === '收汁时开盖' && added?.steps === '1. 焯水\n2. 煎到两面金黄\n3. 加可乐焖 20 分钟',
-      '★ 靠输入法填进去的标题、做法与备注真的存进库',
+      added?.title === '可乐鸡翅'
+        && added?.note === '收汁时开盖'
+        && added?.steps === '1. 焯水\n2. 煎到两面金黄\n3. 加可乐焖 20 分钟'
+        && added?.ingredients === '鸡翅中 8 个\n可乐 1 罐',
+      '★ 靠输入法填进去的标题、做法、原材料与备注真的存进库',
       JSON.stringify(added),
     );
     await m.close();
@@ -3107,6 +3157,15 @@ async function aiChecks() {
       /图上没编号也要补上/.test(aiText(msgs[0])),
       '★ 识图时也要求把步骤编号（图上没编号就自己补）',
     );
+    check(
+      /ingredients/.test(aiText(msgs[0])) && /一行一样/.test(aiText(msgs[0])),
+      '★ 提示词要求单独抽一份原材料（一行一样、带用量）',
+      aiText(msgs[0]),
+    );
+    check(
+      /食材与用量统一放 "ingredients"/.test(aiText(msgs[0])),
+      '★ 用量归原材料，做法里不再重复',
+    );
 
     /* 带截图：content 变成「文字 + 图片」块，走 deepseek-flash 的识图 */
     const SHOT = 'data:image/jpeg;base64,c2hvdA==';
@@ -3141,17 +3200,24 @@ async function aiChecks() {
   );
   check(parseJsonLoose('完全不是 JSON') === null, '不是 JSON → null');
   {
-    const r = normalizeAiRecipe({ 菜名: '【番茄牛腩】', 做法: '1. 焯水', 小贴士: '少放盐' });
+    const r = normalizeAiRecipe({ 菜名: '【番茄牛腩】', 食材: '牛腩 500g', 做法: '1. 焯水', 小贴士: '少放盐' });
     check(
-      r.title === '番茄牛腩' && r.steps === '1. 焯水' && r.note === '少放盐',
+      r.title === '番茄牛腩' && r.ingredients === '牛腩 500g' && r.steps === '1. 焯水' && r.note === '少放盐',
       '中文字段名 / 书名号也能规整',
       JSON.stringify(r),
     );
+    check(normalizeAiRecipe({ 原材料: '五花肉 800g' }).ingredients === '五花肉 800g', '★ 中文「原材料」字段名也认');
+    check(normalizeAiRecipe({ ingredients: '牛腩 500g' }).ingredients === '牛腩 500g', '英文字段名照收');
     check(
       !('author' in normalizeAiRecipe({ author: '阿珍' })),
       '★ 模型就算回了 author，规整后也不留这个字段',
     );
-    check(normalizeAiRecipe({}).title === '' && normalizeAiRecipe(null).steps === '', '缺字段补空串，不编造');
+    check(
+      normalizeAiRecipe({}).title === ''
+        && normalizeAiRecipe({}).ingredients === ''
+        && normalizeAiRecipe(null).steps === '',
+      '缺字段补空串，不编造',
+    );
     check(normalizeAiRecipe({ title: 'x'.repeat(80) }).title.length === 20, '菜名裁到 20 字');
     check(
       normalizeAiRecipe({ title: '酸甜爽脆的腌萝卜保姆级教程来了‼️' }).title === '酸甜爽脆的腌萝卜',
@@ -5671,6 +5737,14 @@ async function edgeChecks() {
     check(m.html().includes(`收藏于 ${r5.createdAt}`), '★ 详情页显示收藏时间');
     check(m.html().includes(`更新于 ${r5.updatedAt}`), '★ 详情页显示更新时间');
     check(m.html().includes('做法') && m.html().includes('麻油小火煸姜片到卷边'), '★ 详情页展示做法');
+    check(m.html().includes('原材料') && m.html().includes('九层塔 1 把'), '★ 详情页展示原材料');
+    /* 三张卡片的先后：做法 → 原材料 → 我的备注 */
+    const detailHtml = m.html();
+    check(
+      detailHtml.indexOf('麻油小火煸姜片到卷边') < detailHtml.indexOf('九层塔 1 把')
+        && detailHtml.indexOf('九层塔 1 把') < detailHtml.indexOf('我的备注'),
+      '★ 原材料卡夹在做法与备注之间',
+    );
     await m.close();
   }
   {
@@ -5699,6 +5773,7 @@ async function edgeChecks() {
     } as unknown as Recipe;
     check(normalizeRecipes([legacy])[0].createdAt === '上周', '★ 缺 createdAt 的老菜谱用 updatedAt 顶上');
     check(normalizeRecipes([legacy])[0].steps === '', '缺做法的老菜谱补空串');
+    check(normalizeRecipes([legacy])[0].ingredients === '', '★ 缺原材料的老菜谱补空串');
     useDb((db) => {
       db.recipes = [legacy];
     });
@@ -5747,10 +5822,17 @@ async function edgeChecks() {
     const m = await mount('/recipe/r5');
     await m.click('#editRecipeBtn');
     check(
-      m.$('#editTitle') !== null && m.$('#editUrl') !== null && m.$('#editNote') !== null,
-      '★ 编辑表单有菜名 / 原文出处 / 备注三个字段',
+      m.$('#editTitle') !== null && m.$('#editUrl') !== null && m.$('#editNote') !== null && m.$('#editIngredients') !== null,
+      '★ 编辑表单有菜名 / 原文出处 / 原材料 / 备注四个字段',
     );
     check(m.value('#editTitle') === '台式三杯鸡', '带出当前菜名', m.value('#editTitle'));
+    check(m.value('#editIngredients') === '鸡腿 2 只\n老姜 1 块\n蒜瓣 6 粒\n九层塔 1 把\n麻油 3 勺\n酱油 3 勺\n米酒 3 勺\n糖 1 勺', '★ 带出当前原材料');
+    const editHtml = m.html();
+    check(
+      editHtml.indexOf('id="editSteps"') < editHtml.indexOf('id="editIngredients"')
+        && editHtml.indexOf('id="editIngredients"') < editHtml.indexOf('id="editNote"'),
+      '★ 编辑表单里原材料也排在做法和备注中间',
+    );
 
     /* 菜名清空 → 不保存，并给出提示 */
     await m.type('#editTitle', '   ');
@@ -5761,14 +5843,18 @@ async function edgeChecks() {
 
     await m.type('#editTitle', '三杯鸡（改良版）');
     await m.type('#editUrl', 'https://www.xiachufang.com/recipe/100');
+    await m.type('#editIngredients', '鸡腿 2 只\n九层塔 2 把');
     await m.type('#editNote', '九层塔最后放，关火再拌。');
     await m.click('.editrow .btn-sticker.primary');
     await m.wait(300);
     const r5 = readDb().recipes.find((r) => r.id === 'r5')!;
     check(
-      r5.title === '三杯鸡（改良版）' && r5.url === 'https://www.xiachufang.com/recipe/100' && r5.note === '九层塔最后放，关火再拌。',
-      '★ 菜名 / 原文出处 / 备注都落库',
-      JSON.stringify({ title: r5.title, url: r5.url, note: r5.note }),
+      r5.title === '三杯鸡（改良版）'
+        && r5.url === 'https://www.xiachufang.com/recipe/100'
+        && r5.ingredients === '鸡腿 2 只\n九层塔 2 把'
+        && r5.note === '九层塔最后放，关火再拌。',
+      '★ 菜名 / 原文出处 / 原材料 / 备注都落库',
+      JSON.stringify({ title: r5.title, url: r5.url, ingredients: r5.ingredients, note: r5.note }),
     );
     check(m.html().includes('三杯鸡（改良版）'), '改完详情页立刻显示新菜名');
     check(m.html().includes('https://www.xiachufang.com/recipe/100'), '原文出处也跟着更新');
@@ -6084,6 +6170,7 @@ async function edgeChecks() {
       await walk(m, '#shareInput', '粘贴的分享文案（多行）');
       await walk(m, '#mTitle', '菜名');
       await walk(m, '#mSteps', '做法（多行）');
+      await walk(m, '#mIngredients', '原材料（多行）');
       await walk(m, '#mUrl', '原文链接');
       await walk(m, '#mNote', '备注（多行）');
       await m.close();
@@ -6096,6 +6183,7 @@ async function edgeChecks() {
       await walk(m, '#editTitle', '详情编辑的菜名');
       await walk(m, '#editUrl', '详情编辑的原文出处');
       await walk(m, '#editSteps', '详情编辑的做法（多行）');
+      await walk(m, '#editIngredients', '详情编辑的原材料（多行）');
       await walk(m, '#editNote', '详情编辑的备注（多行）');
       await m.close();
     }
