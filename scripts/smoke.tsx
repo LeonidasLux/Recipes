@@ -3098,6 +3098,15 @@ async function aiChecks() {
     check(!/原链接页面线索/.test(aiText(msgs[0])), '提示词里不再有「原链接页面线索」（读原链接已删）');
     check(aiText(buildAiMessages('')[1]).includes('只给了一个链接'), '只给链接（没文案）时提示词也读得通');
     check(/截图|图里/.test(aiText(msgs[0])), '提示词交代了截图识图（只抄图里真实出现的字）');
+    check(
+      /有序列表/.test(aiText(msgs[0])) && /1\. 」「2\. 」「3\./.test(aiText(msgs[0])),
+      '★ 提示词要求做法必须用有序列表（每步一行、1. 2. 3. 编号）排列步骤',
+      aiText(msgs[0]),
+    );
+    check(
+      /图上没编号也要补上/.test(aiText(msgs[0])),
+      '★ 识图时也要求把步骤编号（图上没编号就自己补）',
+    );
 
     /* 带截图：content 变成「文字 + 图片」块，走 deepseek-flash 的识图 */
     const SHOT = 'data:image/jpeg;base64,c2hvdA==';
