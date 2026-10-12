@@ -116,6 +116,8 @@ import {
   checkForUpdate,
   compareVersions,
   formatBytes,
+  formatReleaseTime,
+  packedAt,
   parseLatestRelease,
   parseVersion,
   setUpdaterBridgeForTest,
@@ -853,6 +855,9 @@ function fakeRelease(version = NEXT_VERSION) {
         /* API 端点：另一台主机（api.github.com）上的同一个附件，下载换线路时用它 */
         url: `https://api.github.com/repos/L/Recipes/releases/assets/12345`,
         size: 7340032,
+        /* 附件上传 / 覆盖的时刻：比 Release 的 published_at 更贴近「这个包什么时候打出来的」 */
+        created_at: '2026-10-09T23:50:00Z',
+        updated_at: '2026-10-10T00:00:00Z',
       },
     ],
   };
@@ -5412,6 +5417,24 @@ async function edgeChecks() {
     check(apkCandidates(like)[1] === like.apkApiUrl, '连不上再换 api.github.com 那条');
     check(apkCandidates({ ...like, apkApiUrl: '' }).length === 1, 'Release 里没给端点时就只有直链');
     check(apkCandidates({ ...like, apkApiUrl: like.apkUrl }).length === 1, '两条地址相同时不重复试');
+
+    /* 打包时间：Release 发布时刻 + 附件上传 / 覆盖时刻 */
+    check(like.publishedAt === '2026-10-10T00:00:00Z' && like.assetAt === '2026-10-10T00:00:00Z', '★ 两个时间都从 Release 里读出来');
+    check(
+      DATE_TIME_RE.test(packedAt(like)) && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(packedAt(like)),
+      '★ 打包时间按本机时区写成「YYYY-MM-DD HH:MM」（和仓库里别的时间一个格式）',
+      packedAt(like),
+    );
+    check(
+      packedAt({ ...like, assetAt: '2026-10-09T23:50:00Z' }) === formatReleaseTime('2026-10-09T23:50:00Z'),
+      '★ 附件时间优先（同一个 version 重打包时只有它会变）',
+      packedAt({ ...like, assetAt: '2026-10-09T23:50:00Z' }),
+    );
+    check(packedAt({ ...like, assetAt: '' }) === formatReleaseTime(like.publishedAt), '缺附件时间就退回 Release 发布时刻');
+    check(
+      formatReleaseTime('') === '' && formatReleaseTime('瞎写') === '' && packedAt({ ...like, assetAt: '', publishedAt: '' }) === '',
+      '★ 时间缺失 / 解析不出来给空串（界面据此整段不显示，不印空值）',
+    );
   }
 
   console.log('\n[边界 · 应用内更新：查 GitHub Release]');
@@ -5504,6 +5527,11 @@ async function edgeChecks() {
       await settle(60);
       check(m.html().includes('发现新版本'), '★ 手机上打开「关于」自动查一次，发现新版本');
       check(m.html().includes(`v${NEXT_VERSION}`), `写清是哪个版本（v${NEXT_VERSION}）`);
+      check(
+        m.html().includes(`打包于 ${packedAt(parseLatestRelease(fakeRelease())!)}`),
+        '★ 「关于」里写清这一版是什么时候打出来的',
+        `期望包含「打包于 ${packedAt(parseLatestRelease(fakeRelease())!)}」`,
+      );
       check(bridgeCalls.length === 0, '还没点「下载并安装」，一个字节都没下');
       /* 按钮里的下载图标：尺寸只能靠样式表给（jsdom 不算布局），
          这里先钉住「图标确实挂在按钮里」，尺寸那条在下面的样式断言里验 */
@@ -5523,6 +5551,39 @@ async function edgeChecks() {
         bridgeCalls.join(' | '),
       );
       check(m.html().includes('已交给系统安装器'), '★ 下完把包交给系统安装器');
+      await m.close();
+    } finally {
+      gh.restore();
+      setUpdaterBridgeForTest(null);
+      setUpdaterPlatformForTest(null);
+    }
+  }
+
+  /* 已经是最新版：也把这条 Release 的打包时间摆出来（「关于」里一眼看出这版是什么时候打的） */
+  {
+    useDb();
+    setUpdaterPlatformForTest('android');
+    setUpdaterBridgeForTest({
+      async canInstall() {
+        return true;
+      },
+      async openInstallSettings() {},
+      async downloadAndInstall() {
+        return 'x';
+      },
+    });
+    const same = parseLatestRelease(fakeRelease(PKG_VERSION))!;
+    const gh = stubFetch([{ match: /releases\/latest/, reply: () => jsonRes(fakeRelease(PKG_VERSION)) }]);
+    try {
+      const m = await mount('/sync');
+      await m.click('#aboutBtn');
+      await settle(60);
+      check(m.html().includes('已是最新版本'), '同版本 → 「已是最新版本」');
+      check(
+        m.html().includes(`打包于 ${packedAt(same)}`),
+        '★ 已是最新时也写清这条包的打包时间',
+        m.text('.ab-upd-d'),
+      );
       await m.close();
     } finally {
       gh.restore();

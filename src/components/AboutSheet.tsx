@@ -4,6 +4,7 @@ import { APP_VERSION } from '../lib/version';
 import {
   checkForUpdate,
   formatBytes,
+  packedAt,
   installRelease,
   isAppUpdaterAvailable,
   updaterBridge,
@@ -43,6 +44,14 @@ export function AboutSheet({ onClose }: { onClose: () => void }) {
   /* 下载是「换个地址再试」的：把第几次尝试显示出来，人知道它还动着 */
   const [attempt, setAttempt] = useState<AttemptInfo | null>(null);
   const [message, setMessage] = useState('');
+  /** 这一版是什么时候打出来的（拿不到就是空串，界面上整段不显示） */
+  const packed = release ? packedAt(release) : '';
+  /** 「发现新版本」下面那行小字：当前版本 · 打包时间（有才写）· 安装包大小 */
+  const availableDetail = release
+    ? [`当前 v${APP_VERSION}`, packed && `打包于 ${packed}`, `安装包 ${formatBytes(release.sizeBytes)}`]
+        .filter(Boolean)
+        .join(' · ')
+    : '';
 
   const check = useCallback(async () => {
     setPhase('checking');
@@ -151,7 +160,10 @@ export function AboutSheet({ onClose }: { onClose: () => void }) {
             {phase === 'latest' && (
               <>
                 <p className="ab-upd-t ok">已是最新版本</p>
-                <p className="ab-upd-d">当前 v{latestVersion || APP_VERSION}</p>
+                <p className="ab-upd-d">
+                  当前 v{latestVersion || APP_VERSION}
+                  {packed && ` · 打包于 ${packed}`}
+                </p>
                 <div className="ab-upd-row">
                   <button
                     id="appUpdateCheckBtn"
@@ -170,9 +182,7 @@ export function AboutSheet({ onClose }: { onClose: () => void }) {
                 <p className="ab-upd-t">
                   发现新版本 <b>v{release.version}</b>
                 </p>
-                <p className="ab-upd-d">
-                  当前 v{APP_VERSION} · 安装包 {formatBytes(release.sizeBytes)} · 装好后重新打开应用
-                </p>
+                <p className="ab-upd-d">{availableDetail}</p>
                 <div className="ab-upd-row">
                   <button
                     id="appUpdateInstallBtn"

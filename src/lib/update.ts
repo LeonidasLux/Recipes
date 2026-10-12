@@ -14,6 +14,7 @@
 
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { APP_VERSION } from './version';
+import { stamp } from '../data/helpers';
 
 /** 更新来源：本项目自己的公开仓库（读 Release 不需要 token，未登录限流 60 次/小时也够用） */
 export const UPDATE_REPO = 'LeonidasLux/Recipes';
@@ -61,8 +62,31 @@ export interface ReleaseInfo {
   apkApiUrl: string;
   apkName: string;
   sizeBytes: number;
+  /** Release 发布时刻（ISO / UTC）：CI 打完包、把附件挂上之后建 Release 的那一下 */
   publishedAt: string;
+  /**
+   * APK 附件上传 / 覆盖的时刻（ISO / UTC）—— 比 `publishedAt` 更贴近「这个包是什么时候打出来的」：
+   * 同一个 version 又出了一次包时，工作流是 `gh release upload --clobber` 覆盖附件，
+   * Release 本身不动（`publishedAt` 不变），而附件时间会跟着刷新。
+   */
+  assetAt: string;
   notes: string;
+}
+
+/**
+ * 把 GitHub 给的 ISO 时间（UTC，如 `2026-10-13T04:12:33Z`）按**本机时区**写成
+ * 仓库里统一那套 `2026-10-13 12:12`（见 `helpers.ts` 的 `stamp`，必须带年月日）。
+ * 解析不出来给空串 —— 界面据此整段不显示，不印一个空值。
+ */
+export function formatReleaseTime(iso: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : stamp(d);
+}
+
+/** 「这个包是什么时候打出来的」：优先附件时间，退回 Release 发布时刻；拿不到给空串 */
+export function packedAt(info: ReleaseInfo): string {
+  return formatReleaseTime(info.assetAt || info.publishedAt);
 }
 
 export class UpdateError extends Error {
@@ -108,6 +132,13 @@ export function parseLatestRelease(raw: unknown): ReleaseInfo | null {
     apkName: String(pick.name),
     sizeBytes: typeof pick.size === 'number' ? pick.size : 0,
     publishedAt: typeof r.published_at === 'string' ? r.published_at : '',
+    /* 覆盖上传会刷新 updated_at；万一只有 created_at 也认 */
+    assetAt:
+      typeof pick.updated_at === 'string'
+        ? pick.updated_at
+        : typeof pick.created_at === 'string'
+          ? pick.created_at
+          : '',
     notes: typeof r.body === 'string' ? r.body : '',
   };
 }
