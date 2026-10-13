@@ -89,4 +89,5 @@
 - **新增任何遮罩 / 弹层（盖住整屏、可关闭的界面）必须用 `useBackClose(open, close)` 登记**，否则按返回会直接退屏或退出应用，而不是关掉这层。
 - **新增原生插件后必须跑 `npx cap sync android`**，并把 `android/capacitor.settings.gradle`、`android/app/capacitor.build.gradle` 这些生成物一起提交；少了这一步，`android/` 工程里没有这个插件，真机上等于没接。
 - 网页端（PWA）不接管返回键：`Capacitor.isNativePlatform()` 为 false 时交给浏览器自己，`exit` 分支不执行。
+- **新增深链页（`/o/<id>` 这类「过一下就走」的瞬时页）必须 `replace` 落到一级页**，不要留在返回栈里、也**不要**加进 `ROOT_PATHS`；分享链接的生成 / 解析改了要同步补 `scripts/smoke.tsx` 的「分享 · 深链」一节（链接随平台变：原生包给 `jishiben://o/<id>`、网页版给本页地址 + `#/o/<id>`，见 `CONTEXT.md` §5 / §11）。
 - 相关测试在 `scripts/smoke.tsx` 的「手机返回键」一节，直接调 `pressBack()`，走和真机同一条路径。**新增 / 调整一级页、二级页、遮罩时都必须补上对应断言**（含「一级页之间不互相回退」这一条，见 §5）。

@@ -142,6 +142,8 @@
 .s-cook .doneflag svg { width: 15px; height: 15px; stroke: var(--ok); fill: none; stroke-width: 2.2; }
 .s-cook .donerow .btn-sticker { flex: 0 0 auto; min-height: 36px; padding: 6px 14px; font-size: 12.5px; }
 .s-cook .cookcard.done { opacity: .72; }
+/* 从分享链接点进来的那一张：描一圈 accent 当路标，跟旁边几张区分开（不是订单状态） */
+.s-cook .cookcard.fromlink { border-color: var(--accent-deep); box-shadow: 0 3px 0 0 var(--accent-deep); }
 .s-cook .notice { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 11px 16px; }
 .s-cook .notice svg { width: 15px; height: 15px; stroke: var(--muted); fill: none; stroke-width: 2; }
 
@@ -350,7 +352,8 @@
 .s-order .editbar .eb-why { width: 100%; min-height: 36px; padding: 0 12px; border-radius: 13px;
   border: 1.5px solid var(--border); background: #fff; color: var(--fg); font: inherit; font-size: 13px; }
 .s-order .editbar .clearwrap > .eb-why { padding-right: 40px; }
-.s-order .oactions { display: flex; justify-content: flex-end; margin-top: 10px; }
+/* 卡片底部那行动作：分享 / 修改这单 / 恢复成没做完，靠右排、窄屏也换行 */
+.s-order .oactions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 .s-order .ocard.editing { border-color: var(--accent-deep); box-shadow: 0 3px 0 0 var(--accent-deep); }
 .s-order .odetail .dit .st { font-size: 11.5px; }
 .s-order .grid-empty { grid-column: 1 / -1; padding: 22px 14px; }

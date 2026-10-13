@@ -31,6 +31,7 @@ import { Cover } from '../components/Photo';
 import { useNames } from '../data/useNames';
 import { preserveTypedValue } from '../lib/inputs';
 import { useBackClose } from '../lib/back';
+import { orderLink, orderShareText, shareOrderText } from '../lib/shareOrder';
 import type { IconName } from '../components/Icons';
 import type { DB, Meal, Order, OrderItem } from '../data/types';
 
@@ -111,6 +112,19 @@ export default function OrderScreen() {
       setSp(next, { replace: true });
     }
   }, [sp, db.recipes, setSp]);
+
+  /* 分享链接进来（`?open=<id>`）：把那一单展开 —— 点开链接的人要一眼看到是哪张单 */
+  useEffect(() => {
+    const openId = sp.get('open');
+    if (!openId) return;
+    const next = new URLSearchParams(sp);
+    next.delete('open');
+    setSp(next, { replace: true });
+    setOpen((prev) => new Set(prev).add(openId));
+    /* 历史点单那一摞默认折叠着：要打开的单在里头就顺手铺开 */
+    const o = db.orders.find((x) => x.id === openId);
+    if (o && orderDay(o) < dateKey()) setShowHistory(true);
+  }, [sp, setSp, db.orders]);
 
   useEffect(() => {
     const t = window.setTimeout(() => setLoading(false), 480);
@@ -257,6 +271,19 @@ export default function OrderScreen() {
     deleteOrder(id);
     closeTip();
     toast(`已删除「${title}」`);
+  }
+
+  /**
+   * 分享这一单：走系统分享面板（原生与网页版都是它，面板第一格就是微信），
+   * 这台机器根本没有面板（桌面浏览器）时退回复制，让用户自己粘进微信。
+   */
+  async function shareOrder(o: Order) {
+    try {
+      const how = await shareOrderText(orderShareText(o, orderLink(o.id)));
+      if (how === 'copied') toast(`分享文案已复制 · 粘贴到微信发给${names.partnerName}`);
+    } catch {
+      toast('分享失败，稍后再试', false);
+    }
   }
 
   /** 掌勺方标了「已完成」但其实还没做完（手滑 / 提前点）→ 退回「已接」，接着还能改 */
@@ -584,6 +611,7 @@ export default function OrderScreen() {
                     editing={editingId === o.id}
                     onToggle={() => onCardClick(o.id)}
                     onEdit={() => (editingId === o.id ? cancelEdit() : startEdit(o))}
+                    onShare={() => void shareOrder(o)}
                     onRestore={() => restore(o)}
                     onPressStart={(el) => startPress(el, o)}
                     onPressEnd={cancelPress}
@@ -614,6 +642,7 @@ export default function OrderScreen() {
                     editing={editingId === o.id}
                     onToggle={() => onCardClick(o.id)}
                     onEdit={() => (editingId === o.id ? cancelEdit() : startEdit(o))}
+                    onShare={() => void shareOrder(o)}
                     onRestore={() => restore(o)}
                     onPressStart={(el) => startPress(el, o)}
                     onPressEnd={cancelPress}
@@ -649,6 +678,7 @@ export default function OrderScreen() {
                       editing={editingId === o.id}
                       onToggle={() => onCardClick(o.id)}
                       onEdit={() => (editingId === o.id ? cancelEdit() : startEdit(o))}
+                      onShare={() => void shareOrder(o)}
                       onRestore={() => restore(o)}
                       onPressStart={(el) => startPress(el, o)}
                       onPressEnd={cancelPress}
@@ -678,6 +708,7 @@ function OrderCard({
   editing,
   onToggle,
   onEdit,
+  onShare,
   onRestore,
   onPressStart,
   onPressEnd,
@@ -692,6 +723,8 @@ function OrderCard({
   onToggle: () => void;
   /** 进 / 出改单模式（出口与 composer 上那条状态栏一致） */
   onEdit: () => void;
+  /** 分享这一单（系统分享面板，面板里第一个就是微信） */
+  onShare: () => void;
   /** 已完成的单 → 恢复成没做完（退回「已接」，恢复完就能接着改） */
   onRestore: () => void;
   /** 按下这张单的卡头（长按计时起点） */
@@ -784,6 +817,11 @@ function OrderCard({
               {editing ? '取消修改' : '修改这单'}
             </button>
           )}
+          {/* 分享排在最后：改单 / 恢复那两枚才是这张卡的主动作 */}
+          <button type="button" className="btn-sticker" onClick={onShare}>
+            <Icon name="share" />
+            分享给微信
+          </button>
         </div>
       </div>
     </div>

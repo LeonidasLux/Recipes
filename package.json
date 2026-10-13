@@ -1,7 +1,7 @@
 {
   "name": "jishiben",
   "private": true,
-  "version": "1.0.18",
+  "version": "1.0.19",
   "type": "module",
   "description": "记食本 — 菜谱收藏 + 点单，数据存在你自己的 GitHub 仓库里",
   "scripts": {
@@ -22,6 +22,7 @@
     "@capacitor/android": "^6.2.2",
     "@capacitor/app": "^6.0.3",
     "@capacitor/core": "^6.2.2",
+    "@capacitor/share": "^6.0.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router-dom": "^7.6.0"

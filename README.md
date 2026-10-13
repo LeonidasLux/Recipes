@@ -449,6 +449,7 @@ src/
 ├── lib/
 │   ├── github.ts            GitHub Contents API 客户端（UTF-8 安全 base64 / 错误分类 / 图片文件读写）
 │   ├── share.ts             分享文案解析 + 封面插画猜测
+│   ├── shareOrder.ts         分享点单（系统分享面板）+ 深链：生成 / 解析 jishiben://o/<id>
 │   ├── ai.ts                DeepSeek Chat Completions 客户端（AI 识别 + 截图识图 + Key 工具）
 │   ├── photo.ts             菜谱照片：读文件 → 压成 data URL → 本机缓存
 │   ├── photoQueue.ts        照片取图队列：一次最多两路并行、滚到眼前才取、失败冷却
@@ -595,6 +596,12 @@ android/app/src/main/java/…/AppUpdaterPlugin.java   本地 Capacitor 插件：
 
 ## 已知限制 / 后续可做
 
+- **分享点单给微信**：点单卡上的「分享给微信」走系统分享面板，文案最后一行是这一单的链接 ——
+  原生包里是应用自己的 scheme `jishiben://o/<订单 id>`，点一下就唤起应用并跳到那一单；
+  网页版分享的是本页地址 + `#/o/<订单 id>`（点开是网页版的这一单）。
+  注意**微信聊天里自定义 scheme 只是纯文本**（微信只把 http(s) 认成可点链接），
+  要真的「在微信里点一下就进应用」得给一个域名做 Android App Links（放 `.well-known/assetlinks.json`），
+  解析与路由都已备好，只差域名 —— 细节见 `CONTEXT.md` §5 / §12。
 - 没配 AI Key 时「识别」走的是**解析分享文案**，不是抓页面 —— 原因和做法见下方专节。**任何情况下都不会去读原链接**（`r.jina.ai` 这条第三方依赖已随「作者」字段一起删掉），识别只用你粘贴的文案 / 截图。
 - 「标题只留菜名」是启发式：带标点的文案收得干净，长而不带标点的会留长（配 AI 时由模型兜）；只贴一条搜索链接时取链接里的搜索词当标题。
 - AI 识别要用户自备 DeepSeek API Key；没配 / 关掉 / 失败都退回本地解析。识别时文案会发给 `api.deepseek.com`，介意就别开 AI。

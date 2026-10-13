@@ -26,6 +26,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- 分享点单发出去的链接：jishiben://o/<订单 id>。
+                 点一下由系统把应用拉起来（应用没开着时读 getLaunchUrl，开着时收 appUrlOpen），
+                 再由路由跳到那一单 —— 见 src/lib/shareOrder.ts 与 App.tsx 的 OpenOrder。
+                 activity 已经是 singleTask：应用开着时不会重开一个，新链接直接交给同一个实例。 -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="jishiben" />
+            </intent-filter>
+
         </activity>
 
         <provider

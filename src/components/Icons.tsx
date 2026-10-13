@@ -181,6 +181,16 @@ const PATHS = {
       <path d="M5 20h14" />
     </>
   ),
+  /* 分享（三个点连着两条线，系统分享面板那枚的通用样子）：点单分享给微信用它 */
+  share: (
+    <>
+      <circle cx="17.5" cy="6.5" r="2.6" />
+      <circle cx="6.5" cy="12" r="2.6" />
+      <circle cx="17.5" cy="17.5" r="2.6" />
+      <path d="M8.8 10.8 15.2 7.7" />
+      <path d="M8.8 13.2 15.2 16.3" />
+    </>
+  ),
 
   /* 身份 */
   roleOrderer: <path d="M8 4v4M8 8H4v4h4v4h4v-4h4V8h-4V4Z" fill="none" />,

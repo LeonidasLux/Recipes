@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useStore } from '../data/store';
 import { useToast } from '../components/Toast';
 import { TabBar, usePreviewState } from '../components/TabBar';
@@ -32,7 +33,10 @@ export default function CookToday() {
   const [menuId, setMenuId] = useState<string | null>(null);
   /* 长按某张单的卡头 → 弹删除提示（今日菜单 / 已做完都支持） */
   const [tip, setTip] = useState<DeleteTipState | null>(null);
+  /** 从分享链接点进来时，要「亮出来」的那一单（链接落到这一屏时给的 ?open=<id>） */
+  const [fromLink, setFromLink] = useState<string | null>(null);
   const pressTimer = useRef<number | null>(null);
+  const [sp, setSp] = useSearchParams();
 
   /* 菜品详情是遮罩：手机返回键先关它，而不是退出应用（点遮罩 / × / Esc 照旧） */
   useBackClose(dish !== null, () => setDish(null));
@@ -45,6 +49,19 @@ export default function CookToday() {
     const t = window.setTimeout(() => setLoading(false), 460);
     return () => window.clearTimeout(t);
   }, []);
+
+  /* 分享链接进来（`?open=<id>`）：给对方点过的那张单描个边，一眼看出是这一张 */
+  useEffect(() => {
+    const openId = sp.get('open');
+    if (!openId) return;
+    const next = new URLSearchParams(sp);
+    next.delete('open');
+    setSp(next, { replace: true });
+    setFromLink(openId);
+    /* 已做完那摞默认折叠：要打开的单在里头就顺手铺开 */
+    const o = db.orders.find((x) => x.id === openId);
+    if (o?.status === 'done') setShowDone(true);
+  }, [sp, setSp, db.orders]);
 
   const cookOrders = db.orders.filter((o) => o.placedBy !== me);
   const orders = preview === 'empty' ? cookOrders.filter((o) => o.status === 'done') : cookOrders;
@@ -167,6 +184,7 @@ export default function CookToday() {
                       order={o}
                       db={db}
                       partner={names.partnerName}
+                      linked={fromLink === o.id}
                       pending={pendingId === o.id}
                       onAdvance={() => advance(o)}
                       onRestore={() => restore(o)}
@@ -201,6 +219,7 @@ export default function CookToday() {
                           order={o}
                           db={db}
                           partner={names.partnerName}
+                          linked={fromLink === o.id}
                           pending={pendingId === o.id}
                           onAdvance={() => {}}
                           onRestore={() => restore(o)}
@@ -246,6 +265,7 @@ function CookCard({
   order,
   db,
   partner,
+  linked,
   pending,
   onAdvance,
   onRestore,
@@ -258,6 +278,8 @@ function CookCard({
   db: ReturnType<typeof useStore>['db'];
   /** 点单那个人的昵称（对方点的单由我来做） */
   partner: string;
+  /** 这一张是从分享链接点开的：描个边，跟旁边几张区分开 */
+  linked: boolean;
   pending: boolean;
   onAdvance: () => void;
   /** 已做完的单 → 恢复成没做完（退回「已接」） */
@@ -275,7 +297,7 @@ function CookCard({
   const isDone = order.status === 'done';
 
   return (
-    <div className={`card sticker cookcard${isDone ? ' done' : ''}`}>
+    <div className={`card sticker cookcard${isDone ? ' done' : ''}${linked ? ' fromlink' : ''}`}>
       <div
         className="cch"
         onPointerDown={(e) => onPressStart(e.currentTarget)}

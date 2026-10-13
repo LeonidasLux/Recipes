@@ -14,7 +14,7 @@
 - **提交即同步**：本地内容改动后自动推送回仓库；后台按间隔轮询拉取对方改动。
 - 没有自建后端，浏览器 / Android WebView 直接调用 GitHub Contents API（`api.github.com`）。
 
-**技术栈**：React 19 + TypeScript 5.8 + Vite 6 + react-router-dom 7（HashRouter）+ Capacitor 6（Android，`@capacitor/app` 负责手机返回键、写在工程里的本地插件 `AppUpdaterPlugin` 负责应用内更新，见 §6 / §11）。样式为手写 CSS，无 UI 框架。验证靠自研 jsdom 冒烟脚本与 TypeScript/类名对账。
+**技术栈**：React 19 + TypeScript 5.8 + Vite 6 + react-router-dom 7（HashRouter）+ Capacitor 6（Android，`@capacitor/app` 负责手机返回键与分享链接的接收、`@capacitor/share` 负责把点单交给系统分享面板、写在工程里的本地插件 `AppUpdaterPlugin` 负责应用内更新，见 §6 / §11）。样式为手写 CSS，无 UI 框架。验证靠自研 jsdom 冒烟脚本与 TypeScript/类名对账。
 
 ## 2. 数据模型（`src/data/types.ts`）
 
@@ -78,7 +78,7 @@ GitHub Contents API：
 - **`disconnect`**：清 `config`、`configured=false`，同步状态置 `off`。
 - 拉下来的内容视为「已推送」，避免紧接着又被原样写回，制造噪音提交。
 
-## 5. 分享文案解析、AI 识别（含截图识图）、封面与照片（`src/lib/share.ts`、`src/lib/ai.ts`、`src/lib/photo.ts`、`src/lib/photoQueue.ts`）
+## 5. 分享文案解析、分享点单与深链、AI 识别（含截图识图）、封面与照片（`src/lib/share.ts`、`src/lib/shareOrder.ts`、`src/lib/ai.ts`、`src/lib/photo.ts`、`src/lib/photoQueue.ts`）
 
 - **默认不抓页面**：小红书 / B站 / 抖音不返回 CORS 头，浏览器读不到页面内容，所以本地解析只吃用户粘贴的分享文案；**识别也不再读原链接**，只把文案 / 截图交给 AI。
 - `extractUrl`：取文案里第一个链接。
@@ -112,6 +112,22 @@ GitHub Contents API：
 - `useRecipePhoto(image, { fetch })`：缓存优先，返回 `{ src, attach }`；`src` 由 `subscribePhotoCache` 订阅着本机缓存 —— 图一落地就自动换成照片，不用重新挂载。**取图分两种节奏**：`fetch: true`（详情页 / 菜品详情那种一次只显示一张的地方）进屏就排队（插队）；`fetch: false`（列表 / 缩略图那种成批出现的地方）**滚到眼前才排队** —— `attach` 挂在没照片时渲染出来的那个 `img` / `span` 上，用 `IntersectionObserver` 盯着，进了视野才取一张；没有 `IntersectionObserver` 的老 WebView（和 jsdom 测试环境）没得挑，直接取。取不到就静默退回插画，不打扰用户。
 - `Cover`：照片 → 本地插画 → 标题首字三级兜底（`Thumb` 也走它）；只有「还没有照片」的那两级才挂 `attach` 当观察目标。
 
+**分享点单与深链（`src/lib/shareOrder.ts`）**
+
+- 点单屏每张单的展开区底部（`.oactions`，排在「修改这单 / 恢复成没做完」之后）多一枚**「分享给微信」**：点它把这一单交给**系统分享面板**（`@capacitor/share` —— 原生包与网页版同一个入口；面板里第一个就是微信，另外 QQ / 短信 / 备忘录也都能选）。三种结果分得很清：面板交出去了 → 什么都不提示（面板本身就是反馈）；**用户自己把面板关掉**（原生那边 reject 的是 `Share canceled`）→ 不算失败，也不复制；这台机器**根本没有分享面板**（桌面浏览器、老 WebView）→ 复制到剪贴板并 toast「分享文案已复制 · 粘贴到微信发给对方」；复制也失败才 toast「分享失败，稍后再试」。
+- 文案（`orderShareText`，纯函数）四行封顶、按有没有内容取舍：
+
+  ```
+  【记食本】明天晚餐 · 溏心蛋葱油拌面 等 2 道
+  溏心蛋葱油拌面、芒果糯米饭
+  给掌勺的话：少放辣
+  点开这一单 → jishiben://o/o2
+  ```
+
+  第一行是**哪天哪一餐 + 几道什么菜**（今天不写「今天」，与卡片上那套说法同一个 `dayTag`，见 §2）；第二行把每道菜都列出来 —— 只有一道菜时它与第一行重复，就不印；「给掌勺的话」写过的才印；最后一行是深链。
+- **链接随平台走**（`orderLink`）：**原生包**给应用自己的 scheme —— `jishiben://o/<订单 id>`（`AndroidManifest.xml` 里注册了这个 scheme，点一下由系统把应用拉起来，见 §11）；**网页版**在别人的手机上只有浏览器，就给本页地址 —— `<本页地址>#/o/<订单 id>`（微信里点得开，打开就是网页版的这一单）。网页版那条要变成「点一下进应用」，得再给一个域名做 Android App Links（未做，见 §12）。
+- `parseOrderLink`：从链接里认出「要打开哪一单」—— 认 `jishiben://o/<id>`（`jishiben:o/<id>` 这种没双斜杠的也认）、`https://…/#/o/<id>`；空串 / 别的平台链接 / 只有前缀没有 id 的一律返回 `null`。
+
 ## 6. 路由与身份（`src/App.tsx`、`src/components/TabBar.tsx`）
 
 - `HashRouter`；`AppShell`（StoreProvider + ToastProvider + SyncProvider + ErrorBoundary + Routes）可脱离 Router 单独挂载，便于测试。`ErrorBoundary` 包住路由：屏内渲染抛错时显示兜底页（人话 + 原始报错 + 重新加载），而不是整页白屏。
@@ -119,7 +135,9 @@ GitHub Contents API：
   - `/setup` 首次设置（`needsSetup` 时，其余受保护路由一律重定向到它）。
   - `/` 固定回菜谱库（两人都能点单也能掌勺，不再按身份分叉）。
   - `/library` 菜谱库、`/recipe/:id` 详情、`/add` 添加、`/order` 点单、`/cook` 今日菜单、`/sync` 同步。
+  - `/o/:id` **分享链接的落点**（瞬时页，`App.tsx` 的 `OpenOrder`）：分享出去的那条链接点开都先落到这里，随即**用 `replace` 换到该去的一级页** —— 我点的单进 `/order`、对方点的进 `/cook`，并带上 `?open=<id>` 让那一单展开（见 §7）；本机还没拉到这张单（对方刚点、刚换手机）就先顺手同步一次，认不出是哪张单时按本机当前角色选一边，不留空白页。它只是过一下，不停留、**也不进 `ROOT_PATHS`**（返回键根本见不到它）。
   - `*` → `/`。
+- **真机上分享链接由 `@capacitor/app` 的两个来路接进来**（`App.tsx` 的 `DeepLinkWatcher`）：应用没开着时点链接读 `getLaunchUrl()`、应用已经开着时收 `appUrlOpen` 事件，两种都换成路由 `/o/<id>`；网页版不接线（那种链接本来就是本页地址 `#/o/<id>`，路由自己会处理）。
 - **手机返回键（Android 物理返回键 / 手势返回）由 `src/lib/back.tsx` 的 `BackGuard` 统一接管**：决策顺序固定为 **先关遮罩 → 当前屏是一级页就直接 `App.exitApp()` 退出应用 → 二级页有来路就回上一屏（深链进来没来路则落回菜谱库）**。真机接的是 `@capacitor/app` 的 `backButton` 事件（见 §11，约束见 `AGENTS.md` §9）。
   - **一级页 = 底部四格（菜谱库 / 点单 / 掌勺 / 设置）+ 首次设置**（`ROOT_PATHS` / `isRootPath()`）。它们上面按返回一律退出应用 —— **一级页之间不互相回退**：从设置、点单、菜谱库按返回都是回桌面，不会退回「上一次用过的一级页」。四格之间换屏因此走 `replace`（`TabBar` / `RoleSwitch`），不往历史里叠条目。
   - 遮罩 / 可关闭的一层 = 用 `useBackClose(open, close)` 登记过的那些（菜谱库的多选模式、今日点单 / 今日菜单长按弹出的删除气泡、掌勺的菜品详情、设置页的关于弹窗、添加页与菜谱详情里点开的照片大图），按返回先收它、不退屏。**大图自己还多一层**：放大状态下按返回先把图还原成原始大小（`PhotoViewer` 自己登记的那一层，见 §7），再按一次才关掉大图。
@@ -230,6 +248,8 @@ GitHub Contents API：
 - **还没做完的单可以改**（`updateOrder`）：今日点单 / 往后两天 / 历史点单里凡是状态不是「已完成」的单，展开区底部都有「修改这单」（`.oactions`）。点它把这张单的**日子 / 餐次 / 菜 / 给掌勺的话**填进上面那个 composer（顺手清掉挑选网格上的搜索词），composer 顶上出现 `.editbar` 状态栏「正在修改：<摘要>」+ 右端一枚「取消修改」图标按钮（`.ebtx`，`aria-label` 写着名字），下面还挂一格**「为什么改（可不填）」**（`.eb-why`，≤30 字，带一键清空；**填不填都能保存** —— 填了掌勺那边展开这张单就看得到），发送键的可见文字变成「保存修改 · N 道」（图标换成 `save`；完整那句「保存修改 · 后天晚餐 · 2 道」在 `aria-label` 上）。**日子也能一起改**：明天那张挪到后天，一样记进改动记录（`date`）、日志与卡片说法（「挪到后天」）。保存 = **改的还是同一张单**（id 不变、不会多出一张），点单次数按「道次」的差加减，日志只写一条「已修改点单」；**「已接」的单改完退回「待接」**（菜单变了，掌勺方得重新确认一次，toast 也会说一句「菜单变了，<对方>需要重新接单」）。**已完成的不给入口**（界面不显示，`updateOrder` 里也拦一道）。**取消修改** = 单一点都不动，并把进改单前手上那份没发出去的草稿（含日子与餐别）放回 composer（正改着的那张单被删、或被对方标完成 / 拉回来是完成态，等同于取消修改，不留一份交不掉的表单）；正在改的那张单卡片带 `.ocard.editing` 描边。
 - **已完成的单可以恢复成没做完**：完成单那个位置的按钮换成「恢复成没做完」（`.oactions` 里，`restoreOrder`）—— 掌勺方手滑点了「全部做好了」、或这顿其实还没结束，点它退回「已接」（不是「待接」，两边都不用重新接一次单），toast 说一句「已恢复成没做完 · <对方>会看到」，状态 chip 跟着变回「已接」，这张单也就又能按上一段那套改。恢复只动状态：菜、点单次数、单数都不变。
 - **这单改过什么**（改动记录）：一张单被改过（掌勺方加减菜、或点菜方自己改单），展开区里（备注下面）就挂一块「这单改过」，**一次改动一行**：「2026-10-12 09:30 小红减掉「巴斯克芝士蛋糕」「溏心蛋葱油拌面」、加了「手撕包菜」：没买到芝士」「2026-10-12 21:40 我加了「凉拌黄瓜」、挪到明天、改成晚餐、给掌勺的话改成「多放辣」」—— 谁、什么时候、改了什么（减 / 加哪几道、挪到哪天、餐次、「给掌勺的话」）、为什么，一眼看清；写了原因才显示「：原因」那一段（点菜方改单可以不写）；这块与掌勺那边看到的是同一个组件（`OrderChanges`），没改过的单不摆。
+- **分享这一单给微信**：展开区底部那枚「分享给微信」（`.oactions` 里排在「修改这单 / 恢复成没做完」之后）把这一单交给系统分享面板（文案与链接见 §5 的「分享点单与深链」）。对方点开那条链接进来，就直接落到这一屏（我点的单）或「掌勺」那屏（对方点的单），并把这一单展开。
+- 支持 `?open=<orderId>`：分享链接落到这一屏时带的参数，进来就把那一单展开（要打开的单在折叠的「历史点单」里时，连那一摞一起铺开），处理后会从 URL 移除该参数。
 - 支持 `?add=<recipeId>` 从详情页预选一道菜（处理后会从 URL 移除该参数）。
 - 空态：还没有订单时给引导文案。
 
@@ -241,6 +261,7 @@ GitHub Contents API：
 - **点卡片里的一道菜 → 弹出菜品详情**（`DishSheet.tsx`）：大图（**有照片就显示照片**，没缓存会去仓库取一张） / 首字占位、更新时间、菜名、这道菜的「我的备注」（只读）、「查看原文」外链。点遮罩、点右上角 × 、按 Esc 或按手机返回键关闭（返回键先关这层，不退屏，见 §6）。点单时临时手输的菜（菜谱库里没有）只给菜名 + 一句说明，不给原文链接。
 - 「已做完」收进一条折叠条，默认折叠、只显示数量（`N 份`），点一下才逐张铺开完成单；完成单底部一行（`.donerow`）左边是「做完啦，<对方>已收到」，右边一枚**「恢复成没做完」**—— 点错了 / 其实还没做完就点它，退回「已接」（`restoreOrder`），卡片当场回到今天要做的那一摞、按钮变回「全部做好了」，点菜那边同步看到状态回退。点的时候按钮显示「正在同步…」（与「接下这顿」「全部做好了」同一套 600ms 回传）。
 - 底部提示按 `autoPull` / `intervalSec` 显示「每 N 分钟自动拉取」或「仅手动同步」。
+- 支持 `?open=<orderId>`：从分享链接进来时，要打开的那张单描一圈 accent 边（`.cookcard.fromlink`）当路标 —— 这一屏的卡片本来就是全展开的，靠描边一眼看出打开的是哪一张（单在折叠的「已做完」里时连那一摞一起铺开）；处理后会从 URL 移除该参数。
 - 空态：今天还没人点单。
 
 **Sync 同步与仓库**（底部入口名「设置」）
@@ -303,7 +324,7 @@ GitHub Contents API：
 | `npm run apk` | 写版本号（`scripts/set-version.mjs`）→ 构建 Web → `cap sync android` → `gradlew assembleDebug` |
 | `npm run apk:release` | 同上，出 release 包 |
 
-测试防护是强制约束（见 `AGENTS.md` §5）：**每个功能都要有对应测试，功能变更必须同步新增 / 调整测试**。冒烟测试（`scripts/smoke.tsx`）分九段（编号一～八，外加一段手机返回键）。`scripts/register-dom.mjs` 里把 `HTMLCanvasElement.prototype.getContext` 固定成 `null` —— 等价于「这台设备没有 canvas 2d」，图片压缩据此走兜底分支，也免得每张图都刷一屏 jsdom 的「Not implemented」日志。
+测试防护是强制约束（见 `AGENTS.md` §5）：**每个功能都要有对应测试，功能变更必须同步新增 / 调整测试**。冒烟测试（`scripts/smoke.tsx`）分十段（编号一～八，外加「分享 · 深链」与「手机返回键」两段）。`scripts/register-dom.mjs` 里把 `HTMLCanvasElement.prototype.getContext` 固定成 `null` —— 等价于「这台设备没有 canvas 2d」，图片压缩据此走兜底分支，也免得每张图都刷一屏 jsdom 的「Not implemented」日志。
 
 - 观感一致性：逐个挂载 `/library` `/order` `/cook` `/sync` 断言四个一级页共用同一套顶栏（`greeting` + `navrow > ptitle` 两个子元素、没有多余的开关行、标题字号不被单页内联改小，点单 / 掌勺的 `RoleSwitch` 挂在标题行右端）；菜谱库列表行的紧凑尺寸（56px 缩略图 / 8px 行内边距 / 骨架屏同尺寸）、**菜谱库顶栏刷新按钮底边与大标题底边齐平**（`.s-library .topbar .navrow` 走 `align-items: flex-end`、按钮自己不再上提）、**点单屏的角色开关同样底对齐**（`.s-order .topbar .navrow`），而**掌勺屏的开关故意不跟着往下坠**（标题块下面还有一行小字）、**排序条与上方搜索框 / 下方菜谱列表的间距一致（各 10px）**、点单挑选网格（不显示来源平台、按菜名·备注搜索、清除搜索、搜不中给空态卡、已选不受搜索影响）、**今日点单卡片的超长标题按两行截断**（整句留在 DOM 里、不再挂对内联盒无效的 `.ellip`）也各有断言 —— 布局尺寸与截断规则同样静态读样式文件钉住（冒烟里样式表是空的）。
 - 一键清空：逐屏挂载 `/setup` `/sync` `/order` `/library` `/add` 与详情页编辑态，扫一遍**每个内容输入格**（`input` / `textarea`，排除 file / checkbox）确实都被 `.clearwrap` 包住（菜谱库与点单挑选网格那两个搜索框另有 `.sclear`，本来就自带清除）；再逐格走「打字 → 右端冒出清空按钮 → 点一下真的清空 → 按钮收起来」，并断言进来就带着值的格子（昵称 / 分支 / 详情里的原文）按钮也按「有没有内容」出现。定位与内边距静态读样式文件钉住（`.clearwrap` 是定位层、`.clearx` 贴右端、多行输入格的按钮贴右上角、输入框留出 `padding-right`、点单页那两格在 `screens.css` 里单独给）。
@@ -320,6 +341,7 @@ GitHub Contents API：
 - 仓库结构：直接读 `.github/workflows/android-apk.yml`、`android/app/build.gradle` 与 `scripts/set-version.mjs`，断言「`push` 到 `main` 触发、跑的就是 `npm run apk`、带上 `JISHIBEN_BUILD=<run_number>`、上传 `app-debug.apk`、用 `gh release create` 出 Release、声明 `contents: write`」没被删掉；**版本号计算（本机与 CI 的 `versionName` 都等于 `package.json` 的 version、工作流里不再出现 `-build.` 后缀、`versionCode` 按 run_number 递增、build 号非数字时退回基准值）**与「release tag 就是 `v<version>`、`applyVersion` 真把 versionName 写进去」「debug 构建显式用仓库里的 `android/app/debug.keystore`、该文件确实在仓库里」也一并钉住（静态断言 + 纯函数，不涉及网络与界面）。
 - **大图手势（`PhotoViewer` + `src/lib/zoom.ts`）**：纯函数那节验倍数夹在 1～5 倍、按锚点缩放（在右侧 100px 处放大 → 图往左让 100px）、夹取（图比视口小的那一维不许拖 / 拖过头停在边缘 / 量不到图片尺寸时退回居中）、捏合（两指距离之比当倍数、两指并着挪就是平移、收拢不缩过头、两指叠在一起也不炸）、双击的时间窗（`DOUBLE_TAP_MS` 差 1ms 就不算）与落点偏差（`DOUBLE_TAP_SLOP` 差 1px 就不算）、结果取整不漏长尾小数与 `-0px`；挂载后真派发指针事件验：打开是原始大小 → 双击放大到 2 倍（点在正中，图不挪位）→ 再双击还原 → 双指从 100px 撑到 200px 得 2 倍 → 放大后单指拖动图跟着手指走、拖到 `(图宽 − 视口宽)/2` 就停住、往回拖照样跟手 → 拖动过的那一下不算「点一下」，不会被凑成双击 → 关掉再打开又是原始大小、没放大时拖动不动图；**视口与图片版面在测试里换成手机尺寸**（jsdom 是桌面 1024×768、量出来的尺寸恒为 0，不换就验不了拖动与夹取）；添加页的大图也能双击放大；放大状态下按返回键先还原成原始大小（`pressBack()`，与真机同一条路），再按一次才关掉大图。
 - **餐别与哪天吃（四个餐别 + 今天 / 明天 / 后天）**：纯函数验 `MEALS`（早 / 午 / 晚 / 夜宵）与 `isMeal()`（认不出的餐别一律当午餐）、`mealForTime()` 的四段区间与边界（`05:00` / `10:00` / `15:00` / `21:00` 整点换档，`21:00–05:00` 跨零点，凌晨按夜宵）、`mealWindow()` 的区间文案、`dayKey(0/1/2/-1)`（含跨月 / 跨年）、`dayWord()` / `dayTag()`（今天 / 明天 / 后天 / 昨天、更远给日期、跨年带年份、今天给空串）、`orderDay()` 的老数据兜底（有 `dateKey` 用 `dateKey`、没有按 `createdAt` 那天补、`今天 09:40` / `昨天 10:00` 这类更老的相对串也认、脏值兜今天），以及 `normalizeOrders` 的规整（老单补 `dateKey`、脏餐别改午餐、合法的 `dateKey` 不被覆盖、改动记录里的 `meal` / `date` 只认合法值、什么都没有的那条丢掉）；挂载后验：打开点单页默认选中的就是 `mealForTime()` 那一餐、**四个餐别按钮上一个字都没有（只有 `<svg>`，名字在 `aria-label` 上）**；把日子点成「明天」+ 餐别点成「夜宵」发一单 → 落库是 `dateKey = 明天` + `meal = 'night'`、同步日志写「已发明天夜宵单」、发送键 `aria-label` 是「发给<对方> · 明天夜宵 · 1 道」（可见文字只有「发给<对方>」与道数）、**这张单不在「今日点单」里而是落在新长出来的「往后两天」那一段**（今天那张仍排在最前）；**「给掌勺的话」默认收着**（`.ordernote` 不在 DOM 里、只剩一枚 `.notebtn` 图标）→ 点它才铺开那一行输入；**挑选区那行头**只剩标题与一枚 `aria-label="随机加一道"` 的图标按钮（按钮上没有文字、也没在搜索时不摆那行说明）；掌勺屏插一张今天的单 + 现成的明天那张 → 断言**今天那张排在前面**、卡片分别写「早餐单」「明天晚餐单」；详情页的「已在 X 单里」也跟着那张单的日子说（明天那张读「已在明天单里」）；改单时日子载入成「明天」、改成「后天」保存 → `dateKey` 变成后天、`order.changes[0].date` 记下那天、日志写「后天晚餐」、卡片那行读作「挪到后天」。这两处常驻 / 头部的**布局约束**另有静态 CSS 断言钉住：`.oprow` 是横向 flex、发送键 `flex: 0 0 auto` 且**没有** `width: 100%`（不再独占一行）、两排选择器的按钮 28px、餐别图标 19px、备注图标 40px；`.randbtn` 36px、`.sechead` 下边距 8px、标题 15px —— 不许再长回一大块。
+- **分享点单与深链（`src/lib/shareOrder.ts`）**：纯函数验 `orderLink`（原生包给 `jishiben://o/<id>`、网页版给 `<本页地址>#/o/<id>`）、`parseOrderLink`（两种写法都认、没双斜杠也认、空串 / 别的平台链接 / 只有前缀没 id 一律 `null`、自己发出去的两种链接自己都认得出）、`orderShareText`（第一行是哪天哪一餐 + 几道什么菜、每道菜都列出来、只有一道菜时不重复印、写过的「给掌勺的话」跟着走、最后一行是深链、今天不写「今天」）；真实挂载后验：点单卡上的「分享给微信」把文案交给系统分享面板（断言面板收到的文案与链接 —— 用 `setSharePlatformForTest` 把「当前是不是原生包」换掉，两条链接都验一遍）、**没有分享面板的机器（桌面浏览器）退回复制并提示「已复制」**、**用户自己把面板关掉时不复制也不弹对不上的提示**；深链落到路由 `/o/<id>`：对方点的单 → 落在「掌勺」并只给那一张描边、我点的单 → 落在「点单」并直接展开那一张（那张单在折叠的「历史点单」里时连那一摞一起铺开）、本机还没有这张单时落回本机角色那一屏不留空白页、这么进来的一屏按返回键照旧交给系统退出应用（一级页）；`/o/<id>` 这种「过一下就走」的瞬时页不算一级页。
 - 手机返回键：`backAction()` 决策表（有遮罩关遮罩 / **一级页直接退出应用，哪怕历史里还压着别的格** / 二级页有来路就回上一屏 / 深链进二级页没来路落到菜谱库 / 网页端不接管）、`isRootPath()` 一级页名单（四格 + 首次设置 + `/`）与 `trackHistory()` 台账（首个条目落栈、push 加深、replace 换顶、pop 变浅、根屏 pop 不掏空栈）；真实挂载后调 `pressBack()`（和真机 `backButton` 事件同一个入口）验证：菜谱库点进详情按返回回菜谱库、再按一次才交给系统退出、添加页按返回回菜谱库、从点单页进的添加页存完回点单页且返回键不会退回那张已交掉的表单、菜谱库的多选模式与今日点单的长按删除提示、掌勺菜品详情都被返回键优先收掉（多选模式下按返回是退出多选、不退应用）、**详情页与添加页的大图都先被返回键关掉**（再按一次才回上一屏）、**设置页的关于弹窗也先被返回键关掉**（不退应用）、**一级页之间不互相回退**（设置页按返回不回菜谱库，从详情跳去的点单页按返回不回详情）、做完的首次向导不留在返回栈里。
 
 - 改没做完的单：展开今天 / 历史里没做完的单 → 点「修改这单」断言 composer 被填上（菜 / 餐次 / 备注都对得上、挑选网格上的搜索词被清掉、发送键变「保存修改」、**`.editbar` 里那格「为什么改（可不填）」在**）；保存后**还是同一张单**（单数不变、id 不变）、菜 / 餐次 / 备注都改上了、**点单次数按道次差加减**（新加 +1、换掉 −1、没动的没变）、只写一条「已修改点单」日志、**追加一条改动记录**（`removed` / `added` 是这次换掉的菜，`meal` / `note` 是动过的餐次与备注，填了原因就一起存，卡片上那行读作「我减掉「A」、加了「B」、改成晚餐、给掌勺的话改成「X」：原因」）、composer 交出去并退出改单模式；**不填原因照样能改**（记录里 `reason` 为空、卡片那行只剩「改了什么」、不留孤零零的「：」）、**只动备注也记一条**、**进改单又原样保存不记空改动**；**「已接」的单改完退回「待接」**且卡片 chip 跟着变、toast 提醒对方要重新接单；**取消修改**：那张单原封不动、进改单前那份草稿（菜 + 备注）放回 composer，卡片里那个入口再点一次也是退出改单；**已做完的单没有「修改这单」入口**；跨天落进折叠「历史点单」的未完成单照样能改；**正改着的单被长按删掉 → 改单模式跟着退出**（不留一份交不掉的表单）。
@@ -350,6 +372,7 @@ GitHub Contents API：
 - PWA：`npm run build` 后把 `dist/` 部署到任意静态托管（HashRouter 无需 rewrite）；Android Chrome / iOS Safari 可「添加到主屏幕」，参数见 `public/manifest.webmanifest` 与 `index.html`。
 - Capacitor：应用 ID `com.leonidaslux.jishiben`，应用名「记食本」，`webDir=dist`；Android `minSdk 22 / compileSdk 34 / targetSdk 34`（`android/variables.gradle`）。
 - **`@capacitor/app` 是手机返回键的底座**：WebView 自己不处理返回键，装上这个插件、由 `App.addListener('backButton')` 交给 `src/lib/back.tsx` 决策，二级页按返回才是「回上一屏」而不是关掉应用（没接管的旧包表现就是按返回直接回桌面）。插件要在 `android/` 工程里生效，靠 `npx cap sync android`（`npm run apk` 里已经带了）；`android/capacitor.settings.gradle` 与 `android/app/capacitor.build.gradle` 是这条同步的结果，跟着一起提交。
+- **分享点单：`jishiben` scheme + `@capacitor/share`**。`AndroidManifest.xml` 里给 `MainActivity` 挂了一个 `VIEW` + `BROWSABLE` 的 intent-filter，认 `jishiben` 这个 scheme —— 分享出去的 `jishiben://o/<订单 id>` 点一下就能把应用拉起来（应用没开着走 `getLaunchUrl()`、开着时收 `appUrlOpen`，见 §6；activity 早就是 `singleTask`，不会重开一个）。`@capacitor/share` 提供**系统分享面板**：Android WebView 里没有 `navigator.share`，不装它点「分享给微信」会没反应；网页版（PWA）由这个插件的 Web 实现转给 `navigator.share`，桌面浏览器没有它就退回剪贴板（见 §5）。两个插件同样靠 `npx cap sync android` 进 `android/` 工程，生成物一起提交。
 - **签名固定成仓库里那份 debug keystore**（`android/app/debug.keystore`，口令 `android` / 别名 `androiddebugkey`，`android/app/build.gradle` 的 `signingConfigs.debug` 显式指向它）。AGP 默认的调试密钥是**每台机器 / 每个 CI runner 现生成**的，签名各不相同 —— 那正是「下载覆盖安装报签名不同」的原因。固定之后本机与 Release 的包能互相覆盖；**换签名（比如改用正式密钥）时必须先卸载一次旧包**。这份调试密钥是公开、不防篡改的（不是 token，可以入库，见 `AGENTS.md` §6）。
 - **版本号以 `package.json` 为准，`versionCode` 每次递增**：`scripts/set-version.mjs` 在打包前改写 `android/app/build.gradle` 的 `versionCode` / `versionName` —— **`versionName` 一律就是 `package.json` 的 version**（`1.0.1` / `1.1.2` 这种，本机与 CI 一样、不带后缀），**`versionCode`** 才是只增不减的那个（Android 覆盖安装 / 升级看它）：本机（无 build 号）= `100000`，CI 带 `JISHIBEN_BUILD=<run_number>` = `100000 + n`。`npm run apk` / `apk:release` 里已经带上了这一步。**发版流程 = 改 `package.json` 的 `version`（连同 `package-lock.json` 根包的两处 version）→ 推到 `main`**；其中 patch 位由**每次「提交」自动 +1** 完成（规则见 `AGENTS.md` §8，不用手改），所以每次推 `main` 出来的 Release / APK 版本号都不同。手机上「应用信息」与应用内设置页「关于记食本」（`src/lib/version.ts` 读同一个 `package.json`）显示的是同一个号。
 - **安卓壳的输入法配置**：`capacitor.config.ts` 里**不开 Capacitor 的 input capture**，键盘顶上去交给 `AndroidManifest.xml` 里 activity 上的 `android:windowSoftInputMode="adjustResize"`（布局按 `100dvh` 伸缩，WebView 被顶小就跟着收）。以前一直开着 input capture —— `CapacitorWebView.onCreateInputConnection` 会把 WebView 的输入连接换成 `BaseInputConnection`，代价是**从手机剪贴板点一下粘贴没反应**：那条路只把字塞进 DOM、不发 `input` 事件，React 的受控 `value` 下一次渲染又把它抹掉；输入法候选词与长按选区菜单也跟着走形。改回来之后输入、粘贴、选区都归 WebView 自己管（`preserveTypedValue` 那层照旧留着当保险，见 §7）。
@@ -363,6 +386,7 @@ GitHub Contents API：
 
 - 没配 AI Key 时，「识别」就是**纯本地解析分享文案**（不抓页面，平台无 CORS）。
 - **应用内更新只在 Android 包里有**：网页版刷新就是最新版，弹窗里只留一句说明。而且**得先手动装一次带这个功能的包**，之后才能在应用里直接升级。比大小的依据是 `package.json` 的 version（对照 Release 的 tag），所以**同一个 version 重出的包（只有 `versionCode` 变了）不算新版本** —— 要推更新就得让 version 往上走（每次「提交」自动 patch +1，见 `AGENTS.md` §8）。装包时系统还会弹确认框，并且要先在系统里允许「安装未知应用」。
+- **微信里点分享链接**：`jishiben://o/<id>` 这种自定义 scheme 在微信聊天里**只是纯文本**（微信只把 http(s) 认成可点链接），所以要唤起应用得长按复制、再在浏览器地址栏粘一下打开（浏览器、短信、QQ、备忘录这些地方是点了就进）。想让它在微信里**点一下就进应用**，得把应用与一个 https 域名做 **Android App Links**（域名根目录放 `.well-known/assetlinks.json`，写清包名与签名证书指纹），分享链接改成 `https://<域名>/#/o/<id>` —— 解析（`parseOrderLink`）与路由（`/o/:id`）都已经备好，缺的只是一个域名，个人项目没有，故未做。另外这条链接只在**装了记食本的手机**上有意义：没装的人点开只能看到文案（网页版分享出去的是本页地址，那种点开是网页版的这一单）。
 - 标题「只留菜名」是启发式：带标点的分享文案截得很干净（「西红柿炒鸡蛋，你就像我这样做…」→「西红柿炒鸡蛋」），但**长而不带标点**的句子仍可能留长；配了 AI 时由模型按提示词兜成菜名。
 - AI 识别需要用户自备 DeepSeek API Key；没配 Key、关掉 AI、或 AI 请求失败时一律退回本地启发式解析，只拆得出标题那一档。模型会按提示词要求「只抄不编」、原材料一行一样、做法用有序列表编号，但输出仍是概率性的，所以结果只作预填、始终可改。
 - DeepSeek Key 与 GitHub token 一样只存 `localStorage`（仅本机语义），设置页里只显示掩码；要更强保护需走原生凭据库（未实现）。识别时文案会发给 `api.deepseek.com` —— 这是 AI 识别的固有代价，介意就别开 AI。

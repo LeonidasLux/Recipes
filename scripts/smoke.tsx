@@ -97,6 +97,13 @@ import {
   statusMeta,
 } from '../src/data/helpers';
 import { backAction, isRootPath, pressBack, trackHistory } from '../src/lib/back';
+import {
+  LINK_SCHEME,
+  orderLink,
+  orderShareText,
+  parseOrderLink,
+  setSharePlatformForTest,
+} from '../src/lib/shareOrder';
 import { keepsNativeLongPress } from '../src/lib/gestures';
 import {
   DOUBLE_TAP_MS,
@@ -7108,6 +7115,239 @@ async function edgeChecks() {
  * 手机物理返回键由 src/lib/back.tsx 接管。真机上它接的是 @capacitor/app 的 backButton
  * 事件，jsdom 里没有原生桥，所以测试直接调同一个入口 pressBack()，走的还是那条路径。
  */
+/* ─── 分享 / 深链的小工具 ─────────────────────
+   分享面板（navigator.share，`@capacitor/share` 的网页版就是调它）与剪贴板都是浏览器的
+   东西，jsdom 里没有：这里临时换上，用例跑完还原，别影响别的段。 */
+
+type SharePayload = { title?: string; text?: string };
+
+function fakeShare(impl?: (data: SharePayload) => Promise<void>): {
+  calls: SharePayload[];
+  restore(): void;
+} {
+  const calls: SharePayload[] = [];
+  Object.defineProperty(navigator, 'share', {
+    configurable: true,
+    writable: true,
+    value: async (data: SharePayload) => {
+      calls.push(data);
+      if (impl) await impl(data);
+    },
+  });
+  return { calls, restore: () => void Reflect.deleteProperty(navigator, 'share') };
+}
+
+function fakeClipboard(impl?: (text: string) => Promise<void>): {
+  texts: string[];
+  restore(): void;
+} {
+  const texts: string[] = [];
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    writable: true,
+    value: {
+      writeText: async (t: string) => {
+        texts.push(t);
+        if (impl) await impl(t);
+      },
+    },
+  });
+  return { texts, restore: () => void Reflect.deleteProperty(navigator, 'clipboard') };
+}
+
+/**
+ * 分享点单 + 深链：链接长什么样、文案写了什么、点开链接落到哪一屏。
+ *
+ * 深链的接线分两半 —— 真机那半（`@capacitor/app` 的 appUrlOpen / getLaunchUrl）冒烟里没法真触发，
+ * 靠纯函数 `parseOrderLink` 与路由 `/o/<id>` 这两头夹住；`setSharePlatformForTest` 把
+ * 「当前是不是原生包」换掉，分享出去的两种链接才都验得到。
+ */
+async function shareChecks() {
+  console.log('\n[分享 · 链接长什么样]');
+  check(
+    orderLink('o1', true) === `${LINK_SCHEME}://o/o1`,
+    '★ 原生包分享出去的是应用自己的 scheme（jishiben://o/<id>，对方点一下直接进应用）',
+    orderLink('o1', true),
+  );
+  const web = orderLink('o1', false);
+  check(
+    web.startsWith('http') && web.includes('#/o/o1'),
+    '★ 网页版分享出去的是本页地址 + #/o/<id>（微信里点得开的 https 链接）',
+    web,
+  );
+
+  console.log('\n[分享 · 认出链接里的那一单]');
+  check(parseOrderLink('jishiben://o/o1') === 'o1', '认原生包那条');
+  check(parseOrderLink('jishiben:o/o1') === 'o1', '没写双斜杠也认（有的系统会把它抹掉）');
+  check(parseOrderLink('https://x.github.io/Recipes/#/o/o2') === 'o2', '★ 认网页版那条（https + #/o/<id>）');
+  check(
+    parseOrderLink(orderLink('o9', true)) === 'o9' && parseOrderLink(orderLink('o9', false)) === 'o9',
+    '★ 自己发出去的链接自己认得出（两条路都对）',
+  );
+  check(parseOrderLink('jishiben://o/ord_a1b2') === 'ord_a1b2', '带下划线的 id 也认');
+  check(
+    parseOrderLink('') === null &&
+      parseOrderLink(null) === null &&
+      parseOrderLink(undefined) === null &&
+      parseOrderLink('https://xhslink.com/a1b2c3') === null &&
+      parseOrderLink('weixin://dl/chat') === null &&
+      parseOrderLink('jishiben://o/') === null,
+    '★ 空链接、别的平台链接、只有前缀没 id 的一概不管',
+  );
+
+  console.log('\n[分享 · 文案]');
+  const [seedO1, seedO2, seedO3] = seed().orders;
+  const text2 = orderShareText(seedO2!, 'jishiben://o/o2');
+  check(
+    text2.split('\n')[0] === '【记食本】明天晚餐 · 溏心蛋葱油拌面 等 2 道',
+    '第一行：哪天哪一餐 + 几道什么菜',
+    text2.split('\n')[0],
+  );
+  check(text2.includes('溏心蛋葱油拌面、芒果糯米饭'), '★ 第二行把每道菜都写上（摘要里看不全的那些）');
+  check(text2.includes('给掌勺的话：少放辣'), '写过的「给掌勺的话」跟着文案一起发出去');
+  check(text2.endsWith('点开这一单 → jishiben://o/o2'), '★ 最后一行是深链', text2);
+  const text3 = orderShareText(seedO3!, 'jishiben://o/o3');
+  check(
+    text3.split('\n').length === 2 && !text3.includes('给掌勺的话'),
+    '只有一道菜、没写话的单：不罗列一遍重复的菜名，也不留空行',
+    JSON.stringify(text3),
+  );
+  check(
+    orderShareText(seedO1!, 'jishiben://o/o1').includes('【记食本】午餐 ·'),
+    '今天那一单不写「今天」（与卡片上那套说法一致）',
+    orderShareText(seedO1!, 'jishiben://o/o1'),
+  );
+
+  console.log('\n[分享 · 点单页把这一单交给分享面板]');
+  useDb();
+  {
+    const m = await mount('/order');
+    await m.click('.osum');
+    const panel = fakeShare();
+    await m.clickByText('.oactions .btn-sticker', '分享给微信');
+    await m.wait(30);
+    check(panel.calls.length === 1, '点「分享给微信」→ 交给系统分享面板', `交了 ${panel.calls.length} 次`);
+    check(
+      panel.calls[0]?.title === '记食本 · 点单' &&
+        /【记食本】午餐 · 番茄炖牛腩 等 2 道/.test(panel.calls[0]?.text ?? ''),
+      '★ 文案里写清是哪一餐、点了哪几道菜',
+      JSON.stringify(panel.calls[0]),
+    );
+    check(
+      (panel.calls[0]?.text ?? '').endsWith('点开这一单 → http://localhost/#/o/o1'),
+      '★ 网页版分享出去的是本页地址（点开就是这一单）',
+      panel.calls[0]?.text ?? '',
+    );
+
+    /* 同一枚按钮，换成原生包时链接就是应用自己的 scheme */
+    setSharePlatformForTest(true);
+    await m.clickByText('.oactions .btn-sticker', '分享给微信');
+    await m.wait(30);
+    check(
+      (panel.calls[1]?.text ?? '').endsWith('点开这一单 → jishiben://o/o1'),
+      '★ 原生包里分享出去的是 jishiben://o/<id>（对方点一下直接进应用）',
+      panel.calls[1]?.text ?? '',
+    );
+    setSharePlatformForTest(null);
+    panel.restore();
+    await m.close();
+  }
+
+  console.log('\n[分享 · 没有分享面板的机器退回复制]');
+  useDb();
+  {
+    const m = await mount('/order');
+    await m.click('.osum');
+    const clip = fakeClipboard();
+    await m.clickByText('.oactions .btn-sticker', '分享给微信');
+    await m.wait(30);
+    check(
+      clip.texts.length === 1 && clip.texts[0]!.includes('点开这一单 → '),
+      '★ 这台机器没有分享面板（桌面浏览器 / 老 WebView）→ 复制文案到剪贴板',
+      JSON.stringify(clip.texts),
+    );
+    check(m.html().includes('分享文案已复制'), '说清「已复制」，用户知道下一步是粘到微信里发出去');
+    clip.restore();
+    await m.close();
+  }
+
+  console.log('\n[分享 · 用户把分享面板关掉]');
+  useDb();
+  {
+    const m = await mount('/order');
+    await m.click('.osum');
+    /* 原生那边用户取消时 reject 的就是这句 "Share canceled" */
+    const panel = fakeShare(async () => {
+      throw new Error('Share canceled');
+    });
+    const clip = fakeClipboard();
+    await m.clickByText('.oactions .btn-sticker', '分享给微信');
+    await m.wait(30);
+    check(clip.texts.length === 0, '★ 自己关掉面板不算失败，也不偷偷往剪贴板里塞东西');
+    check(!m.html().includes('分享文案已复制'), '不弹一句对不上的「已复制」');
+    panel.restore();
+    clip.restore();
+    await m.close();
+  }
+
+  console.log('\n[深链 · 点开分享链接直接进这一单]');
+  useDb();
+  {
+    /* o2 是对方(b)点的单：掌勺那边看 */
+    const m = await mount('/o/o2');
+    check(m.$('.s-cook') !== null, '★ 点开「对方点的单」那条链接 → 落在「掌勺」');
+    const hit = m.$$('.cookcard').filter((c) => c.className.includes('fromlink'));
+    check(
+      hit.length === 1 && (hit[0]!.textContent ?? '').includes('溏心蛋葱油拌面'),
+      '★ 只有打开的那一单描了边，一眼看出是哪一张',
+      hit.map((c) => c.className).join(' | '),
+    );
+    await act(async () => pressBack());
+    check(m.$('.s-cook') !== null, '★ 深链进来的那一屏按返回不乱跳（一级页 = 交给系统退出应用）');
+    await m.close();
+  }
+  useDb();
+  {
+    /* o1 是我点的单：点单那边看，而且直接展开 */
+    const m = await mount('/o/o1');
+    check(m.$('.s-order') !== null, '★ 点开「我点的单」那条链接 → 落在「点单」');
+    check(
+      m.$('.ocard.open') !== null && m.text('.ocard.open').includes('番茄炖牛腩'),
+      '★ 那一单直接展开，不用自己再点一下',
+    );
+    await m.close();
+  }
+  useDb((db) => {
+    /* 落进「历史点单」的单：那一摞默认折叠着 */
+    const o1 = db.orders.find((o) => o.id === 'o1')!;
+    o1.dateKey = dayKey(-1);
+    o1.createdAt = `${dayKey(-1)} 12:00`;
+  });
+  {
+    const m = await mount('/o/o1');
+    check(
+      m.$('.s-order') !== null && m.$('.ocard.open') !== null,
+      '★ 落在折叠的「历史点单」里也照样铺开、并把那一张展开',
+    );
+    await m.close();
+  }
+  useDb();
+  {
+    /* 本机还没这张单（对方刚点、或刚换手机）：落回该去的屏并顺手同步一次，不留空白页 */
+    const m = await mount('/o/ord_not_yet');
+    check(m.$('.s-order') !== null, '★ 本机没这张单也不留空白页（落回本机角色那一屏）');
+    await m.close();
+  }
+  useDb((db) => {
+    db.config = { ...db.config!, view: 'cook' };
+  });
+  {
+    const m = await mount('/o/ord_not_yet');
+    check(m.$('.s-cook') !== null, '认不出是哪张单时按本机当前角色选一边');
+    await m.close();
+  }
+}
+
 async function backChecks() {
   console.log('\n[返回键 · 决策表]');
   check(backAction({ hasOverlay: true, root: false, level: 1, native: true }) === 'overlay', '有遮罩 → 先关遮罩');
@@ -7125,7 +7365,10 @@ async function backChecks() {
     ['/library', '/order', '/cook', '/sync', '/setup', '/'].every(isRootPath),
     '★ 底部四格 + 首次设置（含根路径）都算一级页',
   );
-  check(!isRootPath('/recipe/r1') && !isRootPath('/add'), '菜谱详情 / 添加菜谱是二级页');
+  check(
+    !isRootPath('/recipe/r1') && !isRootPath('/add') && !isRootPath('/o/o1'),
+    '菜谱详情 / 添加菜谱是二级页；分享链接的落点 `/o/<id>` 只是过一下，更不算一级页',
+  );
 
   console.log('\n[返回键 · 页内返回栈台账]');
   let stack = trackHistory([], 'a', 'POP');
@@ -7539,6 +7782,7 @@ await migrationChecks();
 await connectChecks();
 await syncChecks();
 await edgeChecks();
+await shareChecks();
 await backChecks();
 workflowChecks();
 
